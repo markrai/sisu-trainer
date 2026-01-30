@@ -472,17 +472,24 @@ function parseHrTargetRange(hrTargetText) {
 // Update heart icon color based on BPM comparison to target range
 function updateHeartColor(liveBpm, hrTargetText) {
   const heartIcon = document.getElementById('heartIcon');
+  const hrNowEl = document.getElementById('hrNow');
   if (!heartIcon) return;
+  
+  function setHrNowColor(color) {
+    if (hrNowEl) hrNowEl.style.setProperty('color', color, 'important');
+  }
   
   // If no live HR detected, use default color (white)
   if (!liveBpm || liveBpm <= 0) {
     heartIcon.style.setProperty('filter', 'brightness(0) invert(1)', 'important');
+    setHrNowColor('white');
     return;
   }
   
   // No target text - can't compare, use white default
   if (!hrTargetText || hrTargetText === "") {
     heartIcon.style.setProperty('filter', 'brightness(0) invert(1)', 'important');
+    setHrNowColor('white');
     return;
   }
   
@@ -490,21 +497,25 @@ function updateHeartColor(liveBpm, hrTargetText) {
   if (!range) {
     // Can't parse range, use default color (white)
     heartIcon.style.setProperty('filter', 'brightness(0) invert(1)', 'important');
+    setHrNowColor('white');
     return;
   }
   
   // Determine color based on BPM comparison
   let hueRotate = 0; // Default red
+  let belowRange = false;
   if (liveBpm > range.max) {
     // Above range - Purple (hue-rotate ~270deg)
     hueRotate = 270;
   } else if (liveBpm < range.min) {
-    // Below range - Blue (hue-rotate ~240deg)
-    hueRotate = 240;
+    // Below range - Yellow (hue-rotate ~50deg); BPM text must be black
+    hueRotate = 50;
+    belowRange = true;
   }
   // Within range stays red (hueRotate = 0)
   
   heartIcon.style.setProperty('filter', `brightness(0) saturate(100%) invert(27%) sepia(100%) saturate(10000%) hue-rotate(${hueRotate}deg)`, 'important');
+  setHrNowColor(belowRange ? 'black' : 'white');
 }
 
 // Update heart animation based on live BPM from BLE monitor
