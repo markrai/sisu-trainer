@@ -173,12 +173,12 @@ function updateRing(elapsedSec: number, blocks: PlanBlock) {
   const totalSec = (blocks.warm + blocks.sustain + blocks.cool) * 60;
   if (totalSec <= 0) return;
   const cappedElapsed = Math.max(0, Math.min(elapsedSec, totalSec));
-  const progress = cappedElapsed / totalSec;
-  const ringCirc = getRingCircumference();
-  const offset = ringCirc * (1 - progress);
-  ringEl.style.strokeDasharray = String(ringCirc);
-  ringEl.style.strokeDashoffset = String(offset);
   const remaining = totalSec - cappedElapsed;
+  const ringCirc = getRingCircumference();
+  // Decrementing ring: show remaining portion of circle (same direction as before, so color phases feel reversed)
+  const visibleLength = ringCirc * (remaining / totalSec);
+  ringEl.style.strokeDasharray = `${visibleLength} ${ringCirc}`;
+  ringEl.style.strokeDashoffset = "0";
   const showSeconds =
     typeof (window as any).getShowSecondsCountdown === "function" && (window as any).getShowSecondsCountdown();
   if (center) center.textContent = formatTime(remaining, { showSeconds });

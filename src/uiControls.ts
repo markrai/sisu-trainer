@@ -78,18 +78,41 @@ function updateHrDisplay(hr: number | null) {
 const PHASE_STYLE_MAP: Record<string, { stroke: string; background: string; text: string }> = {
   "Warm-Up": { stroke: "#ffad5c", background: "rgba(255,173,92,0.18)", text: "#ffe9cc" },
   Sustain: { stroke: "#3d7cff", background: "rgba(61,124,255,0.18)", text: "#dbe5ff" },
-  "Cool-Down": { stroke: "#4ade80", background: "rgba(74,222,128,0.18)", text: "#e6fff2" },
+  "Cool-Down": { stroke: "#eab308", background: "rgba(234,179,8,0.18)", text: "#fef9c3" },
   Rest: { stroke: "#888", background: "#1c1c1c", text: "#fff" },
   idle: { stroke: "#3d7cff", background: "#232323", text: "#fff" },
-  completed: { stroke: "#64ffda", background: "rgba(100,255,218,0.2)", text: "#d5fff7" },
+  completed: { stroke: "#fff", background: "rgba(255,255,255,0.2)", text: "#fff" },
 };
+const COMPLETED_LIGHT_MODE = { stroke: "#000", background: "rgba(0,0,0,0.08)", text: "#000" };
 const DEFAULT_PHASE_STYLE = { stroke: "#3d7cff", background: "#232323", text: "#fff" };
 
+function getPhaseStyle(key: string): { stroke: string; background: string; text: string } {
+  const base = PHASE_STYLE_MAP[key] || DEFAULT_PHASE_STYLE;
+  if (key === "completed" || key === "Completed") {
+    const light = window.matchMedia("(prefers-color-scheme: light)").matches;
+    return light ? COMPLETED_LIGHT_MODE : base;
+  }
+  return base;
+}
+
+/** Reversed phase → style key for the ring only (countdown: start shows "end" color, end shows "start" color). */
+const RING_PHASE_REVERSE: Record<string, string> = {
+  "Warm-Up": "completed",
+  Sustain: "Cool-Down",
+  "Cool-Down": "Sustain",
+  Completed: "Warm-Up",
+  completed: "Warm-Up",
+  Rest: "Rest",
+  idle: "idle",
+};
+
 function applyPhaseStyle(key: string) {
-  const style = PHASE_STYLE_MAP[key] || DEFAULT_PHASE_STYLE;
+  const style = getPhaseStyle(key);
   const ringEl = document.getElementById("ringProgress");
   if (ringEl instanceof SVGCircleElement) {
-    ringEl.style.stroke = style.stroke;
+    const ringKey = RING_PHASE_REVERSE[key] ?? key;
+    const ringStyle = getPhaseStyle(ringKey);
+    ringEl.style.stroke = ringStyle.stroke;
   }
   if (phaseDisplayEl) {
     phaseDisplayEl.style.background = style.background;
