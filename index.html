@@ -169,10 +169,10 @@
 <div class="modal-bg" id="cancelModalBg">
   <div class="modal">
     <div class="close-btn" onclick="closeCancelModal()">×</div>
-    <div class="modal-title">Cancel Workout</div>
-    <div class="label" style="text-align:center;">Pressing a goal while your workout is running cancels the session.</div>
+    <div class="modal-title">End workout?</div>
+    <div class="label" style="text-align:center;">This workout will be saved and marked as cancelled in Settings → Workouts.</div>
     <div class="modal-actions">
-      <button class="button" onclick="confirmCancelWorkout()">Yes, cancel it</button>
+      <button class="button" onclick="confirmCancelWorkout()">Yes, end and save</button>
       <button class="button secondary" onclick="closeCancelModal()">Keep going</button>
     </div>
   </div>
@@ -211,7 +211,10 @@
     <select id="workoutDaySelect" class="workout-day-select" aria-label="Select workout day"></select>
   </div>
 
-  <button class="button" id="startButton" onclick="startWorkout()">Start Workout</button>
+  <div id="startButtonRow" class="start-button-row">
+    <button class="button" id="startButton" onclick="startWorkout()">Start Workout</button>
+    <button class="button button-cancel-workout" id="cancelWorkoutButton" onclick="openCancelModal()" style="display: none;">Cancel</button>
+  </div>
 
   <div id="phaseDisplay" class="phase-box"></div>
 

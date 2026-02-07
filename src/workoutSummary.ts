@@ -82,7 +82,8 @@ async function generateWorkoutSummary(
   sessionId: string,
   startedAt: number,
   endedAt: number,
-  day: string
+  day: string,
+  options?: { cancelled?: boolean }
 ): Promise<WorkoutSummary> {
   const durationMs = endedAt - startedAt;
   const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
@@ -124,6 +125,7 @@ async function generateWorkoutSummary(
     zone_minutes: zoneMinutes,
     hr_trace: hrTrace,
     day,
+    cancelled: options?.cancelled,
   };
 
   validateSummary(summary);

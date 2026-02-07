@@ -74,7 +74,7 @@ function validateSummary(summary) {
     if (errors.length > 0)
         console.error("Workout summary validation errors:", errors);
 }
-async function generateWorkoutSummary(sessionId, startedAt, endedAt, day) {
+async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, options) {
     const durationMs = endedAt - startedAt;
     const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
     const MAX_DURATION_MINUTES = 1440;
@@ -107,6 +107,7 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day) {
         zone_minutes: zoneMinutes,
         hr_trace: hrTrace,
         day,
+        cancelled: options === null || options === void 0 ? void 0 : options.cancelled,
     };
     validateSummary(summary);
     const zoneSum = summary.zone_minutes.z1 +

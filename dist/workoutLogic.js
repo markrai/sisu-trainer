@@ -71,7 +71,9 @@ async function restartWorkout() {
         else {
             const endedAt = Date.now();
             try {
-                const summary = await window.generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day);
+                const summary = await window.generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day, {
+                    cancelled: true,
+                });
                 await window.emitWorkoutSummary(summary);
             }
             catch (error) {

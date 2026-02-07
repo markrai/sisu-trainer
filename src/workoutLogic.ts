@@ -80,7 +80,9 @@ async function restartWorkout() {
     } else {
       const endedAt = Date.now();
       try {
-        const summary = await (window as any).generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day);
+        const summary = await (window as any).generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day, {
+          cancelled: true,
+        });
         await (window as any).emitWorkoutSummary(summary);
       } catch (error: any) {
         console.error("Error emitting workout summary on cancel:", error);

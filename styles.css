@@ -7,6 +7,11 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .input { width: 100%; padding: 12px; border-radius: 10px; border: none; margin-top: 8px; font-size: 1rem; box-sizing: border-box; }
 .button { width: 100%; padding: 14px; background: #3d7cff; color: #fff; border: none; border-radius: 12px; margin-top: 14px; font-size: 1rem; font-weight: 600; }
 
+.start-button-row { display: flex; align-items: stretch; gap: 10px; margin-top: 14px; }
+.start-button-row .button { margin-top: 0; flex: 1; min-width: 0; box-sizing: border-box; }
+.start-button-row .button-cancel-workout { flex: 0 0 auto; width: auto; padding: 14px 16px; font-size: 1rem; background: #444; box-sizing: border-box; height: 100%; min-height: 0; }
+.start-button-row .button-cancel-workout:hover { background: #555; }
+
 .metric { font-size: 1rem; margin-top: 6px; text-align: center; }
 .workout-day-row { margin-top: 6px; }
 .workout-day-select { width: 100%; max-width: 100%; font-size: 1rem; padding: 8px 12px; border-radius: 10px; border: 1px solid #333; background: #232323; color: #fff; cursor: pointer; appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%23888' viewBox='0 0 16 16'%3E%3Cpath d='M8 11L3 6h10l-5 5z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px; box-sizing: border-box; }
@@ -184,9 +189,10 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .toast-info {
   border-left: 4px solid #3d7cff;
 }
-.workout-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.workout-item-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; position: relative; }
 .workout-item-date { font-size: 0.9rem; opacity: 0.7; }
 .workout-item-title { font-size: 1.1rem; font-weight: 600; }
+.workout-item-cancelled { color: #e53935; font-size: 0.7rem; text-transform: lowercase; font-weight: 600; flex-shrink: 0; margin-left: 8px; }
 .workout-item-details { font-size: 0.85rem; opacity: 0.8; margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; }
 .workout-item-detail { }
 .workout-item-actions { display: flex; gap: 8px; margin-top: 12px; }
@@ -332,10 +338,14 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
     margin-top: 12px; 
   }
   
-  /* Increase spacing for start button */
-  #startButton {
+  /* Increase spacing for start button row; keep both buttons aligned (no margin on #startButton) */
+  .start-button-row {
     margin-top: 20px;
     margin-bottom: 8px;
+  }
+  .start-button-row .button-cancel-workout {
+    padding: 16px 16px;
+    font-size: 1.1rem;
   }
   
   /* Make ring larger and add more spacing */
@@ -469,6 +479,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   .label { font-size: 1.08rem; }
   .input { padding: 14.4px; border-radius: 12px; margin-top: 9.6px; font-size: 1.2rem; }
   .button { padding: 16.8px; border-radius: 14.4px; margin-top: 16.8px; font-size: 1.2rem; }
+  .start-button-row .button-cancel-workout { padding: 16.8px 16px; font-size: 1.2rem; }
   
   .metric { font-size: 1.2rem; margin-top: 7.2px; }
   .phase-box { font-size: 1.8rem; padding: 16.8px; border-radius: 14.4px; margin-top: 21.6px; }

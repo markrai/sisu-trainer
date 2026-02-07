@@ -86,6 +86,8 @@ export interface WorkoutSummary {
     samples: Array<{ t: number; hr: number }>;
   };
   day?: DayName | string;
+  /** True when the user ended the workout early (cancel). Still saved in history. */
+  cancelled?: boolean;
 }
 
 export interface SisuSettings {

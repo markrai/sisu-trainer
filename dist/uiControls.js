@@ -294,6 +294,8 @@ function updateDisplay() {
         const hrTargetEl = document.getElementById("hrTarget");
         const workoutBlocksEl = document.getElementById("workoutBlocks");
         const startBtnEl = document.getElementById("startButton");
+        const cancelBtnEl = document.getElementById("cancelWorkoutButton");
+        const startButtonRowEl = document.getElementById("startButtonRow");
         if (!base) {
             if (workoutBlocksEl)
                 workoutBlocksEl.textContent = "Rest Day";
@@ -303,8 +305,10 @@ function updateDisplay() {
             }
             if (activityIcon)
                 activityIcon.style.display = "none";
-            if (startBtnEl)
-                startBtnEl.style.display = "none";
+            if (startButtonRowEl)
+                startButtonRowEl.style.display = "none";
+            if (cancelBtnEl)
+                cancelBtnEl.style.display = "none";
             updateRing(0, { warm: 1, sustain: 1, cool: 1 });
             if (hrTargetEl)
                 hrTargetEl.textContent = "";
@@ -326,11 +330,15 @@ function updateDisplay() {
             }
             if (typeof window.resetVoiceState === "function")
                 window.resetVoiceState();
+            if (startButtonRowEl)
+                startButtonRowEl.style.display = "flex";
             if (startBtnEl) {
                 startBtnEl.innerText = "Start Workout";
                 startBtnEl.onclick = startWorkout;
                 startBtnEl.style.display = "block";
             }
+            if (cancelBtnEl)
+                cancelBtnEl.style.display = "none";
             updateRing(0, blocks);
             if (hrTargetEl)
                 hrTargetEl.textContent = "";
@@ -393,11 +401,15 @@ function updateDisplay() {
             }
             if (typeof window.announcePhaseIfChanged === "function")
                 window.announcePhaseIfChanged("Completed");
+            if (startButtonRowEl)
+                startButtonRowEl.style.display = "flex";
             if (startBtnEl) {
                 startBtnEl.innerText = "Restart Workout";
                 startBtnEl.onclick = restartWorkout;
                 startBtnEl.style.display = "block";
             }
+            if (cancelBtnEl)
+                cancelBtnEl.style.display = "none";
             if (hrTargetEl)
                 hrTargetEl.textContent = "";
             updateHeartPulse(null);
@@ -405,6 +417,8 @@ function updateDisplay() {
             applyPhaseStyle("completed");
             return;
         }
+        if (startButtonRowEl)
+            startButtonRowEl.style.display = "flex";
         if (startBtnEl) {
             if (paused) {
                 startBtnEl.innerText = "Resume";
@@ -427,6 +441,8 @@ function updateDisplay() {
                 startBtnEl.style.display = "block";
             }
         }
+        if (cancelBtnEl)
+            cancelBtnEl.style.display = paused ? "block" : "none";
         let phaseDisplayName = phase.phase;
         if (phase.phase === "Warm-Up") {
             const subsectionName = getWarmupSubsectionName(day, elapsedSec);
@@ -828,6 +844,7 @@ function displayWorkoutSummaries(workouts) {
         workoutItem.dataset.sessionId = summary.external_session_id;
         const date = new Date(summary.startedAt);
         const dateStr = date.toLocaleDateString() + " " + date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        const cancelledLabel = summary.cancelled ? '<span class="workout-item-cancelled">cancelled</span>' : "";
         workoutItem.innerHTML = `
       <div class="swipe-left-indicator"></div>
       <div class="swipe-right-indicator"></div>
@@ -836,6 +853,7 @@ function displayWorkoutSummaries(workouts) {
           <div class="workout-item-title">${summary.intent || "Workout"}</div>
           <div class="workout-item-date">${dateStr}</div>
         </div>
+        ${cancelledLabel}
       </div>
       <div class="workout-item-details">
         <div class="workout-item-detail">Duration: ${summary.duration_minutes} min</div>
