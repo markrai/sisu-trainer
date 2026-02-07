@@ -175,27 +175,34 @@ function parseHrTargetRange(hrTargetText: string) {
 
 function updateHeartColor(liveBpm: number | null, hrTargetText: string | null) {
   const heartIcon = document.getElementById("heartIcon");
+  const hrNowEl = document.getElementById("hrNow");
   if (!heartIcon) return;
-  if (!liveBpm || liveBpm <= 0) {
+  const setHeartWhite = () => {
     heartIcon.style.setProperty("filter", "brightness(0) invert(1)", "important");
+    if (hrNowEl) hrNowEl.style.setProperty("color", "black", "important");
+  };
+  const setHeartColored = (filter: string) => {
+    heartIcon.style.setProperty("filter", filter, "important");
+    if (hrNowEl) hrNowEl.style.setProperty("color", "white", "important");
+  };
+  if (!liveBpm || liveBpm <= 0) {
+    setHeartWhite();
     return;
   }
   if (!hrTargetText || hrTargetText === "") {
-    heartIcon.style.setProperty("filter", "brightness(0) invert(1)", "important");
+    setHeartWhite();
     return;
   }
   const range = parseHrTargetRange(hrTargetText);
   if (!range) {
-    heartIcon.style.setProperty("filter", "brightness(0) invert(1)", "important");
+    setHeartWhite();
     return;
   }
   let hueRotate = 0;
   if (liveBpm > range.max) hueRotate = 270;
   else if (liveBpm < range.min) hueRotate = 240;
-  heartIcon.style.setProperty(
-    "filter",
-    `brightness(0) saturate(100%) invert(27%) sepia(100%) saturate(10000%) hue-rotate(${hueRotate}deg)`,
-    "important"
+  setHeartColored(
+    `brightness(0) saturate(100%) invert(27%) sepia(100%) saturate(10000%) hue-rotate(${hueRotate}deg)`
   );
 }
 
