@@ -22,6 +22,11 @@ let selectedDay: string | null = null;
 let liveBpm: number | null = null;
 let lastBpmUpdateTime: number | null = null;
 const BPM_TIMEOUT_MS = 3000;
+let showElapsedInRing = false;
+
+function getShowElapsed() {
+  return showElapsedInRing;
+}
 
 (window as any).liveBpm = liveBpm;
 (window as any).lastBpmUpdateTime = lastBpmUpdateTime;
@@ -95,24 +100,11 @@ function getPhaseStyle(key: string): { stroke: string; background: string; text:
   return base;
 }
 
-/** Reversed phase → style key for the ring only (countdown: start shows "end" color, end shows "start" color). */
-const RING_PHASE_REVERSE: Record<string, string> = {
-  "Warm-Up": "completed",
-  Sustain: "Cool-Down",
-  "Cool-Down": "Sustain",
-  Completed: "Warm-Up",
-  completed: "Warm-Up",
-  Rest: "Rest",
-  idle: "idle",
-};
-
 function applyPhaseStyle(key: string) {
   const style = getPhaseStyle(key);
   const ringEl = document.getElementById("ringProgress");
   if (ringEl instanceof SVGCircleElement) {
-    const ringKey = RING_PHASE_REVERSE[key] ?? key;
-    const ringStyle = getPhaseStyle(ringKey);
-    ringEl.style.stroke = ringStyle.stroke;
+    ringEl.style.stroke = style.stroke;
   }
   if (phaseDisplayEl) {
     phaseDisplayEl.style.background = style.background;
@@ -860,7 +852,15 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
     phaseDisplayEl.dataset.phaseState = "idle";
     phaseDisplayEl.addEventListener("click", promptCancelWorkout);
   }
+  const ringCenter = document.getElementById("ringCenter");
+  if (ringCenter) {
+    ringCenter.addEventListener("click", () => {
+      showElapsedInRing = !showElapsedInRing;
+      updateDisplay();
+    });
+  }
   (window as any).getSelectedDay = getSelectedDay;
+  (window as any).getShowElapsed = getShowElapsed;
   (window as any).setSelectedDay = setSelectedDay;
   (window as any).connectHr = connectHr;
   (window as any).updateHrDisplay = updateHrDisplay;

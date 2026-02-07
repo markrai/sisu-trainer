@@ -166,13 +166,26 @@ function updateRing(elapsedSec, blocks) {
     const cappedElapsed = Math.max(0, Math.min(elapsedSec, totalSec));
     const remaining = totalSec - cappedElapsed;
     const ringCirc = getRingCircumference();
-    // Decrementing ring: show remaining portion of circle (same direction as before, so color phases feel reversed)
-    const visibleLength = ringCirc * (remaining / totalSec);
-    ringEl.style.strokeDasharray = `${visibleLength} ${ringCirc}`;
-    ringEl.style.strokeDashoffset = "0";
+    const showElapsed = typeof window.getShowElapsed === "function" && window.getShowElapsed();
+    if (showElapsed) {
+        // Increasing ring: fill as elapsed time grows (phase colors match progress)
+        const progress = cappedElapsed / totalSec;
+        const offset = ringCirc * (1 - progress);
+        ringEl.style.strokeDasharray = String(ringCirc);
+        ringEl.style.strokeDashoffset = String(offset);
+    }
+    else {
+        // Decrementing ring: show remaining portion
+        const visibleLength = ringCirc * (remaining / totalSec);
+        ringEl.style.strokeDasharray = `${visibleLength} ${ringCirc}`;
+        ringEl.style.strokeDashoffset = "0";
+    }
     const showSeconds = typeof window.getShowSecondsCountdown === "function" && window.getShowSecondsCountdown();
+    const labelEl = document.getElementById("ringCenterLabel");
     if (center)
-        center.textContent = formatTime(remaining, { showSeconds });
+        center.textContent = formatTime(showElapsed ? cappedElapsed : remaining, { showSeconds });
+    if (labelEl)
+        labelEl.textContent = showElapsed ? "total elapsed" : "total remaining";
 }
 function hrTargetText(phaseName, day, elapsedSec, blocks) {
     const dayHrTargets = getHrTargets()[day];

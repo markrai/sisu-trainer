@@ -197,7 +197,9 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .ring { width: 100%; height: 100%; transform: rotate(-90deg); }
 .ring-bg { fill: none; stroke: #333; stroke-width: 8; }
 .ring-progress { fill: none; stroke: #3d7cff; stroke-width: 8; stroke-linecap: round; stroke-dasharray: 339.292; stroke-dashoffset: 339.292; transition: stroke-dashoffset 0.25s linear; }
-.ring-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.1rem; text-align: center; }
+.ring-center { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 1.1rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.15rem; cursor: pointer; touch-action: manipulation; user-select: none; }
+.ring-center #ringCenterText { pointer-events: none; }
+.ring-center-label { font-size: 0.65rem; text-transform: lowercase; opacity: 0.85; pointer-events: none; }
 
 /* Heart pulsation animation - scale only so heart and HR text stay aligned */
 @keyframes heartPulse {
