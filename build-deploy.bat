@@ -2,7 +2,7 @@
 setlocal
 echo Building and preparing deploy folder...
 echo.
-
+REM npm run build runs prebuild (syncs version.js -> src/version.ts + package.json) then tsc
 call npm run build
 if %errorlevel% neq 0 (
     echo Build failed.
