@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>VO2 Max Coach</title>
+<meta name="theme-color" content="#0c0c0c">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="VO2 Coach">
+<link rel="icon" type="image/x-icon" href="favicon.ico">
+<link rel="manifest" href="manifest.json">
+<link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+
+<div class="hamburger" onclick="openModal()">☰</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal" style="max-width: 500px;">
+    <div class="close-btn" onclick="closeModal()">✕</div>
+    <div class="modal-title">Settings</div>
+    <div id="appVersion" class="app-version"></div>
+    
+    <!-- Tab buttons -->
+    <div class="tab-buttons">
+      <button class="tab-button active" onclick="switchTab('personal')">Profile</button>
+      <button class="tab-button" onclick="switchTab('preferences')"><span class="tab-label-long">Preferences</span><span class="tab-label-short">Prefs</span></button>
+      <button class="tab-button" onclick="switchTab('workouts')">Workouts</button>
+      <button class="tab-button" onclick="switchTab('sisu')">Sync</button>
+      <button class="tab-button" onclick="switchTab('install')">Install</button>
+    </div>
+    
+    <!-- Profile Tab -->
+    <div id="personalTab" class="tab-content active">
+      <div class="modal-section">
+        <div class="modal-field">
+          <label class="modal-label" for="weight">Weight</label>
+          <input id="weight" class="modal-input" type="number" placeholder="lbs">
+        </div>
+
+        <div class="modal-field">
+          <label class="modal-label" for="height">Height</label>
+          <div style="display: flex; gap: 8px; flex: 1;">
+            <select id="heightFeet" class="modal-input" style="flex: 1;">
+              <option value="">ft</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+            <select id="heightInches" class="modal-input" style="flex: 1;">
+              <option value="">in</option>
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+              <option value="11">11</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="modal-field">
+          <label class="modal-label" for="age">Age</label>
+          <input id="age" class="modal-input" type="number" placeholder="years">
+        </div>
+
+        <div class="modal-field">
+          <label class="modal-label" for="sex">Sex</label>
+          <select id="sex" class="modal-input">
+            <option value="">Select</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="modal-section">
+        <div class="modal-field">
+          <label class="modal-label" for="vo2">VO₂ Max</label>
+          <input id="vo2" class="modal-input" type="number" placeholder="optional">
+        </div>
+      </div>
+
+      <button class="button" onclick="saveProfile()">Save Profile</button>
+    </div>
+    
+    <!-- Preferences Tab -->
+    <div id="preferencesTab" class="tab-content">
+      <div class="modal-section">
+        <div class="modal-field modal-field-toggle">
+          <label class="modal-label" for="showSecondsCountdown">Show seconds countdown for entire workout</label>
+          <input type="checkbox" id="showSecondsCountdown" class="preference-toggle" onchange="savePreferenceShowSeconds(this.checked)">
+        </div>
+        <div class="modal-field modal-field-toggle">
+          <label class="modal-label" for="voicePromptsEnabled">Voice prompts</label>
+          <input type="checkbox" id="voicePromptsEnabled" class="preference-toggle" onchange="savePreferenceVoicePrompts(this.checked)">
+        </div>
+      </div>
+    </div>
+    
+    <!-- Workouts Tab -->
+    <div id="workoutsTab" class="tab-content">
+      <div id="workoutSummaryList" class="workout-summary-list">
+        <div class="label" style="text-align: center; margin-bottom: 16px;">Loading workouts...</div>
+      </div>
+    </div>
+    
+    <!-- Sync Tab -->
+    <div id="sisuTab" class="tab-content">
+      <div id="sisuSyncContent" class="sisu-sync-content">
+        <div class="label" style="text-align: center; margin-bottom: 16px;">Sync</div>
+        <div class="modal-section">
+          <div class="label" style="text-align: center; opacity: 0.7; margin-bottom: 20px;">
+            Connect to SISU to sync workouts and HRV baseline.
+          </div>
+          <div class="modal-field">
+            <label class="modal-label" for="sisuHost">SISU Host</label>
+            <input id="sisuHost" class="modal-input" type="text" placeholder="192.168.1.100">
+          </div>
+          <div class="modal-field">
+            <label class="modal-label" for="sisuPort">Port</label>
+            <input id="sisuPort" class="modal-input" type="number" placeholder="443">
+          </div>
+          <div id="sisuStatus" class="label" style="text-align: center; margin-bottom: 16px;">Not connected</div>
+          <div id="sisuConnectionInfo" class="label" style="text-align: center; opacity: 0.7; margin-bottom: 16px; display: none;"></div>
+          <button class="button" id="sisuConnectButton" onclick="connectSISU()">Connect to SISU</button>
+        </div>
+        
+        <div class="modal-section" style="margin-top: 24px;">
+          <div class="label" style="text-align: center; opacity: 0.7; margin-bottom: 16px;">
+            Heart Rate Monitor
+          </div>
+          <button class="button" id="connectHrButton" onclick="connectHr()">Connect HR</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Install Tab -->
+    <div id="installTab" class="tab-content">
+      <div id="installContent" class="install-content">
+        <div class="label" style="text-align: center; margin-bottom: 16px;">Install App</div>
+        <div id="installNotInstalledState" class="modal-section">
+          <div class="label" style="text-align: center; opacity: 0.7; margin-bottom: 20px;">
+            Install this app on your device for a better experience and offline access.
+          </div>
+          <div id="installButtonContainer"></div>
+        </div>
+        <div id="installInstalledState" class="modal-section install-installed-state" style="display: none;">
+          <div class="install-checkmark" aria-hidden="true">✓</div>
+          <div class="label" style="text-align: center; opacity: 0.9;">App is already installed</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="cancelModalBg">
+  <div class="modal">
+    <div class="close-btn" onclick="closeCancelModal()">×</div>
+    <div class="modal-title">End workout?</div>
+    <div class="label" style="text-align:center;">This workout will be saved and marked as cancelled in Settings → Workouts.</div>
+    <div class="modal-actions">
+      <button class="button" onclick="confirmCancelWorkout()">Yes, end and save</button>
+      <button class="button secondary" onclick="closeCancelModal()">Keep going</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="workoutSummaryModalBg">
+  <div class="modal" style="max-width: 90%; max-height: 90vh; overflow-y: auto;">
+    <div class="close-btn" onclick="closeWorkoutSummaryModal()">✕</div>
+    <div class="modal-title">Workout Summary</div>
+    <div id="workoutSummaryContent" style="margin-top: 20px;">
+      <pre id="workoutSummaryJson" style="background: #232323; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem; white-space: pre-wrap; word-wrap: break-word;"></pre>
+    </div>
+    <div class="modal-actions">
+      <button class="button" onclick="downloadWorkoutSummaryJson()">Download JSON</button>
+      <button class="button secondary" onclick="closeWorkoutSummaryModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="deleteWorkoutModalBg">
+  <div class="modal">
+    <div class="close-btn" onclick="closeDeleteWorkoutModal()">×</div>
+    <div class="modal-title">Delete Workout</div>
+    <div class="label" style="text-align:center;">Are you sure you want to delete this workout? This action cannot be undone.</div>
+    <div class="modal-actions">
+      <button class="button" onclick="confirmDeleteWorkout()">Yes, delete it</button>
+      <button class="button secondary" onclick="closeDeleteWorkoutModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+
+<div class="section workout-main-section">
+  <div class="workout-day-row" style="position: relative;">
+    <select id="workoutDaySelect" class="workout-day-select" aria-label="Select workout day"></select>
+  </div>
+
+  <div id="startButtonRow" class="start-button-row">
+    <button class="button" id="startButton" onclick="startWorkout()">Start Workout</button>
+    <button class="button button-cancel-workout" id="cancelWorkoutButton" onclick="openCancelModal()" style="display: none;">Cancel</button>
+  </div>
+
+  <div id="phaseDisplay" class="phase-box"></div>
+
+  <div class="ring-wrapper" style="position: relative;">
+    <div class="ring-container">
+      <svg class="ring" viewBox="0 0 120 120">
+        <circle class="ring-bg" cx="60" cy="60" r="54"></circle>
+        <circle class="ring-progress" id="ringProgress" cx="60" cy="60" r="54"></circle>
+      </svg>
+      <div class="ring-center" id="ringCenter">
+        <div id="ringCenterText"></div>
+        <div class="ring-center-label" id="ringCenterLabel">total remaining</div>
+      </div>
+    </div>
+
+    <div id="heartContainer" class="heart-container">
+      <img id="heartIcon" src="heart.png" alt="">
+      <div id="hrNow" class="hr-now"></div>
+      <div id="hrTarget" class="hr-target"></div>
+    </div>
+    <img id="activityIcon" src="" alt="" style="display: none;">
+  </div>
+</div>
+
+<div id="workoutBlocks" class="work-blocks"></div>
+
+</div>
+
+<script type="module" src="./dist/main.js"></script>
+
+</body>
+</html>
