@@ -18,6 +18,8 @@ import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
+import { connect as hrConnect, onBpm } from "./hrMonitor.js";
+import { getSession } from "./sessionStore.js";
 
 let selectedDay: string | null = null;
 let liveBpm: number | null = null;
@@ -84,9 +86,7 @@ function ensureWorkoutDayDropdown() {
 }
 
 function connectHr() {
-  if (typeof (window as any).initiateHrConnection === "function") {
-    (window as any).initiateHrConnection();
-  }
+  hrConnect();
 }
 
 function updateHrMonitorLabel() {
@@ -897,6 +897,26 @@ function displayWorkoutSummaries(workouts: any[]) {
 
 function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   phaseDisplayEl = phaseBoxEl;
+
+  onBpm((bpm) => {
+    liveBpm = bpm;
+    lastBpmUpdateTime = Date.now();
+    (window as any).liveBpm = liveBpm;
+    (window as any).lastBpmUpdateTime = lastBpmUpdateTime;
+    updateHrDisplay(bpm);
+    const hrTargetEl = document.getElementById("hrTarget");
+    updateHeartPulse(bpm);
+    updateHeartColor(bpm, hrTargetEl ? hrTargetEl.textContent : "");
+    const day = getSelectedDay();
+    const session = getSession(day);
+    const startTime = getStartTime(day);
+    if (startTime && session.sessionId && typeof (window as any).storeHrSample === "function") {
+      const start = typeof startTime === "number" ? startTime : parseInt(String(startTime), 10);
+      const elapsedSec = Math.floor((Date.now() - start) / 1000);
+      (window as any).storeHrSample(session.sessionId, elapsedSec, bpm).catch((err: any) => console.error("Error storing HR sample:", err));
+    }
+  });
+
   if (phaseDisplayEl) {
     phaseDisplayEl.dataset.phaseState = "idle";
     phaseDisplayEl.addEventListener("click", promptCancelWorkout);

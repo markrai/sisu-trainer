@@ -8,6 +8,7 @@ import { registerWorkoutLogicGlobals } from "./workoutLogic.js";
 import { registerWakeLockGlobals } from "./wakeLock.js";
 import { registerVoiceGlobals } from "./voice.js";
 import { registerSisuGlobals } from "./sisuSync.js";
+import "./hrMonitor.js";
 import { registerUiGlobals, updateDisplay } from "./uiControls.js";
 import { registerPwaGlobals } from "./pwaInstall.js";
 import { getSession, isSessionStale, clearSession } from "./sessionStore.js";
