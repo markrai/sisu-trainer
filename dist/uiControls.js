@@ -327,18 +327,60 @@ function getCurrentIntervalName(day, elapsedSec, blocks) {
     }
     return null;
 }
-function updateDisplay() {
-    try {
-        if (typeof getPlan !== "function" || typeof getWorkoutMetadata !== "function")
-            return;
-        const day = getSelectedDay();
-        const plan = getPlan();
-        const workoutMetadata = getWorkoutMetadata();
-        const base = plan[day];
-        ensureWorkoutDayDropdown();
-        const activityIcon = document.getElementById("activityIcon");
-        if (activityIcon && base && workoutMetadata[day]) {
-            const machine = workoutMetadata[day].machine || "";
+function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime) {
+    if (!base) {
+        return { screen: "rest", day, plan, workoutMetadata };
+    }
+    const blocks = adjustedBlockLengths(base, null);
+    const workoutBlocksText = "Warm-Up: " + blocks.warm + " min · Workout: " + blocks.sustain + " min · Cool-Down: " + blocks.cool + " min";
+    if (!startTime) {
+        return { screen: "idle", day, plan, workoutMetadata, base, blocks, workoutBlocksText };
+    }
+    const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime)) / 1000);
+    const phase = getPhase(elapsedSec, blocks);
+    if (phase.done) {
+        return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
+    }
+    let phaseDisplayName = phase.phase;
+    if (phase.phase === "Warm-Up") {
+        const subsectionName = getWarmupSubsectionName(day, elapsedSec);
+        if (subsectionName)
+            phaseDisplayName = "Warm-Up (" + subsectionName + ")";
+    }
+    else if (phase.phase === "Sustain") {
+        phaseDisplayName = "Workout";
+        const intervalName = getCurrentIntervalName(day, elapsedSec, blocks);
+        if (intervalName)
+            phaseDisplayName = intervalName;
+    }
+    const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks);
+    const nowTime = Date.now();
+    const liveBpmStale = lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
+    return {
+        screen: "active",
+        day,
+        plan,
+        workoutMetadata,
+        base,
+        blocks,
+        workoutBlocksText,
+        elapsedSec,
+        phase,
+        phaseDisplayName,
+        paused,
+        hrTargetTextValue,
+        liveBpm: liveBpm !== null && liveBpm !== void 0 ? liveBpm : null,
+        liveBpmStale,
+    };
+}
+function renderWorkout(state) {
+    ensureWorkoutDayDropdown();
+    const activityIcon = document.getElementById("activityIcon");
+    const dayMeta = state.workoutMetadata[state.day];
+    const hasBase = state.screen !== "rest" && state.base;
+    if (activityIcon) {
+        if (hasBase && dayMeta) {
+            const machine = dayMeta.machine || "";
             let iconSrc = "";
             const machineLower = machine.toLowerCase();
             if (machineLower.includes("combo") || machineLower.includes("strength"))
@@ -355,161 +397,159 @@ function updateDisplay() {
                 activityIcon.style.display = "none";
             }
         }
-        else if (activityIcon) {
+        else {
             activityIcon.style.display = "none";
         }
-        const hrTargetEl = document.getElementById("hrTarget");
-        const workoutBlocksEl = document.getElementById("workoutBlocks");
-        const startBtnEl = document.getElementById("startButton");
-        const cancelBtnEl = document.getElementById("cancelWorkoutButton");
-        const startButtonRowEl = document.getElementById("startButtonRow");
-        if (!base) {
-            if (workoutBlocksEl)
-                workoutBlocksEl.textContent = "Rest Day";
-            if (phaseDisplayEl) {
-                phaseDisplayEl.innerHTML = '<span class="phase-name">Rest Day</span>';
-                phaseDisplayEl.dataset.phaseState = "rest";
-            }
-            if (activityIcon)
-                activityIcon.style.display = "none";
-            if (startButtonRowEl)
-                startButtonRowEl.style.display = "none";
-            if (cancelBtnEl)
-                cancelBtnEl.style.display = "none";
-            updateRing(0, { warm: 1, sustain: 1, cool: 1 });
-            if (hrTargetEl)
-                hrTargetEl.textContent = "";
-            updateHeartPulse(null);
-            updateHeartColor(null, "");
-            applyPhaseStyle("Rest");
-            return;
-        }
-        const blocks = adjustedBlockLengths(base, null);
+    }
+    const hrTargetEl = document.getElementById("hrTarget");
+    const workoutBlocksEl = document.getElementById("workoutBlocks");
+    const startBtnEl = document.getElementById("startButton");
+    const cancelBtnEl = document.getElementById("cancelWorkoutButton");
+    const startButtonRowEl = document.getElementById("startButtonRow");
+    if (state.screen === "rest") {
         if (workoutBlocksEl)
-            workoutBlocksEl.textContent =
-                "Warm-Up: " + blocks.warm + " min · Workout: " + blocks.sustain + " min · Cool-Down: " + blocks.cool + " min";
-        const start = getStartTime(day);
-        let elapsedSec = 0;
-        if (!start) {
-            if (phaseDisplayEl) {
-                phaseDisplayEl.innerHTML = '<span class="phase-name">Not Started</span>';
-                phaseDisplayEl.dataset.phaseState = "idle";
-            }
-            if (typeof window.resetVoiceState === "function")
-                window.resetVoiceState();
-            if (startButtonRowEl)
-                startButtonRowEl.style.display = "flex";
-            if (startBtnEl) {
-                startBtnEl.innerText = "Start Workout";
-                startBtnEl.onclick = startWorkout;
-                startBtnEl.style.display = "block";
-            }
-            if (cancelBtnEl)
-                cancelBtnEl.style.display = "none";
-            updateRing(0, blocks);
-            if (hrTargetEl)
-                hrTargetEl.textContent = "";
-            updateHeartPulse(null);
-            updateHeartColor(null, "");
-            applyPhaseStyle("idle");
-            return;
+            workoutBlocksEl.textContent = "Rest Day";
+        if (phaseDisplayEl) {
+            phaseDisplayEl.innerHTML = '<span class="phase-name">Rest Day</span>';
+            phaseDisplayEl.dataset.phaseState = "rest";
         }
-        const paused = typeof isPaused === "function" && isPaused(day);
-        if (paused) {
-            elapsedSec = typeof getPausedElapsed === "function" ? getPausedElapsed(day) : 0;
+        if (startButtonRowEl)
+            startButtonRowEl.style.display = "none";
+        if (cancelBtnEl)
+            cancelBtnEl.style.display = "none";
+        updateRing(0, { warm: 1, sustain: 1, cool: 1 });
+        if (hrTargetEl)
+            hrTargetEl.textContent = "";
+        updateHeartPulse(null);
+        updateHeartColor(null, "");
+        applyPhaseStyle("Rest");
+        return;
+    }
+    if (workoutBlocksEl)
+        workoutBlocksEl.textContent = state.workoutBlocksText;
+    if (state.screen === "idle") {
+        if (phaseDisplayEl) {
+            phaseDisplayEl.innerHTML = '<span class="phase-name">Not Started</span>';
+            phaseDisplayEl.dataset.phaseState = "idle";
         }
-        else {
-            elapsedSec = Math.floor((Date.now() - parseInt(start)) / 1000);
-        }
-        const phase = getPhase(elapsedSec, blocks);
-        updateRing(elapsedSec, blocks);
-        if (phase.done) {
-            if (typeof window.releaseWakeLock === "function")
-                window.releaseWakeLock();
-            handleWorkoutCompletion(day);
-            if (phaseDisplayEl) {
-                phaseDisplayEl.innerHTML = '<span class="phase-name">Completed</span>';
-                phaseDisplayEl.dataset.phaseState = "completed";
-            }
-            if (typeof window.announcePhaseIfChanged === "function")
-                window.announcePhaseIfChanged("Completed");
-            if (startButtonRowEl)
-                startButtonRowEl.style.display = "flex";
-            if (startBtnEl) {
-                startBtnEl.innerText = "Restart Workout";
-                startBtnEl.onclick = restartWorkout;
-                startBtnEl.style.display = "block";
-            }
-            if (cancelBtnEl)
-                cancelBtnEl.style.display = "none";
-            if (hrTargetEl)
-                hrTargetEl.textContent = "";
-            updateHeartPulse(null);
-            updateHeartColor(null, "");
-            applyPhaseStyle("completed");
-            return;
-        }
+        if (typeof window.resetVoiceState === "function")
+            window.resetVoiceState();
         if (startButtonRowEl)
             startButtonRowEl.style.display = "flex";
         if (startBtnEl) {
-            if (paused) {
-                startBtnEl.innerText = "Resume";
-                startBtnEl.onclick = function () {
-                    resumeWorkout(day);
-                    if (typeof window.requestWakeLock === "function")
-                        window.requestWakeLock();
-                    updateDisplay();
-                };
-                startBtnEl.style.display = "block";
-            }
-            else {
-                startBtnEl.innerText = "Pause";
-                startBtnEl.onclick = function () {
-                    pauseWorkout(day, elapsedSec);
-                    if (typeof window.releaseWakeLock === "function")
-                        window.releaseWakeLock();
-                    updateDisplay();
-                };
-                startBtnEl.style.display = "block";
-            }
+            startBtnEl.innerText = "Start Workout";
+            startBtnEl.onclick = startWorkout;
+            startBtnEl.style.display = "block";
         }
         if (cancelBtnEl)
-            cancelBtnEl.style.display = paused ? "block" : "none";
-        let phaseDisplayName = phase.phase;
-        if (phase.phase === "Warm-Up") {
-            const subsectionName = getWarmupSubsectionName(day, elapsedSec);
-            if (subsectionName)
-                phaseDisplayName = "Warm-Up (" + subsectionName + ")";
-        }
-        else if (phase.phase === "Sustain") {
-            phaseDisplayName = "Workout";
-            const intervalName = getCurrentIntervalName(day, elapsedSec, blocks);
-            if (intervalName)
-                phaseDisplayName = intervalName;
-        }
+            cancelBtnEl.style.display = "none";
+        updateRing(0, state.blocks);
+        if (hrTargetEl)
+            hrTargetEl.textContent = "";
+        updateHeartPulse(null);
+        updateHeartColor(null, "");
+        applyPhaseStyle("idle");
+        return;
+    }
+    if (state.screen === "completed") {
+        updateRing(state.elapsedSec, state.blocks);
+        if (typeof window.releaseWakeLock === "function")
+            window.releaseWakeLock();
+        handleWorkoutCompletion(state.day);
         if (phaseDisplayEl) {
-            phaseDisplayEl.innerHTML =
-                '<span class="phase-name">' + phaseDisplayName + '</span><span class="phase-time">' + formatTime(phase.timeLeft) + "</span>";
-            phaseDisplayEl.dataset.phaseState = "active";
+            phaseDisplayEl.innerHTML = '<span class="phase-name">Completed</span>';
+            phaseDisplayEl.dataset.phaseState = "completed";
         }
         if (typeof window.announcePhaseIfChanged === "function")
-            window.announcePhaseIfChanged(phaseDisplayName);
-        const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks);
+            window.announcePhaseIfChanged("Completed");
+        if (startButtonRowEl)
+            startButtonRowEl.style.display = "flex";
+        if (startBtnEl) {
+            startBtnEl.innerText = "Restart Workout";
+            startBtnEl.onclick = restartWorkout;
+            startBtnEl.style.display = "block";
+        }
+        if (cancelBtnEl)
+            cancelBtnEl.style.display = "none";
         if (hrTargetEl)
-            hrTargetEl.textContent = hrTargetTextValue;
-        updateHeartPulse();
-        const currentLiveBpm = window.liveBpm;
-        const currentLastUpdate = window.lastBpmUpdateTime;
-        const nowTime = Date.now();
-        if (currentLastUpdate && nowTime - currentLastUpdate > BPM_TIMEOUT_MS) {
-            updateHrDisplay(null);
+            hrTargetEl.textContent = "";
+        updateHeartPulse(null);
+        updateHeartColor(null, "");
+        applyPhaseStyle("completed");
+        return;
+    }
+    // state.screen === "active"
+    updateRing(state.elapsedSec, state.blocks);
+    const active = state;
+    if (startButtonRowEl)
+        startButtonRowEl.style.display = "flex";
+    if (startBtnEl) {
+        if (active.paused) {
+            startBtnEl.innerText = "Resume";
+            startBtnEl.onclick = function () {
+                resumeWorkout(active.day);
+                if (typeof window.requestWakeLock === "function")
+                    window.requestWakeLock();
+                updateDisplay();
+            };
+            startBtnEl.style.display = "block";
+        }
+        else {
+            startBtnEl.innerText = "Pause";
+            startBtnEl.onclick = function () {
+                pauseWorkout(active.day, active.elapsedSec);
+                if (typeof window.releaseWakeLock === "function")
+                    window.releaseWakeLock();
+                updateDisplay();
+            };
+            startBtnEl.style.display = "block";
+        }
+    }
+    if (cancelBtnEl)
+        cancelBtnEl.style.display = active.paused ? "block" : "none";
+    if (phaseDisplayEl) {
+        phaseDisplayEl.innerHTML =
+            '<span class="phase-name">' +
+                active.phaseDisplayName +
+                '</span><span class="phase-time">' +
+                formatTime(active.phase.timeLeft) +
+                "</span>";
+        phaseDisplayEl.dataset.phaseState = "active";
+    }
+    if (typeof window.announcePhaseIfChanged === "function")
+        window.announcePhaseIfChanged(active.phaseDisplayName);
+    if (hrTargetEl)
+        hrTargetEl.textContent = active.hrTargetTextValue;
+    updateHeartPulse();
+    if (active.liveBpmStale) {
+        updateHrDisplay(null);
+    }
+    if (active.liveBpm != null && active.liveBpm > 0 && !active.liveBpmStale) {
+        updateHeartColor(active.liveBpm, active.hrTargetTextValue);
+    }
+    else {
+        updateHeartColor(null, active.hrTargetTextValue);
+    }
+    applyPhaseStyle(active.phase.phase);
+}
+function updateDisplay() {
+    try {
+        if (typeof getPlan !== "function" || typeof getWorkoutMetadata !== "function")
+            return;
+        const day = getSelectedDay();
+        const plan = getPlan();
+        const workoutMetadata = getWorkoutMetadata();
+        const base = plan[day];
+        const startTime = getStartTime(day);
+        const paused = typeof isPaused === "function" && isPaused(day);
+        const pausedElapsed = typeof getPausedElapsed === "function" ? getPausedElapsed(day) : 0;
+        const liveBpm = window.liveBpm;
+        const lastBpmUpdateTime = window.lastBpmUpdateTime;
+        const state = deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime);
+        if (state.screen === "active" && state.liveBpmStale) {
             window.liveBpm = null;
         }
-        if (currentLiveBpm && currentLiveBpm > 0)
-            updateHeartColor(currentLiveBpm, hrTargetTextValue);
-        else
-            updateHeartColor(null, hrTargetTextValue);
-        applyPhaseStyle(phase.phase);
+        renderWorkout(state);
     }
     catch (e) {
         if (e instanceof TypeError && e.message && e.message.includes("null")) {
