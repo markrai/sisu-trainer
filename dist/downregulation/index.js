@@ -1,11 +1,14 @@
 /**
  * Downregulation view entry: start/stop WebGL particle view and wire HR input.
- * - On start: init renderer, start loop, subscribe to hrMonitor onBpm, or simulate HR if none.
- * - On stop: stop loop, dispose renderer, reset hrController; callback no-op when not running.
+ * - On start: init renderer, start loop, subscribe to hrMonitor onBpm, start session tracking, bind tap-to-stop.
+ * - On tap: end session, show play icon (1s fade), then show stats; on Done call onDismiss (e.g. exit to list).
+ * - On stop: stop loop, dispose renderer, reset hrController, unbind tap.
  */
 import { onBpm, getCurrentBpm } from "../hrMonitor.js";
 import { setCurrentHR, reset as resetHrController, getSmoothedHR } from "./hrController.js";
 import { initRenderer, startRenderLoop, stopRenderLoop, disposeRenderer, resize } from "./renderer.js";
+import { startSession, endSession, cancelSession } from "./sessionStats.js";
+import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap } from "./overlay.js";
 let container = null;
 let canvas = null;
 let running = false;
@@ -18,10 +21,11 @@ function onBpmCallback(bpm) {
 }
 /**
  * Start the Downregulation view: show container/canvas, init WebGL, start render loop,
- * subscribe to live BPM (or simulate HR if no monitor connected).
+ * subscribe to live BPM (or simulate HR if no monitor connected), start session tracking, bind tap-to-stop.
  * Idempotent: if already running for this container, no-op.
  */
-export function startDownregulationView(containerEl, canvasEl) {
+export function startDownregulationView(containerEl, canvasEl, options) {
+    var _a;
     console.log("[Downregulation] startDownregulationView called");
     if (running && container === containerEl) {
         console.log("[Downregulation] Already running, skipping");
@@ -69,13 +73,28 @@ export function startDownregulationView(containerEl, canvasEl) {
         updateHrDisplay();
         hrDisplayIntervalId = setInterval(updateHrDisplay, 1000);
     }
+    const onDismiss = (_a = options === null || options === void 0 ? void 0 : options.onDismiss) !== null && _a !== void 0 ? _a : (() => { });
     startRenderLoop(canvasEl);
+    // Start with play icon visible; workout begins only after user taps it
+    showPlayIconForStart(containerEl, () => {
+        startSession();
+        bindTap(containerEl, () => {
+            const stats = endSession();
+            showStats(containerEl, stats, () => {
+                onDismiss();
+            });
+        });
+    });
 }
 /**
- * Stop the Downregulation view: stop loop, dispose renderer, clear HR subscription effect, reset HR controller.
+ * Stop the Downregulation view: stop loop, dispose renderer, clear HR subscription effect, unbind tap, reset HR controller.
  */
 export function stopDownregulationView() {
     running = false;
+    cancelSession();
+    if (container)
+        unbindTap(container);
+    hideStats();
     if (simulateIntervalId != null) {
         clearInterval(simulateIntervalId);
         simulateIntervalId = null;

@@ -404,8 +404,15 @@ function renderWorkout(state) {
         if (downregEl) {
             downregEl.style.display = "block";
             const canvas = document.getElementById("downregulationCanvas");
-            if (canvas)
-                startDownregulationView(downregEl, canvas);
+            if (canvas) {
+                startDownregulationView(downregEl, canvas, {
+                    onDismiss: () => {
+                        stopDownregulationView();
+                        setSelectedDay("Monday");
+                        updateDisplay();
+                    },
+                });
+            }
         }
         return;
     }

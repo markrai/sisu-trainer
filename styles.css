@@ -579,3 +579,70 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   pointer-events: none;
 }
 
+/* Downregulation: tap-to-stop play icon (white, center, 1s then fade) */
+.downregulation-play-wrap {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 6;
+  transition: opacity 0.4s ease-out;
+}
+.downregulation-play-wrap--clickable {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.downregulation-play-wrap--fade {
+  opacity: 0;
+}
+.downregulation-play-icon {
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 4rem solid #fff;
+  border-top: 2.5rem solid transparent;
+  border-bottom: 2.5rem solid transparent;
+  margin-left: 0.5rem;
+}
+
+/* Downregulation: session stats panel (after tap to stop) */
+.downregulation-stats-panel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(22rem, calc(100% - 3rem));
+  max-height: calc(100% - 3rem);
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 1.5rem;
+  background: rgba(18, 18, 22, 0.95);
+  border-radius: 1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  z-index: 7;
+  overflow-y: auto;
+}
+.downregulation-stats-title {
+  margin: 0 0 1rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: #fff;
+  text-align: center;
+}
+.downregulation-stats-content {
+  flex: 1;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+  color: rgba(255, 255, 255, 0.85);
+  line-height: 1.5;
+}
+.downregulation-stats-line {
+  margin: 0.35rem 0;
+}
+.downregulation-stats-done {
+  margin-top: 0.5rem;
+}
+
