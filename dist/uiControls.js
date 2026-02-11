@@ -49,6 +49,34 @@ function connectHr() {
         window.initiateHrConnection();
     }
 }
+function updateHrMonitorLabel() {
+    const labelEl = document.getElementById("hrMonitorLabel");
+    const batteryEl = document.getElementById("hrMonitorBattery");
+    const name = window.hrDeviceName;
+    const battery = window.hrBatteryPercent;
+    if (labelEl) {
+        if (name) {
+            labelEl.textContent = name + " connected";
+            labelEl.style.color = "#22c55e";
+            labelEl.style.opacity = "1";
+        }
+        else {
+            labelEl.textContent = "Heart Rate Monitor";
+            labelEl.style.color = "";
+            labelEl.style.opacity = "0.7";
+        }
+    }
+    if (batteryEl) {
+        if (typeof battery === "number" && battery >= 0 && battery <= 100) {
+            batteryEl.textContent = battery + "%";
+            batteryEl.style.display = "";
+        }
+        else {
+            batteryEl.textContent = "";
+            batteryEl.style.display = "none";
+        }
+    }
+}
 function updateHrDisplay(hr) {
     const hrNowEl = document.getElementById("hrNow");
     if (hrNowEl) {
@@ -518,6 +546,7 @@ function switchTab(tabName) {
         (_h = buttons[tabIndex.sisu]) === null || _h === void 0 ? void 0 : _h.classList.add("active");
         if (typeof window.loadSisuSettings === "function")
             window.loadSisuSettings();
+        updateHrMonitorLabel();
     }
     else if (tabName === "install") {
         (_j = document.getElementById("installTab")) === null || _j === void 0 ? void 0 : _j.classList.add("active");
@@ -922,6 +951,7 @@ function registerUiGlobals(phaseBoxEl) {
     window.getShowElapsed = getShowElapsed;
     window.setSelectedDay = setSelectedDay;
     window.connectHr = connectHr;
+    window.updateHrMonitorStatus = updateHrMonitorLabel;
     window.updateHrDisplay = updateHrDisplay;
     window.openModal = openModal;
     window.closeModal = closeModal;

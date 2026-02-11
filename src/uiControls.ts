@@ -70,6 +70,33 @@ function connectHr() {
   }
 }
 
+function updateHrMonitorLabel() {
+  const labelEl = document.getElementById("hrMonitorLabel");
+  const batteryEl = document.getElementById("hrMonitorBattery");
+  const name = (window as any).hrDeviceName as string | null | undefined;
+  const battery = (window as any).hrBatteryPercent as number | null | undefined;
+  if (labelEl) {
+    if (name) {
+      labelEl.textContent = name + " connected";
+      labelEl.style.color = "#22c55e";
+      labelEl.style.opacity = "1";
+    } else {
+      labelEl.textContent = "Heart Rate Monitor";
+      labelEl.style.color = "";
+      labelEl.style.opacity = "0.7";
+    }
+  }
+  if (batteryEl) {
+    if (typeof battery === "number" && battery >= 0 && battery <= 100) {
+      batteryEl.textContent = battery + "%";
+      batteryEl.style.display = "";
+    } else {
+      batteryEl.textContent = "";
+      batteryEl.style.display = "none";
+    }
+  }
+}
+
 function updateHrDisplay(hr: number | null) {
   const hrNowEl = document.getElementById("hrNow");
   if (hrNowEl) {
@@ -496,6 +523,7 @@ function switchTab(tabName: string) {
     document.getElementById("sisuTab")?.classList.add("active");
     (buttons[tabIndex.sisu] as HTMLElement | undefined)?.classList.add("active");
     if (typeof (window as any).loadSisuSettings === "function") (window as any).loadSisuSettings();
+    updateHrMonitorLabel();
   } else if (tabName === "install") {
     document.getElementById("installTab")?.classList.add("active");
     (buttons[tabIndex.install] as HTMLElement | undefined)?.classList.add("active");
@@ -881,6 +909,7 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).getShowElapsed = getShowElapsed;
   (window as any).setSelectedDay = setSelectedDay;
   (window as any).connectHr = connectHr;
+  (window as any).updateHrMonitorStatus = updateHrMonitorLabel;
   (window as any).updateHrDisplay = updateHrDisplay;
   (window as any).openModal = openModal;
   (window as any).closeModal = closeModal;

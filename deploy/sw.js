@@ -98,6 +98,14 @@ self.addEventListener('fetch', (event) => {
     return; // Let the browser handle it normally.
   }
 
+  // IMPORTANT: Always fetch version from the network (or SW can get "stuck" on an old cache name).
+  if (requestUrl.pathname === '/dist/version.js') {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-store' }).catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
   // Network-first strategy for HTML documents to get updates immediately
   if (event.request.destination === 'document' || 
       event.request.url.endsWith('.html') ||
@@ -122,8 +130,27 @@ self.addEventListener('fetch', (event) => {
           });
         })
     );
+  } else if (
+    requestUrl.pathname.startsWith('/dist/') ||
+    requestUrl.pathname.endsWith('.js') ||
+    requestUrl.pathname.endsWith('.css')
+  ) {
+    // Network-first for build outputs so updates apply immediately in development.
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          const responseClone = networkResponse.clone();
+          getCacheName().then((cacheName) => {
+            caches.open(cacheName).then((cache) => cache.put(event.request, responseClone));
+          });
+          return networkResponse;
+        })
+        .catch(() => {
+          return caches.match(event.request).then((cachedResponse) => cachedResponse || new Response('Offline', { status: 503 }));
+        })
+    );
   } else {
-    // Cache-first strategy for assets (CSS, JS, images, etc.)
+    // Cache-first strategy for other assets (images, manifest, etc.)
     event.respondWith(
       getCacheName().then((cacheName) => {
         return caches.match(event.request)

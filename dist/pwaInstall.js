@@ -172,6 +172,15 @@ function shouldShowInstallPrompt() {
 function registerServiceWorker() {
     if (!("serviceWorker" in navigator))
         return;
+    // In local development, Service Worker caching can make it look like builds "don't apply".
+    // Skip SW registration on localhost unless explicitly enabled.
+    const isLocalhost = window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1" ||
+        window.location.hostname === "[::1]";
+    if (isLocalhost && localStorage.getItem("enableServiceWorkerDev") !== "true") {
+        console.log("Skipping Service Worker registration on localhost (set enableServiceWorkerDev=true to enable).");
+        return;
+    }
     window.addEventListener("load", () => {
         const swUrl = "/sw.js?v=" + (typeof window.APP_VERSION !== "undefined" ? window.APP_VERSION : APP_VERSION);
         navigator.serviceWorker

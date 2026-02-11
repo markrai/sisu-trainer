@@ -1,30 +1,50 @@
 @echo off
 setlocal enabledelayedexpansion
+
+REM Always run from the folder where this batch file lives (project root)
+cd /d "%~dp0"
+
 echo Starting VO2 Max Coach development server...
 echo.
 
-REM Choose an open port (defaults to 8000, scans up to 8100)
-set "DEFAULT_PORT=8000"
-set "MAX_PORT=8100"
-if not "%~1"=="" (
-    set "START_PORT=%~1"
-) else (
-    set "START_PORT=%DEFAULT_PORT%"
-)
-
-call :find_free_port %START_PORT% %MAX_PORT%
-if "%FREE_PORT%"=="" (
-    echo ERROR: No available port between %START_PORT% and %MAX_PORT%.
+REM Build before serving (syncs version, compiles TS to dist)
+echo Running build...
+call npm run build
+if %errorlevel% neq 0 (
+    echo ERROR: Build failed.
     exit /b 1
 )
-set "PORT=%FREE_PORT%"
-echo Using port %PORT% (override by running: d.bat <port>)
 echo.
 
-REM Try Python 3 first
+REM Port (default 8000, or pass as first argument)
+if not "%~1"=="" (
+    set "PORT=%~1"
+) else (
+    set "PORT=8000"
+)
+
+REM Kill any existing process using this port so we can bind
+call :kill_port %PORT%
+
+echo Using port %PORT%
+echo.
+
+REM Prefer Node http-server (sends no-cache so browser gets fresh build)
+where npx >nul 2>&1
+if %errorlevel% == 0 (
+    echo Using Node.js http-server (no cache^)...
+    echo Server running at http://localhost:%PORT%
+    echo Press Ctrl+C to stop the server
+    echo.
+    npx --yes http-server -p %PORT% -c-1
+    goto :end
+)
+
+REM Fallback: Python 3
 python --version >nul 2>&1
 if %errorlevel% == 0 (
     echo Using Python to start HTTP server...
+    echo If you see an old version, do a hard refresh or clear cache.
     echo Server running at http://localhost:%PORT%
     echo Press Ctrl+C to stop the server
     echo.
@@ -32,25 +52,14 @@ if %errorlevel% == 0 (
     goto :end
 )
 
-REM Try Python 3 with python3 command
 python3 --version >nul 2>&1
 if %errorlevel% == 0 (
     echo Using Python 3 to start HTTP server...
+    echo If you see an old version, do a hard refresh or clear cache.
     echo Server running at http://localhost:%PORT%
     echo Press Ctrl+C to stop the server
     echo.
     python3 -m http.server %PORT%
-    goto :end
-)
-
-REM Try Node.js http-server if available
-where npx >nul 2>&1
-if %errorlevel% == 0 (
-    echo Using Node.js http-server...
-    echo Server running at http://localhost:%PORT%
-    echo Press Ctrl+C to stop the server
-    echo.
-    npx --yes http-server -p %PORT% -c-1
     goto :end
 )
 
@@ -68,15 +77,13 @@ pause
 endlocal
 goto :eof
 
-REM Find a free TCP port between start and end (inclusive).
-:find_free_port
+REM Kill any process listening on the given port (e.g. previous dev server).
+:kill_port
 setlocal
-set "FREE_PORT="
-for /l %%P in (%1,1,%2) do (
-    netstat -ano | findstr /R /C:":%%P " /C:"]:%%P" >nul
-    if errorlevel 1 (
-        endlocal & set "FREE_PORT=%%P" & goto :eof
-    )
+set "KPORT=%~1"
+for /f "tokens=5" %%a in ('netstat -ano ^| findstr ":%KPORT% " ^| findstr "LISTENING"') do (
+    taskkill /PID %%a /F >nul 2>&1
+    echo Killed existing process on port %KPORT% (PID %%a^)
 )
 endlocal
 goto :eof

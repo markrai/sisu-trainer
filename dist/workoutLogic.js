@@ -242,12 +242,56 @@ function hrTargetText(phaseName, day, elapsedSec, blocks) {
     }
     return "";
 }
+let currentHrDevice = null;
+function onHrDisconnect() {
+    currentHrDevice = null;
+    window.hrDeviceName = null;
+    window.hrBatteryPercent = null;
+    if (typeof window.updateHrMonitorStatus === "function")
+        window.updateHrMonitorStatus();
+}
+function tryReadBatteryLevel(server) {
+    server
+        .getPrimaryService("battery_service")
+        .then((batteryService) => batteryService.getCharacteristic("battery_level").readValue())
+        .then((value) => {
+        const data = value instanceof DataView ? value : new DataView(value instanceof ArrayBuffer ? value : value.buffer);
+        window.hrBatteryPercent = data.getUint8(0);
+        if (typeof window.updateHrMonitorStatus === "function")
+            window.updateHrMonitorStatus();
+    })
+        .catch(() => {
+        window.hrBatteryPercent = null;
+        if (typeof window.updateHrMonitorStatus === "function")
+            window.updateHrMonitorStatus();
+    });
+}
 function initiateHrConnection() {
-    navigator.bluetooth
-        .requestDevice({ filters: [{ services: ["heart_rate"] }] })
-        .then((device) => device.gatt.connect())
-        .then((server) => server.getPrimaryService("heart_rate"))
-        .then((service) => service.getCharacteristic("heart_rate_measurement"))
+    const bt = navigator.bluetooth;
+    if (!bt || typeof bt.requestDevice !== "function") {
+        console.error("Web Bluetooth API not available: navigator.bluetooth is missing.");
+        if (typeof window.showToast === "function") {
+            window.showToast("Bluetooth not supported in this browser. Use Chrome/Edge on HTTPS (or localhost).");
+        }
+        return;
+    }
+    bt.requestDevice({
+        filters: [{ services: ["heart_rate"] }],
+        optionalServices: ["battery_service"],
+    })
+        .then((device) => {
+        currentHrDevice = device;
+        device.addEventListener("gattserverdisconnected", onHrDisconnect);
+        return device.gatt.connect().then((server) => ({ device, server }));
+    })
+        .then(({ device, server }) => {
+        window.hrDeviceName = device.name || "Heart rate sensor";
+        if (typeof window.updateHrMonitorStatus === "function")
+            window.updateHrMonitorStatus();
+        tryReadBatteryLevel(server);
+        return server.getPrimaryService("heart_rate").then((hrService) => ({ server, hrService }));
+    })
+        .then(({ hrService }) => hrService.getCharacteristic("heart_rate_measurement"))
         .then((characteristic) => characteristic.startNotifications())
         .then((characteristic) => {
         characteristic.addEventListener("characteristicvaluechanged", handleCharacteristicValueChanged);
