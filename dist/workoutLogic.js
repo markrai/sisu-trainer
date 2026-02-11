@@ -243,6 +243,8 @@ function hrTargetText(phaseName, day, elapsedSec, blocks) {
     return "";
 }
 let currentHrDevice = null;
+const BATTERY_POLL_MS = 2 * 60 * 1000; // 2 minutes
+let batteryPollIntervalId = null;
 function bleDebugEnabled() {
     try {
         return localStorage.getItem("bleDebug") === "true";
@@ -252,11 +254,39 @@ function bleDebugEnabled() {
     }
 }
 function onHrDisconnect() {
+    if (batteryPollIntervalId !== null) {
+        clearInterval(batteryPollIntervalId);
+        batteryPollIntervalId = null;
+    }
     currentHrDevice = null;
     window.hrDeviceName = null;
     window.hrBatteryPercent = null;
     if (typeof window.updateHrMonitorStatus === "function")
         window.updateHrMonitorStatus();
+}
+function pollBatteryOnce() {
+    var _a;
+    const device = currentHrDevice;
+    if (!((_a = device === null || device === void 0 ? void 0 : device.gatt) === null || _a === void 0 ? void 0 : _a.connected))
+        return;
+    device.gatt
+        .getPrimaryService("battery_service")
+        .then((s) => s.getCharacteristic("battery_level").readValue())
+        .then((value) => {
+        const dv = value instanceof DataView ? value : new DataView(value instanceof ArrayBuffer ? value : value.buffer);
+        const pct = dv.getUint8(0);
+        if (pct >= 0 && pct <= 100) {
+            window.hrBatteryPercent = pct;
+            if (typeof window.updateHrMonitorStatus === "function")
+                window.updateHrMonitorStatus();
+        }
+    })
+        .catch(() => { });
+}
+function startBatteryPolling() {
+    if (batteryPollIntervalId !== null)
+        return;
+    batteryPollIntervalId = setInterval(pollBatteryOnce, BATTERY_POLL_MS);
 }
 async function dumpGattProfile(server) {
     if (!bleDebugEnabled())
@@ -380,6 +410,8 @@ function initiateHrConnection() {
             window.hrBatteryPercent = battery;
             if (typeof window.updateHrMonitorStatus === "function")
                 window.updateHrMonitorStatus();
+            if (battery !== null)
+                startBatteryPolling();
         })
             .catch(() => {
             window.hrBatteryPercent = null;

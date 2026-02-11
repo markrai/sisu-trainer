@@ -249,6 +249,8 @@ function hrTargetText(phaseName: string, day: string, elapsedSec: number, blocks
 type BluetoothDevice = any;
 
 let currentHrDevice: BluetoothDevice | null = null;
+const BATTERY_POLL_MS = 2 * 60 * 1000; // 2 minutes
+let batteryPollIntervalId: ReturnType<typeof setInterval> | null = null;
 
 function bleDebugEnabled() {
   try {
@@ -259,10 +261,36 @@ function bleDebugEnabled() {
 }
 
 function onHrDisconnect() {
+  if (batteryPollIntervalId !== null) {
+    clearInterval(batteryPollIntervalId);
+    batteryPollIntervalId = null;
+  }
   currentHrDevice = null;
   (window as any).hrDeviceName = null;
   (window as any).hrBatteryPercent = null;
   if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+}
+
+function pollBatteryOnce() {
+  const device = currentHrDevice;
+  if (!device?.gatt?.connected) return;
+  device.gatt
+    .getPrimaryService("battery_service")
+    .then((s: any) => s.getCharacteristic("battery_level").readValue())
+    .then((value: ArrayBuffer | DataView) => {
+      const dv = value instanceof DataView ? value : new DataView(value instanceof ArrayBuffer ? value : (value as any).buffer);
+      const pct = dv.getUint8(0);
+      if (pct >= 0 && pct <= 100) {
+        (window as any).hrBatteryPercent = pct;
+        if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+      }
+    })
+    .catch(() => {});
+}
+
+function startBatteryPolling() {
+  if (batteryPollIntervalId !== null) return;
+  batteryPollIntervalId = setInterval(pollBatteryOnce, BATTERY_POLL_MS);
 }
 
 async function dumpGattProfile(server: any) {
@@ -382,6 +410,7 @@ function initiateHrConnection() {
         .then((battery) => {
           (window as any).hrBatteryPercent = battery;
           if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+          if (battery !== null) startBatteryPolling();
         })
         .catch(() => {
           (window as any).hrBatteryPercent = null;
