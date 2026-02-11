@@ -4,12 +4,13 @@
  * - On stop: stop loop, dispose renderer, reset hrController; callback no-op when not running.
  */
 import { onBpm, getCurrentBpm } from "../hrMonitor.js";
-import { setCurrentHR, reset as resetHrController } from "./hrController.js";
+import { setCurrentHR, reset as resetHrController, getSmoothedHR } from "./hrController.js";
 import { initRenderer, startRenderLoop, stopRenderLoop, disposeRenderer, resize } from "./renderer.js";
 let container = null;
 let canvas = null;
 let running = false;
 let simulateIntervalId = null;
+let hrDisplayIntervalId = null;
 let resizeHandler = null;
 function onBpmCallback(bpm) {
     if (running)
@@ -57,6 +58,17 @@ export function startDownregulationView(containerEl, canvasEl) {
             resize(canvas);
     };
     window.addEventListener("resize", resizeHandler);
+    const hrEl = containerEl.querySelector("#downregulationHrDisplay");
+    if (hrEl) {
+        const updateHrDisplay = () => {
+            if (!running || !hrEl)
+                return;
+            const bpm = getSmoothedHR();
+            hrEl.textContent = bpm != null ? `${Math.round(bpm)} bpm` : "—";
+        };
+        updateHrDisplay();
+        hrDisplayIntervalId = setInterval(updateHrDisplay, 1000);
+    }
     startRenderLoop(canvasEl);
 }
 /**
@@ -68,6 +80,13 @@ export function stopDownregulationView() {
         clearInterval(simulateIntervalId);
         simulateIntervalId = null;
     }
+    if (hrDisplayIntervalId != null) {
+        clearInterval(hrDisplayIntervalId);
+        hrDisplayIntervalId = null;
+    }
+    const hrEl = container === null || container === void 0 ? void 0 : container.querySelector("#downregulationHrDisplay");
+    if (hrEl)
+        hrEl.textContent = "";
     if (resizeHandler) {
         window.removeEventListener("resize", resizeHandler);
         resizeHandler = null;
