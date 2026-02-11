@@ -70,10 +70,17 @@ function updateHrMonitorLabel() {
         if (typeof battery === "number" && battery >= 0 && battery <= 100) {
             batteryEl.textContent = battery + "%";
             batteryEl.style.display = "";
+            batteryEl.classList.add("battery-pill");
+            batteryEl.style.setProperty("--battery-pct", String(battery));
+            const state = battery <= 15 ? "low" : battery <= 35 ? "med" : "good";
+            batteryEl.setAttribute("data-battery-state", state);
         }
         else {
             batteryEl.textContent = "";
             batteryEl.style.display = "none";
+            batteryEl.classList.remove("battery-pill");
+            batteryEl.removeAttribute("data-battery-state");
+            batteryEl.style.removeProperty("--battery-pct");
         }
     }
 }
