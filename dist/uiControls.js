@@ -68,12 +68,19 @@ function updateHrMonitorLabel() {
     }
     if (batteryEl) {
         if (typeof battery === "number" && battery >= 0 && battery <= 100) {
-            batteryEl.textContent = battery + "%";
-            batteryEl.style.display = "";
             batteryEl.classList.add("battery-pill");
             batteryEl.style.setProperty("--battery-pct", String(battery));
             const state = battery <= 15 ? "low" : battery <= 35 ? "med" : "good";
             batteryEl.setAttribute("data-battery-state", state);
+            batteryEl.style.display = "";
+            // Ensure a single child span for percentage so pill order is: dot, bar, text
+            let pctSpan = batteryEl.querySelector(".battery-pill-pct");
+            if (!pctSpan) {
+                pctSpan = document.createElement("span");
+                pctSpan.className = "battery-pill-pct";
+                batteryEl.appendChild(pctSpan);
+            }
+            pctSpan.textContent = battery + "%";
         }
         else {
             batteryEl.textContent = "";
