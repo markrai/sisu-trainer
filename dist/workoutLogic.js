@@ -1,6 +1,7 @@
 import { getHrTargets } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
 import { getSession, startSession, pauseSession, resumeSession, clearSession } from "./sessionStore.js";
+import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
 function getRingCircumference() {
@@ -52,39 +53,13 @@ function startWorkout() {
 async function restartWorkout() {
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
     const session = getSession(day);
-    const startTime = session.startTime;
-    const sessionId = session.sessionId;
-    const sessionStart = session.sessionStart;
-    const summaryEmitted = session.summaryEmitted;
-    if (startTime && sessionId && sessionStart && summaryEmitted === "false" && typeof window.generateWorkoutSummary === "function") {
-        const sessionStartTime = parseInt(sessionStart);
-        const sessionAge = Date.now() - sessionStartTime;
-        const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
-        if (sessionAge > MAX_SESSION_AGE_MS) {
-            console.warn(`Skipping stale workout session for ${day} (age: ${Math.round(sessionAge / (1000 * 60 * 60))} hours)`);
-        }
-        else {
-            const endedAt = Date.now();
-            try {
-                const summary = await window.generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day, {
-                    cancelled: true,
-                });
-                await window.emitWorkoutSummary(summary);
-            }
-            catch (error) {
-                console.error("Error emitting workout summary on cancel:", error);
-                if (error.message && error.message.includes("exceeds maximum")) {
-                    console.warn("Stale session detected, cleaning up...");
-                }
-            }
-        }
-    }
+    await handleWorkoutCancellation(day);
     if (typeof window.releaseWakeLock === "function") {
         await window.releaseWakeLock();
     }
     clearSession(day);
-    if (sessionId && typeof window.clearHrSamples === "function") {
-        await window.clearHrSamples(sessionId).catch((err) => console.error("Error clearing HR samples:", err));
+    if (session.sessionId && typeof window.clearHrSamples === "function") {
+        await window.clearHrSamples(session.sessionId).catch((err) => console.error("Error clearing HR samples:", err));
     }
     if (typeof window.updateDisplay === "function")
         window.updateDisplay();

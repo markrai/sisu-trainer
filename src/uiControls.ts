@@ -17,7 +17,7 @@ import {
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
-import { getSession, clearSession, markSummaryEmitted } from "./sessionStore.js";
+import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 
 let selectedDay: string | null = null;
 let liveBpm: number | null = null;
@@ -422,35 +422,7 @@ function updateDisplay() {
 
     if (phase.done) {
       if (typeof (window as any).releaseWakeLock === "function") (window as any).releaseWakeLock();
-      const session = getSession(day);
-      if (session.summaryEmitted === "false" && typeof (window as any).generateWorkoutSummary === "function") {
-        const sessionId = session.sessionId;
-        const sessionStart = session.sessionStart;
-        if (sessionId && sessionStart) {
-          const sessionStartTime = parseInt(sessionStart);
-          const sessionAge = Date.now() - sessionStartTime;
-          const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
-          if (sessionAge > MAX_SESSION_AGE_MS) {
-            console.warn(`Skipping stale workout session for ${day} on completion (age: ${Math.round(sessionAge / (1000 * 60 * 60))} hours)`);
-            clearSession(day);
-          } else {
-            const endedAt = Date.now();
-            (window as any)
-              .generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day)
-              .then((summary: any) => (window as any).emitWorkoutSummary(summary))
-              .then(() => {
-                markSummaryEmitted(day);
-              })
-              .catch((error: any) => {
-                console.error("Error emitting workout summary on completion:", error);
-                if (error.message && error.message.includes("exceeds maximum")) {
-                  console.warn("Stale session detected on completion, cleaning up...");
-                  clearSession(day);
-                }
-              });
-          }
-        }
-      }
+      handleWorkoutCompletion(day);
       if (phaseDisplayEl) {
         phaseDisplayEl.innerHTML = '<span class="phase-name">Completed</span>';
         phaseDisplayEl.dataset.phaseState = "completed";

@@ -2,6 +2,7 @@ import { getHrTargets } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
 import { PlanBlock } from "./types.js";
 import { getSession, startSession, pauseSession, resumeSession, clearSession } from "./sessionStore.js";
+import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
@@ -59,32 +60,8 @@ function startWorkout() {
 async function restartWorkout() {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
   const session = getSession(day);
-  const startTime = session.startTime;
-  const sessionId = session.sessionId;
-  const sessionStart = session.sessionStart;
-  const summaryEmitted = session.summaryEmitted;
 
-  if (startTime && sessionId && sessionStart && summaryEmitted === "false" && typeof (window as any).generateWorkoutSummary === "function") {
-    const sessionStartTime = parseInt(sessionStart);
-    const sessionAge = Date.now() - sessionStartTime;
-    const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
-    if (sessionAge > MAX_SESSION_AGE_MS) {
-      console.warn(`Skipping stale workout session for ${day} (age: ${Math.round(sessionAge / (1000 * 60 * 60))} hours)`);
-    } else {
-      const endedAt = Date.now();
-      try {
-        const summary = await (window as any).generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day, {
-          cancelled: true,
-        });
-        await (window as any).emitWorkoutSummary(summary);
-      } catch (error: any) {
-        console.error("Error emitting workout summary on cancel:", error);
-        if (error.message && error.message.includes("exceeds maximum")) {
-          console.warn("Stale session detected, cleaning up...");
-        }
-      }
-    }
-  }
+  await handleWorkoutCancellation(day);
 
   if (typeof (window as any).releaseWakeLock === "function") {
     await (window as any).releaseWakeLock();
@@ -92,8 +69,8 @@ async function restartWorkout() {
 
   clearSession(day);
 
-  if (sessionId && typeof (window as any).clearHrSamples === "function") {
-    await (window as any).clearHrSamples(sessionId).catch((err: any) => console.error("Error clearing HR samples:", err));
+  if (session.sessionId && typeof (window as any).clearHrSamples === "function") {
+    await (window as any).clearHrSamples(session.sessionId).catch((err: any) => console.error("Error clearing HR samples:", err));
   }
 
   if (typeof (window as any).updateDisplay === "function") (window as any).updateDisplay();
