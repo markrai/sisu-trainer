@@ -2,6 +2,7 @@ import { adjustedBlockLengths, formatTime, getPhase, getPausedElapsed, getStartT
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
+import { getSession, clearSession, markSummaryEmitted } from "./sessionStore.js";
 let selectedDay = null;
 let liveBpm = null;
 let lastBpmUpdateTime = null;
@@ -425,20 +426,17 @@ function updateDisplay() {
         if (phase.done) {
             if (typeof window.releaseWakeLock === "function")
                 window.releaseWakeLock();
-            const summaryEmitted = localStorage.getItem("summary_emitted_" + day);
-            if (summaryEmitted === "false" && typeof window.generateWorkoutSummary === "function") {
-                const sessionId = localStorage.getItem("session_id_" + day);
-                const sessionStart = localStorage.getItem("session_start_" + day);
+            const session = getSession(day);
+            if (session.summaryEmitted === "false" && typeof window.generateWorkoutSummary === "function") {
+                const sessionId = session.sessionId;
+                const sessionStart = session.sessionStart;
                 if (sessionId && sessionStart) {
                     const sessionStartTime = parseInt(sessionStart);
                     const sessionAge = Date.now() - sessionStartTime;
                     const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
                     if (sessionAge > MAX_SESSION_AGE_MS) {
                         console.warn(`Skipping stale workout session for ${day} on completion (age: ${Math.round(sessionAge / (1000 * 60 * 60))} hours)`);
-                        localStorage.removeItem("start_" + day);
-                        localStorage.removeItem("session_id_" + day);
-                        localStorage.removeItem("session_start_" + day);
-                        localStorage.removeItem("summary_emitted_" + day);
+                        clearSession(day);
                     }
                     else {
                         const endedAt = Date.now();
@@ -446,16 +444,13 @@ function updateDisplay() {
                             .generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day)
                             .then((summary) => window.emitWorkoutSummary(summary))
                             .then(() => {
-                            localStorage.setItem("summary_emitted_" + day, "true");
+                            markSummaryEmitted(day);
                         })
                             .catch((error) => {
                             console.error("Error emitting workout summary on completion:", error);
                             if (error.message && error.message.includes("exceeds maximum")) {
                                 console.warn("Stale session detected on completion, cleaning up...");
-                                localStorage.removeItem("start_" + day);
-                                localStorage.removeItem("session_id_" + day);
-                                localStorage.removeItem("session_start_" + day);
-                                localStorage.removeItem("summary_emitted_" + day);
+                                clearSession(day);
                             }
                         });
                     }

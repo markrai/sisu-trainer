@@ -1,5 +1,6 @@
 import { getHrTargets } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
+import { getSession, startSession, pauseSession, resumeSession, clearSession } from "./sessionStore.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
 function getRingCircumference() {
@@ -7,46 +8,40 @@ function getRingCircumference() {
 }
 function getStartTime(day) {
     const dayToUse = day || todayName();
-    return localStorage.getItem("start_" + dayToUse);
+    return getSession(dayToUse).startTime;
 }
 function isPaused(day) {
     const dayToUse = day || todayName();
-    return localStorage.getItem("paused_" + dayToUse) === "true";
+    return getSession(dayToUse).paused;
 }
 function getPausedElapsed(day) {
     const dayToUse = day || todayName();
-    return parseInt(localStorage.getItem("paused_elapsed_" + dayToUse) || "0", 10);
+    return getSession(dayToUse).pausedElapsed;
 }
 function pauseWorkout(day, elapsedSec) {
     const dayToUse = day || todayName();
-    localStorage.setItem("paused_" + dayToUse, "true");
-    localStorage.setItem("paused_elapsed_" + dayToUse, String(elapsedSec !== null && elapsedSec !== void 0 ? elapsedSec : 0));
+    pauseSession(dayToUse, elapsedSec !== null && elapsedSec !== void 0 ? elapsedSec : 0);
     if (typeof window.updateDisplay === "function")
         window.updateDisplay();
 }
 function resumeWorkout(day) {
     const dayToUse = day || todayName();
-    const pausedElapsed = getPausedElapsed(dayToUse);
-    const newStart = Date.now() - pausedElapsed * 1000;
-    localStorage.setItem("start_" + dayToUse, String(newStart));
-    localStorage.removeItem("paused_" + dayToUse);
-    localStorage.removeItem("paused_elapsed_" + dayToUse);
+    resumeSession(dayToUse);
     if (typeof window.updateDisplay === "function")
         window.updateDisplay();
 }
 function startWorkout() {
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
-    const key = "start_" + day;
     const startTime = Date.now();
-    localStorage.setItem(key, startTime.toString());
     if (typeof window.generateUUID === "function") {
         const sessionId = window.generateUUID();
-        localStorage.setItem("session_id_" + day, sessionId);
-        localStorage.setItem("session_start_" + day, startTime.toString());
-        localStorage.setItem("summary_emitted_" + day, "false");
+        startSession(day, startTime, sessionId);
         if (typeof window.initDB === "function") {
             window.initDB().catch((err) => console.error("Failed to init DB:", err));
         }
+    }
+    else {
+        startSession(day, startTime, null);
     }
     if (typeof window.requestWakeLock === "function") {
         window.requestWakeLock();
@@ -56,11 +51,11 @@ function startWorkout() {
 }
 async function restartWorkout() {
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
-    const key = "start_" + day;
-    const startTime = localStorage.getItem(key);
-    const sessionId = localStorage.getItem("session_id_" + day);
-    const sessionStart = localStorage.getItem("session_start_" + day);
-    const summaryEmitted = localStorage.getItem("summary_emitted_" + day);
+    const session = getSession(day);
+    const startTime = session.startTime;
+    const sessionId = session.sessionId;
+    const sessionStart = session.sessionStart;
+    const summaryEmitted = session.summaryEmitted;
     if (startTime && sessionId && sessionStart && summaryEmitted === "false" && typeof window.generateWorkoutSummary === "function") {
         const sessionStartTime = parseInt(sessionStart);
         const sessionAge = Date.now() - sessionStartTime;
@@ -87,12 +82,7 @@ async function restartWorkout() {
     if (typeof window.releaseWakeLock === "function") {
         await window.releaseWakeLock();
     }
-    localStorage.removeItem(key);
-    localStorage.removeItem("session_id_" + day);
-    localStorage.removeItem("session_start_" + day);
-    localStorage.removeItem("summary_emitted_" + day);
-    localStorage.removeItem("paused_" + day);
-    localStorage.removeItem("paused_elapsed_" + day);
+    clearSession(day);
     if (sessionId && typeof window.clearHrSamples === "function") {
         await window.clearHrSamples(sessionId).catch((err) => console.error("Error clearing HR samples:", err));
     }
@@ -457,7 +447,7 @@ function handleCharacteristicValueChanged(event) {
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
     const startTime = getStartTime(day);
     if (startTime && typeof window.storeHrSample === "function") {
-        const sessionId = localStorage.getItem("session_id_" + day);
+        const sessionId = getSession(day).sessionId;
         if (sessionId) {
             const elapsedSec = Math.floor((Date.now() - parseInt(startTime)) / 1000);
             window
