@@ -16,6 +16,10 @@
 
 <body>
 
+<div id="downregulationContainer" style="display: none; position: fixed; inset: 0; z-index: 5; background: #05060a; pointer-events: none;">
+  <canvas id="downregulationCanvas" style="display: block; width: 100%; height: 100%;"></canvas>
+</div>
+
 <div class="hamburger" onclick="openModal()">☰</div>
 
 <div class="modal-bg" id="modalBg">
@@ -207,11 +211,12 @@
 
 <div class="container">
 
-<div class="section workout-main-section">
+<div class="section workout-main-section" id="workoutMainSection" style="position: relative; z-index: 10;">
   <div class="workout-day-row" style="position: relative;">
     <select id="workoutDaySelect" class="workout-day-select" aria-label="Select workout day"></select>
   </div>
 
+  <div id="workoutMainContent">
   <div id="startButtonRow" class="start-button-row">
     <button class="button" id="startButton" onclick="startWorkout()">Start Workout</button>
     <button class="button button-cancel-workout" id="cancelWorkoutButton" onclick="openCancelModal()" style="display: none;">Cancel</button>
@@ -237,6 +242,7 @@
       <div id="hrTarget" class="hr-target"></div>
     </div>
     <img id="activityIcon" src="" alt="" style="display: none;">
+  </div>
   </div>
 </div>
 

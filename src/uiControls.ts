@@ -20,6 +20,7 @@ import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, onBpm } from "./hrMonitor.js";
 import { getSession } from "./sessionStore.js";
+import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 
 let selectedDay: string | null = null;
 let liveBpm: number | null = null;
@@ -76,10 +77,21 @@ function ensureWorkoutDayDropdown() {
       opt.textContent = meta && meta.type ? day + ": " + meta.type : day;
       select.appendChild(opt);
     });
+    const downregOpt = document.createElement("option");
+    downregOpt.value = "Downregulation";
+    downregOpt.textContent = "Downregulation";
+    select.appendChild(downregOpt);
     select.addEventListener("change", function () {
       selectedDay = this.value;
       updateDisplay();
     });
+  }
+  const hasDownreg = Array.from(select.options).some((o) => o.value === "Downregulation");
+  if (!hasDownreg) {
+    const downregOpt = document.createElement("option");
+    downregOpt.value = "Downregulation";
+    downregOpt.textContent = "Downregulation";
+    select.appendChild(downregOpt);
   }
   const current = getSelectedDay();
   if (select.value !== current) select.value = current;
@@ -337,6 +349,7 @@ function getCurrentIntervalName(day: string, elapsedSec: number, blocks: { warm:
 
 type WorkoutDisplayState =
   | { screen: "rest"; day: string; plan: any; workoutMetadata: any }
+  | { screen: "downregulation"; day: "Downregulation"; plan: any; workoutMetadata: any }
   | {
       screen: "idle";
       day: string;
@@ -384,6 +397,9 @@ function deriveWorkoutState(
   liveBpm: number | null,
   lastBpmUpdateTime: number | null
 ): WorkoutDisplayState {
+  if (day === "Downregulation") {
+    return { screen: "downregulation", day: "Downregulation", plan, workoutMetadata };
+  }
   if (!base) {
     return { screen: "rest", day, plan, workoutMetadata };
   }
@@ -437,6 +453,34 @@ function deriveWorkoutState(
 }
 
 function renderWorkout(state: WorkoutDisplayState) {
+  const downregEl = document.getElementById("downregulationContainer");
+  const workoutMainContent = document.getElementById("workoutMainContent");
+  const workoutBlocksEl = document.getElementById("workoutBlocks");
+
+  if (state.screen === "downregulation") {
+    if (workoutMainContent) (workoutMainContent as HTMLElement).style.display = "none";
+    if (workoutBlocksEl) (workoutBlocksEl as HTMLElement).style.display = "none";
+    const mainSection = document.getElementById("workoutMainSection");
+    if (mainSection) {
+      (mainSection as HTMLElement).style.background = "transparent";
+    }
+    if (downregEl) {
+      (downregEl as HTMLElement).style.display = "block";
+      const canvas = document.getElementById("downregulationCanvas") as HTMLCanvasElement | null;
+      if (canvas) startDownregulationView(downregEl as HTMLElement, canvas);
+    }
+    return;
+  }
+
+  stopDownregulationView();
+  if (downregEl) (downregEl as HTMLElement).style.display = "none";
+  if (workoutMainContent) (workoutMainContent as HTMLElement).style.display = "";
+  if (workoutBlocksEl) (workoutBlocksEl as HTMLElement).style.display = "";
+  const mainSection = document.getElementById("workoutMainSection");
+  if (mainSection) {
+    (mainSection as HTMLElement).style.background = "";
+  }
+
   ensureWorkoutDayDropdown();
 
   const activityIcon = document.getElementById("activityIcon") as HTMLImageElement | null;
@@ -462,7 +506,6 @@ function renderWorkout(state: WorkoutDisplayState) {
   }
 
   const hrTargetEl = document.getElementById("hrTarget");
-  const workoutBlocksEl = document.getElementById("workoutBlocks");
   const startBtnEl = document.getElementById("startButton") as HTMLButtonElement | null;
   const cancelBtnEl = document.getElementById("cancelWorkoutButton") as HTMLButtonElement | null;
   const startButtonRowEl = document.getElementById("startButtonRow") as HTMLElement | null;
