@@ -250,6 +250,14 @@ type BluetoothDevice = any;
 
 let currentHrDevice: BluetoothDevice | null = null;
 
+function bleDebugEnabled() {
+  try {
+    return localStorage.getItem("bleDebug") === "true";
+  } catch {
+    return false;
+  }
+}
+
 function onHrDisconnect() {
   currentHrDevice = null;
   (window as any).hrDeviceName = null;
@@ -257,19 +265,93 @@ function onHrDisconnect() {
   if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
 }
 
-function tryReadBatteryLevel(server: any) {
-  server
-    .getPrimaryService("battery_service")
-    .then((batteryService: any) => batteryService.getCharacteristic("battery_level").readValue())
-    .then((value: ArrayBuffer | DataView) => {
-      const data = value instanceof DataView ? value : new DataView(value instanceof ArrayBuffer ? value : (value as any).buffer);
-      (window as any).hrBatteryPercent = data.getUint8(0);
-      if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
-    })
-    .catch(() => {
-      (window as any).hrBatteryPercent = null;
-      if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
-    });
+async function dumpGattProfile(server: any) {
+  if (!bleDebugEnabled()) return;
+  try {
+    const services = await server.getPrimaryServices();
+    console.log("[BLE] Primary services:", services.map((s: any) => s.uuid));
+    for (const service of services) {
+      try {
+        const chars = await service.getCharacteristics();
+        console.log(`[BLE] Service ${service.uuid} characteristics:`, chars.map((c: any) => c.uuid));
+        for (const ch of chars) {
+          try {
+            console.log(`[BLE]  - Char ${ch.uuid} props`, ch.properties);
+          } catch {
+            // ignore
+          }
+        }
+      } catch (e) {
+        console.log("[BLE] Could not enumerate characteristics for service", service.uuid, e);
+      }
+    }
+  } catch (e) {
+    console.log("[BLE] Could not enumerate primary services", e);
+  }
+}
+
+function dataViewFromReadValue(value: any): DataView {
+  if (value instanceof DataView) return value;
+  if (value instanceof ArrayBuffer) return new DataView(value);
+  if (value && value.buffer instanceof ArrayBuffer) return new DataView(value.buffer);
+  return new DataView(new ArrayBuffer(0));
+}
+
+async function readBatteryPercentStandardBas(server: any): Promise<number | null> {
+  // Standard GATT Battery Service (0x180F) / Battery Level (0x2A19)
+  const batteryService = await server.getPrimaryService("battery_service");
+  const batteryChar = await batteryService.getCharacteristic("battery_level");
+
+  // Prefer notifications if supported (keeps UI updated if device changes it)
+  try {
+    if (batteryChar?.properties?.notify) {
+      await batteryChar.startNotifications();
+      batteryChar.addEventListener("characteristicvaluechanged", (event: any) => {
+        try {
+          const dv = dataViewFromReadValue(event?.target?.value);
+          const v = dv.getUint8(0);
+          if (v >= 0 && v <= 100) {
+            (window as any).hrBatteryPercent = v;
+            if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+          }
+        } catch {
+          // ignore
+        }
+      });
+    }
+  } catch {
+    // ignore; we can still do a one-shot read below
+  }
+
+  const dv = dataViewFromReadValue(await batteryChar.readValue());
+  const percent = dv.getUint8(0);
+  return percent >= 0 && percent <= 100 ? percent : null;
+}
+
+type BatteryProbe = {
+  name: string;
+  read: (server: any, device?: BluetoothDevice) => Promise<number | null>;
+};
+
+const BATTERY_PROBES: BatteryProbe[] = [
+  { name: "standard_bas_180f_2a19", read: (server) => readBatteryPercentStandardBas(server) },
+  // Add vendor-specific probes here as we discover them.
+];
+
+async function readBatteryPercentWithProbes(server: any, device?: BluetoothDevice): Promise<number | null> {
+  for (const probe of BATTERY_PROBES) {
+    try {
+      const v = await probe.read(server, device);
+      if (typeof v === "number" && v >= 0 && v <= 100) {
+        if (bleDebugEnabled()) console.log("[BLE] Battery probe success:", probe.name, v);
+        return v;
+      }
+      if (bleDebugEnabled()) console.log("[BLE] Battery probe returned null:", probe.name);
+    } catch (e) {
+      if (bleDebugEnabled()) console.log("[BLE] Battery probe failed:", probe.name, e);
+    }
+  }
+  return null;
 }
 
 function initiateHrConnection() {
@@ -284,7 +366,8 @@ function initiateHrConnection() {
 
   bt.requestDevice({
       filters: [{ services: ["heart_rate"] }],
-      optionalServices: ["battery_service"],
+      // Request access to extra services up-front so we can probe battery (and inspect services in debug mode).
+      optionalServices: ["battery_service", "device_information"],
     })
     .then((device: BluetoothDevice) => {
       currentHrDevice = device;
@@ -294,7 +377,16 @@ function initiateHrConnection() {
     .then(({ device, server }: { device: BluetoothDevice; server: any }) => {
       (window as any).hrDeviceName = device.name || "Heart rate sensor";
       if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
-      tryReadBatteryLevel(server);
+      dumpGattProfile(server);
+      readBatteryPercentWithProbes(server, device)
+        .then((battery) => {
+          (window as any).hrBatteryPercent = battery;
+          if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+        })
+        .catch(() => {
+          (window as any).hrBatteryPercent = null;
+          if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+        });
       return server.getPrimaryService("heart_rate").then((hrService: any) => ({ server, hrService }));
     })
     .then(({ hrService }: { server: any; hrService: any }) => hrService.getCharacteristic("heart_rate_measurement"))

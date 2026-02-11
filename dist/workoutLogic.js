@@ -243,6 +243,14 @@ function hrTargetText(phaseName, day, elapsedSec, blocks) {
     return "";
 }
 let currentHrDevice = null;
+function bleDebugEnabled() {
+    try {
+        return localStorage.getItem("bleDebug") === "true";
+    }
+    catch {
+        return false;
+    }
+}
 function onHrDisconnect() {
     currentHrDevice = null;
     window.hrDeviceName = null;
@@ -250,21 +258,98 @@ function onHrDisconnect() {
     if (typeof window.updateHrMonitorStatus === "function")
         window.updateHrMonitorStatus();
 }
-function tryReadBatteryLevel(server) {
-    server
-        .getPrimaryService("battery_service")
-        .then((batteryService) => batteryService.getCharacteristic("battery_level").readValue())
-        .then((value) => {
-        const data = value instanceof DataView ? value : new DataView(value instanceof ArrayBuffer ? value : value.buffer);
-        window.hrBatteryPercent = data.getUint8(0);
-        if (typeof window.updateHrMonitorStatus === "function")
-            window.updateHrMonitorStatus();
-    })
-        .catch(() => {
-        window.hrBatteryPercent = null;
-        if (typeof window.updateHrMonitorStatus === "function")
-            window.updateHrMonitorStatus();
-    });
+async function dumpGattProfile(server) {
+    if (!bleDebugEnabled())
+        return;
+    try {
+        const services = await server.getPrimaryServices();
+        console.log("[BLE] Primary services:", services.map((s) => s.uuid));
+        for (const service of services) {
+            try {
+                const chars = await service.getCharacteristics();
+                console.log(`[BLE] Service ${service.uuid} characteristics:`, chars.map((c) => c.uuid));
+                for (const ch of chars) {
+                    try {
+                        console.log(`[BLE]  - Char ${ch.uuid} props`, ch.properties);
+                    }
+                    catch {
+                        // ignore
+                    }
+                }
+            }
+            catch (e) {
+                console.log("[BLE] Could not enumerate characteristics for service", service.uuid, e);
+            }
+        }
+    }
+    catch (e) {
+        console.log("[BLE] Could not enumerate primary services", e);
+    }
+}
+function dataViewFromReadValue(value) {
+    if (value instanceof DataView)
+        return value;
+    if (value instanceof ArrayBuffer)
+        return new DataView(value);
+    if (value && value.buffer instanceof ArrayBuffer)
+        return new DataView(value.buffer);
+    return new DataView(new ArrayBuffer(0));
+}
+async function readBatteryPercentStandardBas(server) {
+    var _a;
+    // Standard GATT Battery Service (0x180F) / Battery Level (0x2A19)
+    const batteryService = await server.getPrimaryService("battery_service");
+    const batteryChar = await batteryService.getCharacteristic("battery_level");
+    // Prefer notifications if supported (keeps UI updated if device changes it)
+    try {
+        if ((_a = batteryChar === null || batteryChar === void 0 ? void 0 : batteryChar.properties) === null || _a === void 0 ? void 0 : _a.notify) {
+            await batteryChar.startNotifications();
+            batteryChar.addEventListener("characteristicvaluechanged", (event) => {
+                var _a;
+                try {
+                    const dv = dataViewFromReadValue((_a = event === null || event === void 0 ? void 0 : event.target) === null || _a === void 0 ? void 0 : _a.value);
+                    const v = dv.getUint8(0);
+                    if (v >= 0 && v <= 100) {
+                        window.hrBatteryPercent = v;
+                        if (typeof window.updateHrMonitorStatus === "function")
+                            window.updateHrMonitorStatus();
+                    }
+                }
+                catch {
+                    // ignore
+                }
+            });
+        }
+    }
+    catch {
+        // ignore; we can still do a one-shot read below
+    }
+    const dv = dataViewFromReadValue(await batteryChar.readValue());
+    const percent = dv.getUint8(0);
+    return percent >= 0 && percent <= 100 ? percent : null;
+}
+const BATTERY_PROBES = [
+    { name: "standard_bas_180f_2a19", read: (server) => readBatteryPercentStandardBas(server) },
+    // Add vendor-specific probes here as we discover them.
+];
+async function readBatteryPercentWithProbes(server, device) {
+    for (const probe of BATTERY_PROBES) {
+        try {
+            const v = await probe.read(server, device);
+            if (typeof v === "number" && v >= 0 && v <= 100) {
+                if (bleDebugEnabled())
+                    console.log("[BLE] Battery probe success:", probe.name, v);
+                return v;
+            }
+            if (bleDebugEnabled())
+                console.log("[BLE] Battery probe returned null:", probe.name);
+        }
+        catch (e) {
+            if (bleDebugEnabled())
+                console.log("[BLE] Battery probe failed:", probe.name, e);
+        }
+    }
+    return null;
 }
 function initiateHrConnection() {
     const bt = navigator.bluetooth;
@@ -277,7 +362,8 @@ function initiateHrConnection() {
     }
     bt.requestDevice({
         filters: [{ services: ["heart_rate"] }],
-        optionalServices: ["battery_service"],
+        // Request access to extra services up-front so we can probe battery (and inspect services in debug mode).
+        optionalServices: ["battery_service", "device_information"],
     })
         .then((device) => {
         currentHrDevice = device;
@@ -288,7 +374,18 @@ function initiateHrConnection() {
         window.hrDeviceName = device.name || "Heart rate sensor";
         if (typeof window.updateHrMonitorStatus === "function")
             window.updateHrMonitorStatus();
-        tryReadBatteryLevel(server);
+        dumpGattProfile(server);
+        readBatteryPercentWithProbes(server, device)
+            .then((battery) => {
+            window.hrBatteryPercent = battery;
+            if (typeof window.updateHrMonitorStatus === "function")
+                window.updateHrMonitorStatus();
+        })
+            .catch(() => {
+            window.hrBatteryPercent = null;
+            if (typeof window.updateHrMonitorStatus === "function")
+                window.updateHrMonitorStatus();
+        });
         return server.getPrimaryService("heart_rate").then((hrService) => ({ server, hrService }));
     })
         .then(({ hrService }) => hrService.getCharacteristic("heart_rate_measurement"))
