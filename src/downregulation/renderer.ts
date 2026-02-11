@@ -1,9 +1,10 @@
 /**
  * WebGL2 particle-field renderer for Downregulation.
- * - 10k+ particles as gl.POINTS; position + seed attributes.
- * - Motion: 3D simplex noise (in shader) projected to 2D; coherence reduces noise amplitude
- *   and increases wave + central gravity. Point size and alpha modulated by coherence.
- * - Dark background (#05060A), alpha + additive blend, cool palette.
+ * - Center circle: blue-green (hue 180–200°, low-med sat, mid-low luminance). Soft halo that
+ *   breathes slowly; lower HR = slower expansion/contraction cycle and slightly tighter halo.
+ *   No snapping, no brightness spikes (nervous system mirror).
+ * - Starfield: particles as gl.POINTS; coherence reduces noise, adds wave + central gravity.
+ * - Baseline = first 30s (hrController). Dark background (#05060A).
  */
 
 import { getCoherenceFactor } from "./hrController.js";
@@ -107,6 +108,38 @@ void main() {
 }
 `;
 
+// Center circle: blue-green soft halo; lower HR = slower breath, slightly tighter (no snap, no brightness spikes)
+const CIRCLE_VERTEX = `#version 300 es
+in vec2 a_position;
+void main() {
+  gl_Position = vec4(a_position, 0.0, 1.0);
+}
+`;
+
+const CIRCLE_FRAGMENT = `#version 300 es
+precision mediump float;
+uniform float u_time;
+uniform float u_coherence;
+uniform vec2 u_resolution;
+out vec4 outColor;
+const vec3 circleColor = vec3(0.14, 0.32, 0.34);
+void main() {
+  vec2 ndc = (gl_FragCoord.xy / u_resolution) * 2.0 - 1.0;
+  float aspect = u_resolution.x / u_resolution.y;
+  vec2 uv = vec2(ndc.x * aspect, ndc.y);
+  float dist = length(uv);
+  float breathSpeed = 0.10 * (1.0 - 0.70 * u_coherence);
+  float phase = u_time * breathSpeed;
+  float breath = sin(phase) * 0.04;
+  float innerR = 0.10;
+  float baseOuter = 0.42 - 0.06 * u_coherence;
+  float outerR = baseOuter + breath;
+  float alpha = 1.0 - smoothstep(innerR, outerR, dist);
+  alpha *= 0.55;
+  outColor = vec4(circleColor, alpha);
+}
+`;
+
 const BG_R = 5 / 255;
 const BG_G = 6 / 255;
 const BG_B = 10 / 255;
@@ -120,6 +153,12 @@ let uCoherence: WebGLUniformLocation | null = null;
 let uNoiseAmplitude: WebGLUniformLocation | null = null;
 let uGravityStrength: WebGLUniformLocation | null = null;
 let uResolution: WebGLUniformLocation | null = null;
+
+let circleProgram: WebGLProgram | null = null;
+let circleQuadBuffer: WebGLBuffer | null = null;
+let circleUTime: WebGLUniformLocation | null = null;
+let circleUCoherence: WebGLUniformLocation | null = null;
+let circleUResolution: WebGLUniformLocation | null = null;
 
 function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader | null {
   const shader = gl.createShader(type);
@@ -151,6 +190,35 @@ function createProgram(gl: WebGL2RenderingContext): WebGLProgram | null {
     return null;
   }
   return prog;
+}
+
+function createCircleProgram(gl: WebGL2RenderingContext): WebGLProgram | null {
+  const vs = compileShader(gl, gl.VERTEX_SHADER, CIRCLE_VERTEX);
+  const fs = compileShader(gl, gl.FRAGMENT_SHADER, CIRCLE_FRAGMENT);
+  if (!vs || !fs) return null;
+  const prog = gl.createProgram();
+  if (!prog) return null;
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    console.error("Circle program link:", gl.getProgramInfoLog(prog));
+    gl.deleteProgram(prog);
+    return null;
+  }
+  return prog;
+}
+
+function createCircleQuad(gl: WebGL2RenderingContext): WebGLBuffer | null {
+  const buf = gl.createBuffer();
+  if (!buf) return null;
+  const quad = new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  return buf;
 }
 
 function createParticleBuffers(gl: WebGL2RenderingContext): boolean {
@@ -207,6 +275,16 @@ export function initRenderer(canvas: HTMLCanvasElement): boolean {
   uGravityStrength = gl.getUniformLocation(program, "u_gravityStrength");
   uResolution = gl.getUniformLocation(program, "u_resolution");
 
+  circleProgram = createCircleProgram(gl);
+  circleQuadBuffer = createCircleQuad(gl);
+  if (!circleProgram || !circleQuadBuffer) {
+    console.error("[Renderer] Failed to create circle program/quad");
+    return false;
+  }
+  circleUTime = gl.getUniformLocation(circleProgram, "u_time");
+  circleUCoherence = gl.getUniformLocation(circleProgram, "u_coherence");
+  circleUResolution = gl.getUniformLocation(circleProgram, "u_resolution");
+
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
   return true;
@@ -236,25 +314,38 @@ function tick(): void {
   const noiseAmplitude = 0.4 * (1 - coherence) + 0.1;
   const gravityStrength = 0.5 + coherence * 1.5;
 
+  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+  gl.clearColor(BG_R, BG_G, BG_B, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT);
+
+  if (circleProgram && circleQuadBuffer) {
+    gl.useProgram(circleProgram);
+    gl.uniform1f(circleUTime!, time);
+    gl.uniform1f(circleUCoherence!, coherence);
+    gl.uniform2f(circleUResolution!, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    const circlePosLoc = gl.getAttribLocation(circleProgram, "a_position");
+    gl.bindBuffer(gl.ARRAY_BUFFER, circleQuadBuffer);
+    gl.enableVertexAttribArray(circlePosLoc);
+    gl.vertexAttribPointer(circlePosLoc, 2, gl.FLOAT, false, 0, 0);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+  }
+
   gl.useProgram(program);
   gl.uniform1f(uTime!, time);
   gl.uniform1f(uCoherence!, coherence);
   gl.uniform1f(uNoiseAmplitude!, noiseAmplitude);
   gl.uniform1f(uGravityStrength!, gravityStrength);
   gl.uniform2f(uResolution!, gl.drawingBufferWidth, gl.drawingBufferHeight);
-
   const posLoc = gl.getAttribLocation(program, "a_position");
   const seedLoc = gl.getAttribLocation(program, "a_seed");
-  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+  gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer!);
   gl.enableVertexAttribArray(posLoc);
   gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-  gl.bindBuffer(gl.ARRAY_BUFFER, seedBuffer);
+  gl.bindBuffer(gl.ARRAY_BUFFER, seedBuffer!);
   gl.enableVertexAttribArray(seedLoc);
   gl.vertexAttribPointer(seedLoc, 1, gl.FLOAT, false, 0, 0);
-
-  gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-  gl.clearColor(BG_R, BG_G, BG_B, 1);
-  gl.clear(gl.COLOR_BUFFER_BIT);
   gl.drawArrays(gl.POINTS, 0, PARTICLE_COUNT);
 
   const err = gl.getError();
@@ -288,6 +379,14 @@ export function disposeRenderer(): void {
   if (gl && seedBuffer) {
     gl.deleteBuffer(seedBuffer);
     seedBuffer = null;
+  }
+  if (gl && circleQuadBuffer) {
+    gl.deleteBuffer(circleQuadBuffer);
+    circleQuadBuffer = null;
+  }
+  if (gl && circleProgram) {
+    gl.deleteProgram(circleProgram);
+    circleProgram = null;
   }
   if (gl && program) {
     gl.deleteProgram(program);

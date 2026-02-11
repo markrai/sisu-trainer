@@ -1,6 +1,6 @@
 /**
  * HR controller for Downregulation visualization.
- * - Baseline: mean HR over first 60 seconds after start.
+ * - Baseline: mean HR over first 30 seconds after start.
  * - Rolling 20s window: smoothedHR = mean of samples in last 20 seconds.
  * - Exponential smoothing: optional second pass for responsiveness.
  * - Variance (20s window): higher variance reduces coherence (variancePenalty).
@@ -8,7 +8,7 @@
  *   we do NOT reward sudden drops (slope is computed over 20s, and large negative slopes are capped).
  * - coherenceFactor = clamp(smoothedDelta - variancePenalty + slopeBonus, 0, 1).
  */
-const BASELINE_WINDOW_MS = 60 * 1000;
+const BASELINE_WINDOW_MS = 30 * 1000;
 const ROLLING_WINDOW_MS = 20 * 1000;
 const EXP_ALPHA = 0.15; // exponential smoothing: higher = more responsive
 const VARIANCE_PENALTY_SCALE = 0.002; // map variance (bpm^2) to penalty (max ~0.05)
@@ -30,7 +30,7 @@ export function setCurrentHR(bpm) {
     // Prune old samples (keep last 2 minutes for baseline + rolling)
     const cutoff = t - Math.max(BASELINE_WINDOW_MS, ROLLING_WINDOW_MS) - 5000;
     samples = samples.filter((s) => s.t > cutoff);
-    // Baseline: mean HR over first 60 seconds
+    // Baseline: mean HR over first 30 seconds
     if (baselineEndTime === null && baselineHR === null) {
         const firstT = (_b = (_a = samples[0]) === null || _a === void 0 ? void 0 : _a.t) !== null && _b !== void 0 ? _b : t;
         if (t - firstT >= BASELINE_WINDOW_MS) {
