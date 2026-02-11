@@ -7,6 +7,23 @@ let liveBpm = null;
 let lastBpmUpdateTime = null;
 const BPM_TIMEOUT_MS = 3000;
 let showElapsedInRing = false;
+let heartPulseTargetBpm = null;
+let heartPulseRafId = null;
+const HEART_PULSE_SCALE = 1.15;
+function heartPulseLoop() {
+    heartPulseRafId = null;
+    const heartIcon = document.getElementById("heartIcon");
+    if (!heartIcon || heartPulseTargetBpm === null) {
+        if (heartIcon)
+            heartIcon.style.setProperty("transform", "scale(1)", "important");
+        return;
+    }
+    const durationSec = 60 / heartPulseTargetBpm;
+    const phase = ((Date.now() / 1000) % durationSec) / durationSec;
+    const scale = 1 + (HEART_PULSE_SCALE - 1) * Math.sin(phase * Math.PI);
+    heartIcon.style.setProperty("transform", `scale(${scale})`, "important");
+    heartPulseRafId = requestAnimationFrame(heartPulseLoop);
+}
 function getShowElapsed() {
     return showElapsedInRing;
 }
@@ -239,7 +256,11 @@ function updateHeartPulse(bpmValue) {
     const currentLastUpdate = window.lastBpmUpdateTime;
     const now = Date.now();
     if (currentLastUpdate && now - currentLastUpdate > BPM_TIMEOUT_MS) {
-        heartIcon.style.setProperty("animation", "none", "important");
+        heartPulseTargetBpm = null;
+        if (heartPulseRafId !== null)
+            cancelAnimationFrame(heartPulseRafId);
+        heartPulseRafId = null;
+        heartIcon.style.setProperty("transform", "scale(1)", "important");
         window.liveBpm = null;
         updateHrDisplay(null);
         const hrTargetEl = document.getElementById("hrTarget");
@@ -248,16 +269,19 @@ function updateHeartPulse(bpmValue) {
     }
     const bpm = bpmValue !== undefined && bpmValue !== null ? bpmValue : currentLiveBpm;
     if (bpm && bpm > 0) {
-        const duration = 60 / bpm;
-        const isMobile = window.matchMedia("(max-width: 768px) and (orientation: portrait)").matches;
-        const animationName = isMobile ? "heartPulseMobile" : "heartPulse";
-        heartIcon.style.setProperty("animation", `${animationName} ${duration}s ease-in-out infinite`, "important");
+        heartPulseTargetBpm = bpm;
+        if (heartPulseRafId === null)
+            heartPulseRafId = requestAnimationFrame(heartPulseLoop);
         const hrTargetEl = document.getElementById("hrTarget");
         if (hrTargetEl)
             updateHeartColor(bpm, hrTargetEl.textContent);
     }
     else {
-        heartIcon.style.setProperty("animation", "none", "important");
+        heartPulseTargetBpm = null;
+        if (heartPulseRafId !== null)
+            cancelAnimationFrame(heartPulseRafId);
+        heartPulseRafId = null;
+        heartIcon.style.setProperty("transform", "scale(1)", "important");
         const hrTargetEl = document.getElementById("hrTarget");
         updateHeartColor(null, hrTargetEl ? hrTargetEl.textContent : "");
     }
