@@ -125,8 +125,14 @@
     <!-- Sync Tab -->
     <div id="sisuTab" class="tab-content">
       <div id="sisuSyncContent" class="sisu-sync-content">
-        <div class="label" style="text-align: center; margin-bottom: 16px;">Sync</div>
         <div class="modal-section">
+          <div id="hrMonitorLabelRow" class="label" style="text-align: center; margin-bottom: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
+            <span id="hrMonitorLabel" style="opacity: 0.7;">Heart Rate Monitor</span>
+            <span id="hrMonitorBattery" style="opacity: 0.8; font-variant-numeric: tabular-nums;"></span>
+          </div>
+          <button class="button" id="connectHrButton" onclick="connectHr()">Connect HR Strap</button>
+        </div>
+        <div class="modal-section" style="margin-top: 24px;">
           <div class="label" style="text-align: center; opacity: 0.7; margin-bottom: 20px;">
             Connect to SISU to sync workouts and HRV baseline.
           </div>
@@ -141,14 +147,6 @@
           <div id="sisuStatus" class="label" style="text-align: center; margin-bottom: 16px;">Not connected</div>
           <div id="sisuConnectionInfo" class="label" style="text-align: center; opacity: 0.7; margin-bottom: 16px; display: none;"></div>
           <button class="button" id="sisuConnectButton" onclick="connectSISU()">Connect to SISU</button>
-        </div>
-        
-        <div class="modal-section" style="margin-top: 24px;">
-          <div id="hrMonitorLabelRow" class="label" style="text-align: center; margin-bottom: 16px; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap;">
-            <span id="hrMonitorLabel" style="opacity: 0.7;">Heart Rate Monitor</span>
-            <span id="hrMonitorBattery" style="opacity: 0.8; font-variant-numeric: tabular-nums;"></span>
-          </div>
-          <button class="button" id="connectHrButton" onclick="connectHr()">Connect HR</button>
         </div>
       </div>
     </div>

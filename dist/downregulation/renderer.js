@@ -6,6 +6,7 @@
  * - Starfield: particles as gl.POINTS; coherence reduces noise, adds wave + central gravity.
  * - Baseline = first 30s (hrController). Dark background (#05060A).
  */
+import { getCurrentBpm } from "../hrMonitor.js";
 import { getCoherenceFactor, getSmoothedHR } from "./hrController.js";
 const PARTICLE_COUNT = 12000;
 // Embedded shaders (no fetch required)
@@ -311,24 +312,24 @@ const startTime = Date.now() / 1000;
 let smoothedTimeSpeed = 1.0;
 let scaledTime = 0.0;
 let lastFrameTime = Date.now() / 1000;
-const SPEED_SMOOTH_ALPHA = 0.05; // Lower = smoother but slower response
+const SPEED_SMOOTH_ALPHA = 0.12; // Balance: smooth but visible response to HR within a few seconds
 function tick() {
+    var _a, _b;
     if (!gl || !program)
         return;
     const coherence = getCoherenceFactor();
     const now = Date.now() / 1000;
-    const deltaTime = now - lastFrameTime;
+    const deltaTime = Math.min(0.1, now - lastFrameTime); // Clamp to avoid big jumps when tab backgrounded
     lastFrameTime = now;
     // Speed modulation based on HR: slower HR = slower movement (minimum 15% speed for continuous motion)
-    const currentHR = getSmoothedHR();
-    let targetTimeSpeed = 1.0;
+    // Prefer smoothed HR; fall back to live BPM so speed responds as soon as strap is connected
+    const currentHR = (_b = (_a = getSmoothedHR()) !== null && _a !== void 0 ? _a : getCurrentBpm()) !== null && _b !== void 0 ? _b : null;
+    let targetTimeSpeed = 0.5; // Default when no HR: moderate speed so connection of strap is visibly noticeable
     if (currentHR != null && currentHR > 0) {
         // Map HR to speed: 40 bpm → 0.15 (slow but still moving), 100 bpm → 1.0 (normal speed)
-        // Using a minimum of 0.15 ensures continuous movement even at very low HR
         const rawSpeed = (currentHR - 40) / 60;
         targetTimeSpeed = Math.max(0.15, Math.min(1, rawSpeed));
     }
-    // Smoothly interpolate towards target speed to prevent jerks
     smoothedTimeSpeed = smoothedTimeSpeed + (targetTimeSpeed - smoothedTimeSpeed) * SPEED_SMOOTH_ALPHA;
     // Accumulate scaled time based on current speed (prevents "catch-up" jumps)
     // When speed increases, particles gradually speed up rather than jumping forward

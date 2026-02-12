@@ -10,15 +10,28 @@ import { setCurrentHR, reset as resetHrController, getSmoothedHR } from "./hrCon
 import { initRenderer, startRenderLoop, stopRenderLoop, disposeRenderer, resize } from "./renderer.js";
 import { startSession, endSession, cancelSession } from "./sessionStats.js";
 import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap } from "./overlay.js";
+import { generateUUID, emitWorkoutSummary } from "../workoutSummary.js";
+import { startSession as startStorageSession, getSession, markSummaryEmitted } from "../sessionStore.js";
+import { storeHrSample } from "../workoutStorage.js";
+import { generateDownregulationSummary } from "./workoutSummary.js";
 
 let container: HTMLElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
 let running = false;
 let hrDisplayIntervalId: ReturnType<typeof setInterval> | null = null;
 let resizeHandler: (() => void) | null = null;
+/** Set when user taps play to start; cleared when session ends or view stops. Used for HR sample storage and summary generation. */
+let downregulationSessionId: string | null = null;
+let downregulationSessionStartTime: number | null = null;
 
 function onBpmCallback(bpm: number): void {
   if (running) setCurrentHR(bpm);
+  if (running && downregulationSessionId != null && downregulationSessionStartTime != null) {
+    const elapsedSec = Math.floor((Date.now() - downregulationSessionStartTime) / 1000);
+    storeHrSample(downregulationSessionId, elapsedSec, bpm).catch((err: unknown) =>
+      console.error("[Downregulation] Error storing HR sample:", err)
+    );
+  }
 }
 
 export interface DownregulationViewOptions {
@@ -86,9 +99,26 @@ export function startDownregulationView(
 
   // Start with play icon visible; workout begins only after user taps it
   showPlayIconForStart(containerEl, () => {
+    const sessionId = generateUUID();
+    startStorageSession("Downregulation", Date.now(), sessionId);
+    downregulationSessionId = sessionId;
+    downregulationSessionStartTime = Date.now();
     startSession();
-    bindTap(containerEl, () => {
+    bindTap(containerEl, async () => {
       const stats = endSession();
+      const sid = downregulationSessionId;
+      const start = downregulationSessionStartTime;
+      downregulationSessionId = null;
+      downregulationSessionStartTime = null;
+      if (sid != null && start != null) {
+        try {
+          const summary = await generateDownregulationSummary(sid, start, Date.now(), stats);
+          await emitWorkoutSummary(summary);
+          markSummaryEmitted("Downregulation");
+        } catch (err) {
+          console.error("[Downregulation] Failed to save workout summary:", err);
+        }
+      }
       showStats(containerEl, stats, () => {
         onDismiss();
       });
@@ -101,6 +131,8 @@ export function startDownregulationView(
  */
 export function stopDownregulationView(): void {
   running = false;
+  downregulationSessionId = null;
+  downregulationSessionStartTime = null;
   cancelSession();
   if (container) unbindTap(container);
   hideStats();

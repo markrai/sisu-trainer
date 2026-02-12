@@ -9,7 +9,7 @@ function generateUUID() {
         return v.toString(16);
     });
 }
-function buildHrTrace(hrSamples) {
+export function buildHrTrace(hrSamples) {
     if (!hrSamples || hrSamples.length === 0) {
         return { sampling_interval_seconds: 60, samples: [] };
     }
@@ -32,7 +32,7 @@ function buildHrTrace(hrSamples) {
     }
     return { sampling_interval_seconds: 60, samples: downsampled };
 }
-function determineStressProfile(primaryZone) {
+export function determineStressProfile(primaryZone) {
     if (primaryZone === 1 || primaryZone === 2)
         return "low";
     if (primaryZone === 3)

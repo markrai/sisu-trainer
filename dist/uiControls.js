@@ -79,6 +79,31 @@ function ensureWorkoutDayDropdown() {
 function connectHr() {
     hrConnect();
 }
+function applyBatteryToElement(batteryEl, battery) {
+    if (!batteryEl)
+        return;
+    if (typeof battery === "number" && battery >= 0 && battery <= 100) {
+        batteryEl.classList.add("battery-pill");
+        batteryEl.style.setProperty("--battery-pct", String(battery));
+        const state = battery <= 15 ? "low" : battery <= 35 ? "med" : "good";
+        batteryEl.setAttribute("data-battery-state", state);
+        batteryEl.style.display = "";
+        let pctSpan = batteryEl.querySelector(".battery-pill-pct");
+        if (!pctSpan) {
+            pctSpan = document.createElement("span");
+            pctSpan.className = "battery-pill-pct";
+            batteryEl.appendChild(pctSpan);
+        }
+        pctSpan.textContent = battery + "%";
+    }
+    else {
+        batteryEl.textContent = "";
+        batteryEl.style.display = "none";
+        batteryEl.classList.remove("battery-pill");
+        batteryEl.removeAttribute("data-battery-state");
+        batteryEl.style.removeProperty("--battery-pct");
+    }
+}
 function updateHrMonitorLabel() {
     const labelEl = document.getElementById("hrMonitorLabel");
     const batteryEl = document.getElementById("hrMonitorBattery");
@@ -96,30 +121,7 @@ function updateHrMonitorLabel() {
             labelEl.style.opacity = "0.7";
         }
     }
-    if (batteryEl) {
-        if (typeof battery === "number" && battery >= 0 && battery <= 100) {
-            batteryEl.classList.add("battery-pill");
-            batteryEl.style.setProperty("--battery-pct", String(battery));
-            const state = battery <= 15 ? "low" : battery <= 35 ? "med" : "good";
-            batteryEl.setAttribute("data-battery-state", state);
-            batteryEl.style.display = "";
-            // Ensure a single child span for percentage so pill order is: dot, bar, text
-            let pctSpan = batteryEl.querySelector(".battery-pill-pct");
-            if (!pctSpan) {
-                pctSpan = document.createElement("span");
-                pctSpan.className = "battery-pill-pct";
-                batteryEl.appendChild(pctSpan);
-            }
-            pctSpan.textContent = battery + "%";
-        }
-        else {
-            batteryEl.textContent = "";
-            batteryEl.style.display = "none";
-            batteryEl.classList.remove("battery-pill");
-            batteryEl.removeAttribute("data-battery-state");
-            batteryEl.style.removeProperty("--battery-pct");
-        }
-    }
+    applyBatteryToElement(batteryEl, battery);
 }
 function updateHrDisplay(hr) {
     const hrNowEl = document.getElementById("hrNow");

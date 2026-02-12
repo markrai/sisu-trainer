@@ -12,7 +12,7 @@ function generateUUID(): string {
   });
 }
 
-function buildHrTrace(hrSamples: any[]) {
+export function buildHrTrace(hrSamples: any[]) {
   if (!hrSamples || hrSamples.length === 0) {
     return { sampling_interval_seconds: 60, samples: [] };
   }
@@ -37,7 +37,7 @@ function buildHrTrace(hrSamples: any[]) {
   return { sampling_interval_seconds: 60, samples: downsampled };
 }
 
-function determineStressProfile(primaryZone: number): "low" | "moderate" | "high" {
+export function determineStressProfile(primaryZone: number): "low" | "moderate" | "high" {
   if (primaryZone === 1 || primaryZone === 2) return "low";
   if (primaryZone === 3) return "moderate";
   return "high";
