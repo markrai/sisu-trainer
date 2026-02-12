@@ -321,14 +321,12 @@ function tick() {
     const now = Date.now() / 1000;
     const deltaTime = Math.min(0.1, now - lastFrameTime); // Clamp to avoid big jumps when tab backgrounded
     lastFrameTime = now;
-    // Speed modulation based on HR: slower HR = slower movement (minimum 15% speed for continuous motion)
-    // Prefer smoothed HR; fall back to live BPM so speed responds as soon as strap is connected
+    // Speed modulation based on HR: 40 bpm → 0.25 (min), 120 bpm → 1.0 (cap)
     const currentHR = (_b = (_a = getSmoothedHR()) !== null && _a !== void 0 ? _a : getCurrentBpm()) !== null && _b !== void 0 ? _b : null;
-    let targetTimeSpeed = 0.5; // Default when no HR: moderate speed so connection of strap is visibly noticeable
+    let targetTimeSpeed = 0.5; // Default when no HR
     if (currentHR != null && currentHR > 0) {
-        // Map HR to speed: 40 bpm → 0.15 (slow but still moving), 100 bpm → 1.0 (normal speed)
-        const rawSpeed = (currentHR - 40) / 60;
-        targetTimeSpeed = Math.max(0.15, Math.min(1, rawSpeed));
+        const rawSpeed = 0.25 + (0.75 * (currentHR - 40)) / 80; // 40→0.25, 120→1.0
+        targetTimeSpeed = Math.max(0.25, Math.min(1, rawSpeed));
     }
     smoothedTimeSpeed = smoothedTimeSpeed + (targetTimeSpeed - smoothedTimeSpeed) * SPEED_SMOOTH_ALPHA;
     // Accumulate scaled time based on current speed (prevents "catch-up" jumps)
