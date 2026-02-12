@@ -119,7 +119,9 @@ export function showStats(container, stats, onDismiss) {
     }
     if (doneButton && !doneButton.__downregDoneBound) {
         doneButton.__downregDoneBound = true;
-        doneButton.addEventListener("click", () => {
+        doneButton.addEventListener("click", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             hideStats();
             onDismissCallback === null || onDismissCallback === void 0 ? void 0 : onDismissCallback();
             onDismissCallback = null;

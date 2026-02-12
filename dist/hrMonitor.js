@@ -20,8 +20,14 @@ function onHrDisconnect() {
     currentBpm = null;
     window.hrDeviceName = null;
     window.hrBatteryPercent = null;
+    window.liveBpm = null;
+    window.lastBpmUpdateTime = null;
     if (typeof window.updateHrMonitorStatus === "function")
         window.updateHrMonitorStatus();
+    if (typeof window.updateDisplay === "function")
+        window.updateDisplay();
+    if (typeof window.updateHrDisplay === "function")
+        window.updateHrDisplay(null);
 }
 function pollBatteryOnce() {
     var _a;
