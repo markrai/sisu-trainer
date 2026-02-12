@@ -12,7 +12,6 @@ import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap } from "
 let container = null;
 let canvas = null;
 let running = false;
-let simulateIntervalId = null;
 let hrDisplayIntervalId = null;
 let resizeHandler = null;
 function onBpmCallback(bpm) {
@@ -46,17 +45,7 @@ export function startDownregulationView(containerEl, canvasEl, options) {
     const currentBpm = getCurrentBpm();
     if (currentBpm != null && currentBpm > 0)
         setCurrentHR(currentBpm);
-    const hasLiveHr = currentBpm != null && currentBpm > 0;
-    if (!hasLiveHr) {
-        const simStart = Date.now() / 1000;
-        simulateIntervalId = setInterval(() => {
-            if (!running)
-                return;
-            const t = Date.now() / 1000 - simStart;
-            const simulated = 70 + 5 * Math.sin(t * 0.5);
-            setCurrentHR(Math.round(simulated));
-        }, 500);
-    }
+    // No simulated HR: only use real strap data. Without a strap, display shows "—" and coherence stays low.
     resizeHandler = () => {
         if (canvas)
             resize(canvas);
@@ -95,10 +84,6 @@ export function stopDownregulationView() {
     if (container)
         unbindTap(container);
     hideStats();
-    if (simulateIntervalId != null) {
-        clearInterval(simulateIntervalId);
-        simulateIntervalId = null;
-    }
     if (hrDisplayIntervalId != null) {
         clearInterval(hrDisplayIntervalId);
         hrDisplayIntervalId = null;
