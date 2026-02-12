@@ -68,6 +68,12 @@ export function startDownregulationView(
   if (hrEl) {
     const updateHrDisplay = () => {
       if (!running || !hrEl) return;
+      // Only show HR if there's actually a live monitor connected
+      const liveBpm = getCurrentBpm();
+      if (liveBpm == null || liveBpm <= 0) {
+        hrEl.textContent = "—";
+        return;
+      }
       const bpm = getSmoothedHR();
       hrEl.textContent = bpm != null ? `${Math.round(bpm)} bpm` : "—";
     };

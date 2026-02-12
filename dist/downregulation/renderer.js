@@ -6,7 +6,7 @@
  * - Starfield: particles as gl.POINTS; coherence reduces noise, adds wave + central gravity.
  * - Baseline = first 30s (hrController). Dark background (#05060A).
  */
-import { getCoherenceFactor } from "./hrController.js";
+import { getCoherenceFactor, getSmoothedHR } from "./hrController.js";
 const PARTICLE_COUNT = 12000;
 // Embedded shaders (no fetch required)
 const VERTEX_SOURCE = `#version 300 es
@@ -16,6 +16,7 @@ uniform float u_time;
 uniform float u_coherence;
 uniform float u_noiseAmplitude;
 uniform float u_gravityStrength;
+uniform float u_speed;
 uniform vec2 u_resolution;
 out float v_alpha;
 vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
@@ -71,16 +72,30 @@ void main() {
   vec2 uv = a_position;
   float t = u_time * 0.1;
   float seed = a_seed;
-  float n1 = snoise(vec3(uv.x * 2.0 + seed * 0.1, uv.y * 2.0, t));
-  float n2 = snoise(vec3(uv.x * 2.0 + 100.0 + seed * 0.1, uv.y * 2.0, t + 33.3));
+  
+  // Use seed to create independent noise space for each particle
+  // This makes each particle move independently rather than in clusters
+  float seedOffsetX = seed * 1000.0;
+  float seedOffsetY = seed * 2000.0;
+  float seedTimeOffset = seed * 500.0;
+  
+  // Each particle gets its own noise field offset by its seed
+  float n1 = snoise(vec3(uv.x * 2.0 + seedOffsetX, uv.y * 2.0 + seedOffsetY, t + seedTimeOffset));
+  float n2 = snoise(vec3(uv.x * 2.0 + seedOffsetX + 100.0, uv.y * 2.0 + seedOffsetY + 200.0, t + seedTimeOffset + 33.3));
   vec2 noiseFlow = vec2(n1, n2) * u_noiseAmplitude * (1.0 - u_coherence);
+  
+  // Wave also uses seed for independent phase
   float wavePhase = t + seed * 6.28;
   vec2 wave = vec2(sin(wavePhase), cos(wavePhase * 0.7)) * 0.15 * u_coherence;
+  
+  // Gravity still pulls toward center but weaker, allowing more random movement
   vec2 toCenter = -uv;
   float dist = length(toCenter) + 0.001;
   vec2 gravity = normalize(toCenter) * u_gravityStrength * u_coherence * 0.02 / (dist + 0.5);
+  
   vec2 velocity = noiseFlow + wave + gravity;
-  vec2 pos = uv + velocity * 0.08;
+  // Scale movement step by speed so particles actually move slower/faster with HR
+  vec2 pos = uv + velocity * 0.08 * u_speed;
   gl_Position = vec4(pos.x, pos.y, 0.0, 1.0);
   float baseSize = 5.0 + 3.0 * u_coherence;
   // NOTE: gl_PointSize is in drawing-buffer pixels. We already scale the canvas by DPR,
@@ -144,6 +159,7 @@ let uTime = null;
 let uCoherence = null;
 let uNoiseAmplitude = null;
 let uGravityStrength = null;
+let uSpeed = null;
 let uResolution = null;
 let circleProgram = null;
 let circleQuadBuffer = null;
@@ -261,6 +277,7 @@ export function initRenderer(canvas) {
     uCoherence = gl.getUniformLocation(program, "u_coherence");
     uNoiseAmplitude = gl.getUniformLocation(program, "u_noiseAmplitude");
     uGravityStrength = gl.getUniformLocation(program, "u_gravityStrength");
+    uSpeed = gl.getUniformLocation(program, "u_speed");
     uResolution = gl.getUniformLocation(program, "u_resolution");
     circleProgram = createCircleProgram(gl);
     circleQuadBuffer = createCircleQuad(gl);
@@ -291,11 +308,32 @@ export function resize(canvas) {
 }
 let rafId = null;
 const startTime = Date.now() / 1000;
+let smoothedTimeSpeed = 1.0;
+let scaledTime = 0.0;
+let lastFrameTime = Date.now() / 1000;
+const SPEED_SMOOTH_ALPHA = 0.05; // Lower = smoother but slower response
 function tick() {
     if (!gl || !program)
         return;
     const coherence = getCoherenceFactor();
-    const time = Date.now() / 1000 - startTime;
+    const now = Date.now() / 1000;
+    const deltaTime = now - lastFrameTime;
+    lastFrameTime = now;
+    // Speed modulation based on HR: slower HR = slower movement (minimum 15% speed for continuous motion)
+    const currentHR = getSmoothedHR();
+    let targetTimeSpeed = 1.0;
+    if (currentHR != null && currentHR > 0) {
+        // Map HR to speed: 40 bpm → 0.15 (slow but still moving), 100 bpm → 1.0 (normal speed)
+        // Using a minimum of 0.15 ensures continuous movement even at very low HR
+        const rawSpeed = (currentHR - 40) / 60;
+        targetTimeSpeed = Math.max(0.15, Math.min(1, rawSpeed));
+    }
+    // Smoothly interpolate towards target speed to prevent jerks
+    smoothedTimeSpeed = smoothedTimeSpeed + (targetTimeSpeed - smoothedTimeSpeed) * SPEED_SMOOTH_ALPHA;
+    // Accumulate scaled time based on current speed (prevents "catch-up" jumps)
+    // When speed increases, particles gradually speed up rather than jumping forward
+    scaledTime += smoothedTimeSpeed * deltaTime;
+    const time = scaledTime;
     const noiseAmplitude = 0.4 * (1 - coherence) + 0.1;
     const gravityStrength = 0.5 + coherence * 1.5;
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
@@ -319,6 +357,7 @@ function tick() {
     gl.uniform1f(uCoherence, coherence);
     gl.uniform1f(uNoiseAmplitude, noiseAmplitude);
     gl.uniform1f(uGravityStrength, gravityStrength);
+    gl.uniform1f(uSpeed, smoothedTimeSpeed);
     gl.uniform2f(uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
     const posLoc = gl.getAttribLocation(program, "a_position");
     const seedLoc = gl.getAttribLocation(program, "a_seed");
@@ -339,6 +378,8 @@ export function startRenderLoop(canvas) {
     console.log("[Renderer] Starting render loop");
     resize(canvas);
     console.log("[Renderer] Canvas resized to", canvas.width, "x", canvas.height);
+    scaledTime = 0.0; // Reset scaled time for new session
+    lastFrameTime = Date.now() / 1000; // Reset frame time
     if (rafId != null)
         cancelAnimationFrame(rafId);
     rafId = requestAnimationFrame(tick);
@@ -351,6 +392,9 @@ export function stopRenderLoop() {
 }
 export function disposeRenderer() {
     stopRenderLoop();
+    smoothedTimeSpeed = 1.0; // Reset smoothed speed for next session
+    scaledTime = 0.0; // Reset scaled time
+    lastFrameTime = Date.now() / 1000; // Reset frame time
     if (gl && positionBuffer) {
         gl.deleteBuffer(positionBuffer);
         positionBuffer = null;
