@@ -32,25 +32,41 @@ function getSisuProtocol() {
   return window.location.protocol === "https:" ? "https" : "http";
 }
 
-async function testSisuConnection(host: string, port: number) {
+const SISU_HEALTH_TIMEOUT_MS = 5000;
+
+async function testSisuConnection(host: string, port: number): Promise<{ ok: boolean; error?: string }> {
+  const cleanedHost = cleanHostForUrl(host);
+  const protocol = getSisuProtocol();
+  const url = `${protocol}://${cleanedHost}:${port}/health`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SISU_HEALTH_TIMEOUT_MS);
   try {
-    const cleanedHost = cleanHostForUrl(host);
-    const protocol = getSisuProtocol();
-    const url = `${protocol}://${cleanedHost}:${port}/health`;
     const response = await fetch(url, {
       method: "GET",
       mode: "cors",
       headers: { "Content-Type": "application/json" },
-      signal: (AbortSignal as any).timeout(5000),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     if (response.ok) {
       const data = await response.json();
-      return data.status === "ok";
+      return { ok: data.status === "ok" };
     }
-    return false;
-  } catch (error) {
+    return { ok: false, error: `HTTP ${response.status}` };
+  } catch (error: unknown) {
+    clearTimeout(timeoutId);
+    const err = error as Error & { name?: string };
     console.error("SISU connection test error:", error);
-    return false;
+    if (err.name === "AbortError") {
+      return { ok: false, error: "Connection timed out" };
+    }
+    if (err.message === "Failed to fetch") {
+      return {
+        ok: false,
+        error: "Cannot reach SISU. Check host/port, that SISU is running, and that it allows CORS from this origin.",
+      };
+    }
+    return { ok: false, error: err.message || String(error) };
   }
 }
 
@@ -87,8 +103,10 @@ async function loadSisuSettings() {
       }
       if (portInput) portInput.value = settings.port.toString();
       const cleanedHost = settings.host.replace(/^https?:\/\//, "").replace(/:\d+$/, "").replace(/\/$/, "").replace(/:$/, "");
-      const isConnected = await testSisuConnection(cleanedHost, settings.port);
-      await updateSISUStatus(isConnected ? `Connected to ${settings.host}:${settings.port}` : "Settings saved but not connected", isConnected);
+      const result = await testSisuConnection(cleanedHost, settings.port);
+      const isConnected = result.ok;
+      const statusMsg = isConnected ? `Connected to ${settings.host}:${settings.port}` : (result.error || "Settings saved but not connected");
+      await updateSISUStatus(statusMsg, isConnected);
       return settings;
     } else {
       await updateSISUStatus("Not connected", false);
@@ -125,8 +143,8 @@ async function connectSISU() {
   try {
     const protocol = getSisuProtocol();
     await updateSISUStatus(`Testing ${protocol}://${host}:${port}/health ...`, false);
-    const isConnected = await testSisuConnection(host, port);
-    if (isConnected) {
+    const result = await testSisuConnection(host, port);
+    if (result.ok) {
       const stored = await storeSisuSettings(host, port);
       if (stored) {
         sisuConnectionState.host = host;
@@ -142,7 +160,7 @@ async function connectSISU() {
         await updateSISUStatus("Connection successful but failed to save settings", false);
       }
     } else {
-      await updateSISUStatus("Connection failed - check host and port", false);
+      await updateSISUStatus(result.error || "Connection failed - check host and port", false);
     }
   } catch (error: any) {
     console.error("SISU connection error:", error);
