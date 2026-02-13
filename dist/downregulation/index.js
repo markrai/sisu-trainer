@@ -81,8 +81,8 @@ export function startDownregulationView(containerEl, canvasEl, options) {
     }
     const onDismiss = (_a = options === null || options === void 0 ? void 0 : options.onDismiss) !== null && _a !== void 0 ? _a : (() => { });
     startRenderLoop(canvasEl);
-    // Start with play icon visible; workout begins only after user taps it
-    showPlayIconForStart(containerEl, () => {
+    /** Start a new session and bind tap-to-end; when user taps Done on the summary, we show play again. */
+    function startSessionAndBindTap() {
         const sessionId = generateUUID();
         startStorageSession("Downregulation", Date.now(), sessionId);
         downregulationSessionId = sessionId;
@@ -105,10 +105,11 @@ export function startDownregulationView(containerEl, canvasEl, options) {
                 }
             }
             showStats(containerEl, stats, () => {
-                onDismiss();
+                showPlayIconForStart(containerEl, startSessionAndBindTap);
             });
         });
-    });
+    }
+    showPlayIconForStart(containerEl, startSessionAndBindTap);
 }
 /**
  * Stop the Downregulation view: stop loop, dispose renderer, clear HR subscription effect, unbind tap, reset HR controller.

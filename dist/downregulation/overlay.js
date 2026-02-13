@@ -52,10 +52,11 @@ export function showPlayIconForStart(container, onTapToStart) {
     ensureElements(container);
     if (!playIconWrap)
         return;
+    playIconWrap.classList.remove("downregulation-play-wrap--fade");
     playIconWrap.classList.add("downregulation-play-wrap--clickable");
     playIconWrap.style.display = "flex";
     playIconWrap.style.opacity = "1";
-    playIconWrap.classList.remove("downregulation-play-wrap--fade");
+    playIconWrap.style.visibility = "visible";
     const handler = (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -119,13 +120,28 @@ export function showStats(container, stats, onDismiss) {
     }
     if (doneButton && !doneButton.__downregDoneBound) {
         doneButton.__downregDoneBound = true;
-        doneButton.addEventListener("click", (e) => {
+        let dismissScheduled = false;
+        const runDismiss = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            hideStats();
-            onDismissCallback === null || onDismissCallback === void 0 ? void 0 : onDismissCallback();
+            if (dismissScheduled)
+                return;
+            dismissScheduled = true;
+            const cb = onDismissCallback;
             onDismissCallback = null;
-        });
+            hideStats();
+            if (cb) {
+                requestAnimationFrame(() => {
+                    cb();
+                    dismissScheduled = false;
+                });
+            }
+            else {
+                dismissScheduled = false;
+            }
+        };
+        doneButton.addEventListener("click", runDismiss);
+        doneButton.addEventListener("touchend", runDismiss, { passive: false });
     }
 }
 function escapeHtml(s) {
@@ -147,10 +163,14 @@ export function hideStats() {
 }
 /**
  * Bind tap/click on the container. When fired: calls onTap(). Use onTap to end session, show play icon, then show stats and pass onDismiss.
+ * Ignores taps on the stats panel (e.g. Done button) or play icon so they don't re-trigger the session-end flow.
  */
 export function bindTap(container, onTap) {
     unbindTap(container);
     const handler = (e) => {
+        const target = e.target;
+        if ((statsPanel === null || statsPanel === void 0 ? void 0 : statsPanel.contains(target)) || (playIconWrap === null || playIconWrap === void 0 ? void 0 : playIconWrap.contains(target)))
+            return;
         e.preventDefault();
         onTap();
     };

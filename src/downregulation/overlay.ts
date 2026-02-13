@@ -55,10 +55,11 @@ function ensureElements(container: HTMLElement): void {
 export function showPlayIconForStart(container: HTMLElement, onTapToStart: () => void): void {
   ensureElements(container);
   if (!playIconWrap) return;
+  playIconWrap.classList.remove("downregulation-play-wrap--fade");
   playIconWrap.classList.add("downregulation-play-wrap--clickable");
   playIconWrap.style.display = "flex";
   playIconWrap.style.opacity = "1";
-  playIconWrap.classList.remove("downregulation-play-wrap--fade");
+  playIconWrap.style.visibility = "visible";
   const handler = (e: MouseEvent | TouchEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -125,13 +126,26 @@ export function showStats(container: HTMLElement, stats: DownregulationSessionSt
   }
   if (doneButton && !(doneButton as any).__downregDoneBound) {
     (doneButton as any).__downregDoneBound = true;
-    doneButton.addEventListener("click", (e: Event) => {
+    let dismissScheduled = false;
+    const runDismiss = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
-      hideStats();
-      onDismissCallback?.();
+      if (dismissScheduled) return;
+      dismissScheduled = true;
+      const cb = onDismissCallback;
       onDismissCallback = null;
-    });
+      hideStats();
+      if (cb) {
+        requestAnimationFrame(() => {
+          cb();
+          dismissScheduled = false;
+        });
+      } else {
+        dismissScheduled = false;
+      }
+    };
+    doneButton.addEventListener("click", runDismiss);
+    doneButton.addEventListener("touchend", runDismiss, { passive: false });
   }
 }
 
@@ -155,10 +169,13 @@ export function hideStats(): void {
 
 /**
  * Bind tap/click on the container. When fired: calls onTap(). Use onTap to end session, show play icon, then show stats and pass onDismiss.
+ * Ignores taps on the stats panel (e.g. Done button) or play icon so they don't re-trigger the session-end flow.
  */
 export function bindTap(container: HTMLElement, onTap: () => void): void {
   unbindTap(container);
   const handler = (e: MouseEvent | TouchEvent) => {
+    const target = e.target as Node;
+    if (statsPanel?.contains(target) || playIconWrap?.contains(target)) return;
     e.preventDefault();
     onTap();
   };

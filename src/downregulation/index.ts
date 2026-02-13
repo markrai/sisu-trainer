@@ -97,8 +97,8 @@ export function startDownregulationView(
   const onDismiss = options?.onDismiss ?? (() => {});
   startRenderLoop(canvasEl);
 
-  // Start with play icon visible; workout begins only after user taps it
-  showPlayIconForStart(containerEl, () => {
+  /** Start a new session and bind tap-to-end; when user taps Done on the summary, we show play again. */
+  function startSessionAndBindTap(): void {
     const sessionId = generateUUID();
     startStorageSession("Downregulation", Date.now(), sessionId);
     downregulationSessionId = sessionId;
@@ -120,10 +120,12 @@ export function startDownregulationView(
         }
       }
       showStats(containerEl, stats, () => {
-        onDismiss();
+        showPlayIconForStart(containerEl, startSessionAndBindTap);
       });
     });
-  });
+  }
+
+  showPlayIconForStart(containerEl, startSessionAndBindTap);
 }
 
 /**
