@@ -1,6 +1,6 @@
 {
   "name": "vo2max",
-  "version": "0.9.22",
+  "version": "0.9.25",
   "private": true,
   "type": "module",
   "scripts": {

@@ -2,6 +2,8 @@
 type BluetoothDevice = any;
 
 let currentHrDevice: BluetoothDevice | null = null;
+/** Keep a reference so the characteristic is not GC'd (important on Android Chrome). */
+let currentHrCharacteristic: any = null;
 const BATTERY_POLL_MS = 2 * 60 * 1000; // 2 minutes
 let batteryPollIntervalId: ReturnType<typeof setInterval> | null = null;
 let currentBpm: number | null = null;
@@ -21,6 +23,7 @@ function onHrDisconnect() {
     batteryPollIntervalId = null;
   }
   currentHrDevice = null;
+  currentHrCharacteristic = null;
   currentBpm = null;
   (window as any).hrDeviceName = null;
   (window as any).hrBatteryPercent = null;
@@ -205,9 +208,11 @@ export function connect(): void {
       return server.getPrimaryService("heart_rate").then((hrService: any) => ({ server, hrService }));
     })
     .then(({ hrService }: { server: any; hrService: any }) => hrService.getCharacteristic("heart_rate_measurement"))
-    .then((characteristic: any) => characteristic.startNotifications())
     .then((characteristic: any) => {
+      currentHrCharacteristic = characteristic;
+      // Add listener before startNotifications so we don't miss early notifications (e.g. on Android).
       characteristic.addEventListener("characteristicvaluechanged", handleCharacteristicValueChanged);
+      return characteristic.startNotifications();
     })
     .catch((error: any) => console.error(error));
 }
@@ -218,4 +223,10 @@ export function onBpm(callback: (bpm: number) => void): void {
 
 export function getCurrentBpm(): number | null {
   return currentBpm;
+}
+
+export function disconnect(): void {
+  if (currentHrDevice?.gatt?.connected) {
+    currentHrDevice.gatt.disconnect();
+  }
 }

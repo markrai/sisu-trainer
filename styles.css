@@ -6,6 +6,8 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .label { font-size: 0.9rem; opacity: .7; }
 .input { width: 100%; padding: 12px; border-radius: 10px; border: none; margin-top: 8px; font-size: 1rem; box-sizing: border-box; }
 .button { width: 100%; padding: 14px; background: #3d7cff; color: #fff; border: none; border-radius: 12px; margin-top: 14px; font-size: 1rem; font-weight: 600; }
+.button.hr-connected { background: #dc2626; }
+.button.hr-connected:hover { background: #b91c1c; }
 
 .start-button-row { display: flex; align-items: stretch; gap: 10px; margin-top: 14px; }
 .start-button-row .button { margin-top: 0; flex: 1; min-width: 0; box-sizing: border-box; }

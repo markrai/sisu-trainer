@@ -3,7 +3,7 @@ import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
-import { connect as hrConnect, onBpm } from "./hrMonitor.js";
+import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
 import { getSession } from "./sessionStore.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 let selectedDay = null;
@@ -77,7 +77,13 @@ function ensureWorkoutDayDropdown() {
         select.value = current;
 }
 function connectHr() {
-    hrConnect();
+    const connected = !!window.hrDeviceName;
+    if (connected) {
+        hrDisconnect();
+    }
+    else {
+        hrConnect();
+    }
 }
 function applyBatteryToElement(batteryEl, battery) {
     if (!batteryEl)
@@ -107,6 +113,7 @@ function applyBatteryToElement(batteryEl, battery) {
 function updateHrMonitorLabel() {
     const labelEl = document.getElementById("hrMonitorLabel");
     const batteryEl = document.getElementById("hrMonitorBattery");
+    const btnEl = document.getElementById("connectHrButton");
     const name = window.hrDeviceName;
     const battery = window.hrBatteryPercent;
     if (labelEl) {
@@ -119,6 +126,16 @@ function updateHrMonitorLabel() {
             labelEl.textContent = "Heart Rate Monitor";
             labelEl.style.color = "";
             labelEl.style.opacity = "0.7";
+        }
+    }
+    if (btnEl) {
+        if (name) {
+            btnEl.textContent = "Disconnect HR Strap";
+            btnEl.classList.add("hr-connected");
+        }
+        else {
+            btnEl.textContent = "Connect HR Strap";
+            btnEl.classList.remove("hr-connected");
         }
     }
     applyBatteryToElement(batteryEl, battery);

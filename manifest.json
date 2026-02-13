@@ -4,6 +4,7 @@
   "description": "Workout coaching app for VO2 max training with heart rate monitoring",
   "start_url": "/",
   "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
   "background_color": "#0c0c0c",
   "theme_color": "#0c0c0c",
   "orientation": "portrait-primary",
