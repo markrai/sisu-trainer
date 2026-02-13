@@ -7,14 +7,21 @@ cd /d "%~dp0"
 echo Starting VO2 Max Coach development server...
 echo.
 
-REM Build before serving (syncs version, compiles TS to dist)
-echo Running build...
-call npm run build
+REM Build and update deploy folder (syncs version, compiles TS to dist, copies to deploy)
+echo Running build and updating deploy folder...
+call build-deploy.bat
 if %errorlevel% neq 0 (
     echo ERROR: Build failed.
     exit /b 1
 )
 echo.
+
+REM Optional: upload deploy folder to NAS (if deploy-upload.bat exists; copy from deploy-upload.bat.example)
+if exist deploy-upload.bat (
+    echo Uploading to NAS...
+    call deploy-upload.bat
+    echo/
+)
 
 REM Port (default 8000, or pass as first argument)
 if not "%~1"=="" (

@@ -16,6 +16,7 @@ mkdir deploy\dist
 copy /y index.html deploy\ >nul
 copy /y styles.css deploy\ >nul
 copy /y favicon.ico deploy\ >nul
+if exist logo.png copy /y logo.png deploy\ >nul
 copy /y sw.js deploy\ >nul
 copy /y data.json deploy\ >nul
 if exist manifest.json copy /y manifest.json deploy\ >nul
