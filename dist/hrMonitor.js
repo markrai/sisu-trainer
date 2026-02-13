@@ -199,27 +199,26 @@ export function connect() {
         if (typeof window.updateHrMonitorStatus === "function")
             window.updateHrMonitorStatus();
         dumpGattProfile(server);
-        readBatteryPercentWithProbes(server, device)
-            .then((battery) => {
-            window.hrBatteryPercent = battery;
-            if (typeof window.updateHrMonitorStatus === "function")
-                window.updateHrMonitorStatus();
-            if (battery !== null)
-                startBatteryPolling();
-        })
-            .catch(() => {
-            window.hrBatteryPercent = null;
-            if (typeof window.updateHrMonitorStatus === "function")
-                window.updateHrMonitorStatus();
-        });
-        return server.getPrimaryService("heart_rate").then((hrService) => ({ server, hrService }));
+        return server.getPrimaryService("heart_rate").then((hrService) => ({ device, server, hrService }));
     })
-        .then(({ hrService }) => hrService.getCharacteristic("heart_rate_measurement"))
-        .then((characteristic) => {
+        .then(({ device, server, hrService }) => hrService.getCharacteristic("heart_rate_measurement").then((characteristic) => ({ device, server, characteristic })))
+        .then(({ device, server, characteristic }) => {
         currentHrCharacteristic = characteristic;
-        // Add listener before startNotifications so we don't miss early notifications (e.g. on Android).
         characteristic.addEventListener("characteristicvaluechanged", handleCharacteristicValueChanged);
-        return characteristic.startNotifications();
+        return characteristic.startNotifications().then(() => ({ device, server }));
+    })
+        .then(({ device, server }) => readBatteryPercentWithProbes(server, device).catch(() => {
+        window.hrBatteryPercent = null;
+        if (typeof window.updateHrMonitorStatus === "function")
+            window.updateHrMonitorStatus();
+        return null;
+    }))
+        .then((battery) => {
+        window.hrBatteryPercent = battery;
+        if (typeof window.updateHrMonitorStatus === "function")
+            window.updateHrMonitorStatus();
+        if (battery !== null)
+            startBatteryPolling();
     })
         .catch((error) => console.error(error));
 }

@@ -195,24 +195,27 @@ export function connect(): void {
       (window as any).hrDeviceName = device.name || "Heart rate sensor";
       if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
       dumpGattProfile(server);
-      readBatteryPercentWithProbes(server, device)
-        .then((battery) => {
-          (window as any).hrBatteryPercent = battery;
-          if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
-          if (battery !== null) startBatteryPolling();
-        })
-        .catch(() => {
-          (window as any).hrBatteryPercent = null;
-          if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
-        });
-      return server.getPrimaryService("heart_rate").then((hrService: any) => ({ server, hrService }));
+      return server.getPrimaryService("heart_rate").then((hrService: any) => ({ device, server, hrService }));
     })
-    .then(({ hrService }: { server: any; hrService: any }) => hrService.getCharacteristic("heart_rate_measurement"))
-    .then((characteristic: any) => {
+    .then(({ device, server, hrService }: { device: BluetoothDevice; server: any; hrService: any }) =>
+      hrService.getCharacteristic("heart_rate_measurement").then((characteristic: any) => ({ device, server, characteristic }))
+    )
+    .then(({ device, server, characteristic }: { device: BluetoothDevice; server: any; characteristic: any }) => {
       currentHrCharacteristic = characteristic;
-      // Add listener before startNotifications so we don't miss early notifications (e.g. on Android).
       characteristic.addEventListener("characteristicvaluechanged", handleCharacteristicValueChanged);
-      return characteristic.startNotifications();
+      return characteristic.startNotifications().then(() => ({ device, server }));
+    })
+    .then(({ device, server }: { device: BluetoothDevice; server: any }) =>
+      readBatteryPercentWithProbes(server, device).catch(() => {
+        (window as any).hrBatteryPercent = null;
+        if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+        return null;
+      })
+    )
+    .then((battery) => {
+      (window as any).hrBatteryPercent = battery;
+      if (typeof (window as any).updateHrMonitorStatus === "function") (window as any).updateHrMonitorStatus();
+      if (battery !== null) startBatteryPolling();
     })
     .catch((error: any) => console.error(error));
 }
