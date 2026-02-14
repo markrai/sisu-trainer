@@ -711,4 +711,39 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .downregulation-prefs-modal {
   max-width: 20rem;
 }
+.downregulation-prefs-modal .modal-field-column {
+  flex-direction: column;
+  align-items: stretch;
+}
+.downregulation-style-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.downregulation-style-option {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0.5rem 0.75rem;
+  background: rgba(255, 255, 255, 0.05);
+  transition: background 0.15s;
+}
+.downregulation-style-option:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.downregulation-style-option input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.downregulation-style-option:has(input:checked) {
+  background: rgba(255, 255, 255, 0.15);
+}
+.downregulation-style-option span {
+  font-size: 0.9rem;
+}
 

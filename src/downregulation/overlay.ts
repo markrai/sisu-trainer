@@ -4,7 +4,13 @@
  */
 
 import type { DownregulationSessionStats } from "./sessionStats.js";
-import { getParticleSizeScale, setParticleSizeScale } from "./renderer.js";
+import {
+  getParticleSizeScale,
+  setParticleSizeScale,
+  getParticleStyle,
+  setParticleStyle,
+  type ParticleStyle,
+} from "./renderer.js";
 
 const PLAY_ICON_DURATION_MS = 1000;
 const FADE_DURATION_MS = 400;
@@ -83,6 +89,19 @@ function ensureElements(container: HTMLElement): void {
       <div class="modal downregulation-prefs-modal">
         <div class="close-btn" id="downregulationPrefsClose" aria-label="Close">✕</div>
         <h3 class="downregulation-stats-title">Downregulation preferences</h3>
+        <div class="modal-field modal-field-column">
+          <span class="modal-label">Particle style</span>
+          <div class="downregulation-style-toggle" role="group" aria-label="Particle style">
+            <label class="downregulation-style-option">
+              <input type="radio" name="downregulationParticleStyle" value="beads" checked>
+              <span>Beads</span>
+            </label>
+            <label class="downregulation-style-option">
+              <input type="radio" name="downregulationParticleStyle" value="starfield">
+              <span>Starfield</span>
+            </label>
+          </div>
+        </div>
         <div class="modal-field">
           <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
           <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
@@ -96,6 +115,7 @@ function ensureElements(container: HTMLElement): void {
     const closeBtn = prefsModal.querySelector("#downregulationPrefsCloseBtn");
     const slider = prefsModal.querySelector("#downregulationParticleSizeSlider") as HTMLInputElement;
     const valueEl = prefsModal.querySelector("#downregulationParticleSizeValue") as HTMLElement;
+    const styleRadios = prefsModal.querySelectorAll<HTMLInputElement>('input[name="downregulationParticleStyle"]');
     const updateValueLabel = () => {
       if (valueEl && slider) valueEl.textContent = String(Math.round(parseFloat(slider.value) * 100) / 100);
     };
@@ -104,10 +124,21 @@ function ensureElements(container: HTMLElement): void {
         const v = parseFloat(slider.value);
         setParticleSizeScale(v);
       }
+      const checkedStyle = prefsModal.querySelector<HTMLInputElement>('input[name="downregulationParticleStyle"]:checked');
+      if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield")) {
+        setParticleStyle(checkedStyle.value as ParticleStyle);
+      }
       prefsModal!.style.display = "none";
     };
     closeEl?.addEventListener("click", applyAndClose);
     closeBtn?.addEventListener("click", applyAndClose);
+    styleRadios.forEach((radio) => {
+      radio.addEventListener("change", () => {
+        if (radio.checked && (radio.value === "beads" || radio.value === "starfield")) {
+          setParticleStyle(radio.value as ParticleStyle);
+        }
+      });
+    });
     slider?.addEventListener("input", () => {
       updateValueLabel();
       const v = parseFloat((slider as HTMLInputElement).value);
@@ -199,8 +230,13 @@ function openDownregulationPrefsModal(): void {
   if (!prefsModal) return;
   const slider = prefsModal.querySelector("#downregulationParticleSizeSlider") as HTMLInputElement;
   const valueEl = prefsModal.querySelector("#downregulationParticleSizeValue") as HTMLElement;
+  const styleRadios = prefsModal.querySelectorAll<HTMLInputElement>('input[name="downregulationParticleStyle"]');
   if (slider) slider.value = String(getParticleSizeScale());
   if (valueEl && slider) valueEl.textContent = String(Math.round(parseFloat(slider.value) * 100) / 100);
+  const currentStyle = getParticleStyle();
+  styleRadios.forEach((radio) => {
+    radio.checked = radio.value === currentStyle;
+  });
   prefsModal.style.display = "flex";
 }
 

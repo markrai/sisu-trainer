@@ -2,7 +2,7 @@
  * Downregulation overlay: tap-to-stop, play icon (1s fade), and session stats panel.
  * Keeps UI and behavior in one place so the main index stays clean.
  */
-import { getParticleSizeScale, setParticleSizeScale } from "./renderer.js";
+import { getParticleSizeScale, setParticleSizeScale, getParticleStyle, setParticleStyle, } from "./renderer.js";
 const PLAY_ICON_DURATION_MS = 1000;
 const FADE_DURATION_MS = 400;
 const SESSION_HINT_FADE_MS = 3000;
@@ -82,6 +82,19 @@ function ensureElements(container) {
       <div class="modal downregulation-prefs-modal">
         <div class="close-btn" id="downregulationPrefsClose" aria-label="Close">✕</div>
         <h3 class="downregulation-stats-title">Downregulation preferences</h3>
+        <div class="modal-field modal-field-column">
+          <span class="modal-label">Particle style</span>
+          <div class="downregulation-style-toggle" role="group" aria-label="Particle style">
+            <label class="downregulation-style-option">
+              <input type="radio" name="downregulationParticleStyle" value="beads" checked>
+              <span>Beads</span>
+            </label>
+            <label class="downregulation-style-option">
+              <input type="radio" name="downregulationParticleStyle" value="starfield">
+              <span>Starfield</span>
+            </label>
+          </div>
+        </div>
         <div class="modal-field">
           <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
           <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
@@ -95,6 +108,7 @@ function ensureElements(container) {
         const closeBtn = prefsModal.querySelector("#downregulationPrefsCloseBtn");
         const slider = prefsModal.querySelector("#downregulationParticleSizeSlider");
         const valueEl = prefsModal.querySelector("#downregulationParticleSizeValue");
+        const styleRadios = prefsModal.querySelectorAll('input[name="downregulationParticleStyle"]');
         const updateValueLabel = () => {
             if (valueEl && slider)
                 valueEl.textContent = String(Math.round(parseFloat(slider.value) * 100) / 100);
@@ -104,10 +118,21 @@ function ensureElements(container) {
                 const v = parseFloat(slider.value);
                 setParticleSizeScale(v);
             }
+            const checkedStyle = prefsModal.querySelector('input[name="downregulationParticleStyle"]:checked');
+            if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield")) {
+                setParticleStyle(checkedStyle.value);
+            }
             prefsModal.style.display = "none";
         };
         closeEl === null || closeEl === void 0 ? void 0 : closeEl.addEventListener("click", applyAndClose);
         closeBtn === null || closeBtn === void 0 ? void 0 : closeBtn.addEventListener("click", applyAndClose);
+        styleRadios.forEach((radio) => {
+            radio.addEventListener("change", () => {
+                if (radio.checked && (radio.value === "beads" || radio.value === "starfield")) {
+                    setParticleStyle(radio.value);
+                }
+            });
+        });
         slider === null || slider === void 0 ? void 0 : slider.addEventListener("input", () => {
             updateValueLabel();
             const v = parseFloat(slider.value);
@@ -201,10 +226,15 @@ function openDownregulationPrefsModal() {
         return;
     const slider = prefsModal.querySelector("#downregulationParticleSizeSlider");
     const valueEl = prefsModal.querySelector("#downregulationParticleSizeValue");
+    const styleRadios = prefsModal.querySelectorAll('input[name="downregulationParticleStyle"]');
     if (slider)
         slider.value = String(getParticleSizeScale());
     if (valueEl && slider)
         valueEl.textContent = String(Math.round(parseFloat(slider.value) * 100) / 100);
+    const currentStyle = getParticleStyle();
+    styleRadios.forEach((radio) => {
+        radio.checked = radio.value === currentStyle;
+    });
     prefsModal.style.display = "flex";
 }
 /**

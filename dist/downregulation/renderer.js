@@ -36,6 +36,103 @@ void main() {
   outColor = vec4(col, a);
 }
 `;
+// Starfield mode: GPU-driven motion (noise + wave + gravity in vertex shader), 12k points, no collision
+const STARFIELD_PARTICLE_COUNT = 12000;
+const STARFIELD_VERTEX_SOURCE = `#version 300 es
+in vec2 a_position;
+in float a_seed;
+uniform float u_time;
+uniform float u_coherence;
+uniform float u_noiseAmplitude;
+uniform float u_gravityStrength;
+uniform float u_speed;
+out float v_alpha;
+vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec4 permute(vec4 x) { return mod289(((x * 34.0) + 1.0) * x); }
+vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+float snoise(vec3 v) {
+  const vec2 C = vec2(1.0 / 6.0, 1.0 / 3.0);
+  const vec4 D = vec4(0.0, 0.5, 1.0, 2.0);
+  vec3 i = floor(v + dot(v, C.yyy));
+  vec3 x0 = v - i + dot(i, C.xxx);
+  vec3 g = step(x0.yzx, x0.xyz);
+  vec3 l = 1.0 - g;
+  vec3 i1 = min(g.xyz, l.zxy);
+  vec3 i2 = max(g.xyz, l.zxy);
+  vec3 x1 = x0 - i1 + C.xxx;
+  vec3 x2 = x0 - i2 + C.yyy;
+  vec3 x3 = x0 - D.yyy;
+  i = mod289(i);
+  vec4 p = permute(permute(permute(
+    i.z + vec4(0.0, i1.z, i2.z, 1.0))
+    + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+    + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+  float n_ = 0.142857142857;
+  vec3 ns = n_ * D.wyz - D.xzx;
+  vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+  vec4 x_ = floor(j * ns.z);
+  vec4 y_ = floor(j - 7.0 * x_);
+  vec4 x = x_ * ns.x + ns.yyyy;
+  vec4 y = y_ * ns.x + ns.yyyy;
+  vec4 h = 1.0 - abs(x) - abs(y);
+  vec4 b0 = vec4(x.xy, y.xy);
+  vec4 b1 = vec4(x.zw, y.zw);
+  vec4 s0 = floor(b0) * 2.0 + 1.0;
+  vec4 s1 = floor(b1) * 2.0 + 1.0;
+  vec4 sh = -step(h, vec4(0.0));
+  vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+  vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+  vec3 p0 = vec3(a0.xy, h.x);
+  vec3 p1 = vec3(a0.zw, h.y);
+  vec3 p2 = vec3(a1.xy, h.z);
+  vec3 p3 = vec3(a1.zw, h.w);
+  vec4 norm = taylorInvSqrt(vec4(dot(p0, p0), dot(p1, p1), dot(p2, p2), dot(p3, p3)));
+  p0 *= norm.x;
+  p1 *= norm.y;
+  p2 *= norm.z;
+  p3 *= norm.w;
+  vec4 m = max(0.6 - vec4(dot(x0, x0), dot(x1, x1), dot(x2, x2), dot(x3, x3)), 0.0);
+  m = m * m;
+  return 42.0 * dot(m * m, vec4(dot(p0, x0), dot(p1, x1), dot(p2, x2), dot(p3, x3)));
+}
+void main() {
+  vec2 uv = a_position;
+  float t = u_time * 0.1;
+  float seed = a_seed;
+  float seedOffsetX = seed * 1000.0;
+  float seedOffsetY = seed * 2000.0;
+  float seedTimeOffset = seed * 500.0;
+  float n1 = snoise(vec3(uv.x * 2.0 + seedOffsetX, uv.y * 2.0 + seedOffsetY, t + seedTimeOffset));
+  float n2 = snoise(vec3(uv.x * 2.0 + seedOffsetX + 100.0, uv.y * 2.0 + seedOffsetY + 200.0, t + seedTimeOffset + 33.3));
+  vec2 noiseFlow = vec2(n1, n2) * u_noiseAmplitude * (1.0 - u_coherence);
+  float wavePhase = t + seed * 6.28;
+  vec2 wave = vec2(sin(wavePhase), cos(wavePhase * 0.7)) * 0.15 * u_coherence;
+  vec2 toCenter = -uv;
+  float dist = length(toCenter) + 0.001;
+  vec2 gravity = normalize(toCenter) * u_gravityStrength * u_coherence * 0.02 / (dist + 0.5);
+  vec2 velocity = noiseFlow + wave + gravity;
+  vec2 pos = uv + velocity * 0.08 * u_speed;
+  gl_Position = vec4(pos.x, pos.y, 0.0, 1.0);
+  float baseSize = (5.0 + 3.0 * u_coherence);
+  gl_PointSize = baseSize;
+  v_alpha = 0.6 + 0.4 * u_coherence;
+}
+`;
+const STARFIELD_FRAGMENT_SOURCE = `#version 300 es
+precision mediump float;
+in float v_alpha;
+out vec4 outColor;
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  float d = length(c);
+  float soft = 1.0 - smoothstep(0.0, 0.5, d);
+  float a = soft * v_alpha;
+  vec3 col = mix(vec3(0.35, 0.65, 0.75), vec3(0.4, 0.45, 0.7), 0.5);
+  col = mix(col, vec3(0.5, 0.4, 0.65), 0.3);
+  outColor = vec4(col, a);
+}
+`;
 // Center circle: blue-green soft halo; lower HR = slower breath, slightly tighter (no snap, no brightness spikes)
 const CIRCLE_VERTEX = `#version 300 es
 in vec2 a_position;
@@ -80,25 +177,51 @@ let uResolution = null;
 let pointTexture = null;
 const PARTICLE_SIZE_STORAGE_KEY = "downregulationParticleSizeScale";
 const PARTICLE_SIZE_DEFAULT = 1.0;
+const PARTICLE_STYLE_STORAGE_KEY = "downregulationParticleStyle";
+const PARTICLE_STYLE_DEFAULT = "beads";
 let particleSizeScale = PARTICLE_SIZE_DEFAULT;
-(function loadParticleSizePreference() {
+let particleStyle = PARTICLE_STYLE_DEFAULT;
+(function loadParticlePreferences() {
     try {
-        const stored = localStorage.getItem(PARTICLE_SIZE_STORAGE_KEY);
-        if (stored != null) {
-            const v = parseFloat(stored);
+        const storedSize = localStorage.getItem(PARTICLE_SIZE_STORAGE_KEY);
+        if (storedSize != null) {
+            const v = parseFloat(storedSize);
             if (Number.isFinite(v) && v >= 1 && v <= 3)
                 particleSizeScale = v;
         }
+        const storedStyle = localStorage.getItem(PARTICLE_STYLE_STORAGE_KEY);
+        if (storedStyle === "beads" || storedStyle === "starfield")
+            particleStyle = storedStyle;
     }
     catch {
         /* ignore */
     }
 })();
+export function getParticleStyle() {
+    return particleStyle;
+}
+export function setParticleStyle(value) {
+    particleStyle = value;
+    try {
+        localStorage.setItem(PARTICLE_STYLE_STORAGE_KEY, value);
+    }
+    catch {
+        /* ignore */
+    }
+}
 let circleProgram = null;
 let circleQuadBuffer = null;
 let circleUTime = null;
 let circleUCoherence = null;
 let circleUResolution = null;
+let starfieldProgram = null;
+let starfieldPositionBuffer = null;
+let starfieldSeedBuffer = null;
+let starfieldUTime = null;
+let starfieldUCoherence = null;
+let starfieldUNoiseAmplitude = null;
+let starfieldUGravityStrength = null;
+let starfieldUSpeed = null;
 function compileShader(gl, type, source) {
     const shader = gl.createShader(type);
     if (!shader)
@@ -151,6 +274,50 @@ function createCircleProgram(gl) {
         return null;
     }
     return prog;
+}
+function createStarfieldProgram(gl) {
+    const vs = compileShader(gl, gl.VERTEX_SHADER, STARFIELD_VERTEX_SOURCE);
+    const fs = compileShader(gl, gl.FRAGMENT_SHADER, STARFIELD_FRAGMENT_SOURCE);
+    if (!vs || !fs)
+        return null;
+    const prog = gl.createProgram();
+    if (!prog)
+        return null;
+    gl.attachShader(prog, vs);
+    gl.attachShader(prog, fs);
+    gl.linkProgram(prog);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        console.error("Starfield program link:", gl.getProgramInfoLog(prog));
+        gl.deleteProgram(prog);
+        return null;
+    }
+    return prog;
+}
+function createStarfieldBuffers(gl) {
+    const positions = new Float32Array(STARFIELD_PARTICLE_COUNT * 2);
+    const seeds = new Float32Array(STARFIELD_PARTICLE_COUNT);
+    for (let i = 0; i < STARFIELD_PARTICLE_COUNT; i++) {
+        const i2 = i * 2;
+        const x = (Math.random() * 2 - 1) * 1.2;
+        const y = (Math.random() * 2 - 1) * 1.2;
+        positions[i2] = x;
+        positions[i2 + 1] = y;
+        seeds[i] = i / STARFIELD_PARTICLE_COUNT;
+    }
+    starfieldPositionBuffer = gl.createBuffer();
+    if (!starfieldPositionBuffer)
+        return false;
+    gl.bindBuffer(gl.ARRAY_BUFFER, starfieldPositionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+    starfieldSeedBuffer = gl.createBuffer();
+    if (!starfieldSeedBuffer)
+        return false;
+    gl.bindBuffer(gl.ARRAY_BUFFER, starfieldSeedBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, seeds, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    return true;
 }
 function createCircleQuad(gl) {
     const buf = gl.createBuffer();
@@ -248,6 +415,20 @@ export function initRenderer(canvas) {
     circleUTime = gl.getUniformLocation(circleProgram, "u_time");
     circleUCoherence = gl.getUniformLocation(circleProgram, "u_coherence");
     circleUResolution = gl.getUniformLocation(circleProgram, "u_resolution");
+    starfieldProgram = createStarfieldProgram(gl);
+    if (!starfieldProgram || !createStarfieldBuffers(gl)) {
+        console.warn("[Renderer] Starfield program/buffers failed, only Beads will be available");
+        if (starfieldProgram)
+            gl.deleteProgram(starfieldProgram);
+        starfieldProgram = null;
+    }
+    else {
+        starfieldUTime = gl.getUniformLocation(starfieldProgram, "u_time");
+        starfieldUCoherence = gl.getUniformLocation(starfieldProgram, "u_coherence");
+        starfieldUNoiseAmplitude = gl.getUniformLocation(starfieldProgram, "u_noiseAmplitude");
+        starfieldUGravityStrength = gl.getUniformLocation(starfieldProgram, "u_gravityStrength");
+        starfieldUSpeed = gl.getUniformLocation(starfieldProgram, "u_speed");
+    }
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     return true;
@@ -299,7 +480,11 @@ function tick() {
     scaledTime += smoothedTimeSpeed * deltaTime;
     const time = scaledTime;
     const noiseAmplitude = 0.4 * (1 - coherence) + 0.1;
-    stepParticleSim(time, coherence, noiseAmplitude, smoothedTimeSpeed, deltaTime, smoothedMovementScale);
+    const gravityStrength = 0.5 + coherence * 1.5;
+    const style = getParticleStyle();
+    if (style === "beads") {
+        stepParticleSim(time, coherence, noiseAmplitude, smoothedTimeSpeed, deltaTime, smoothedMovementScale);
+    }
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.clearColor(BG_R, BG_G, BG_B, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
@@ -316,28 +501,53 @@ function tick() {
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     }
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, getPositions());
-    gl.useProgram(program);
-    gl.uniform1f(uCoherence, coherence);
-    if (uParticleSizeScale)
-        gl.uniform1f(uParticleSizeScale, particleSizeScale);
-    if (uResolution)
-        gl.uniform2f(uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
-    if (pointTexture && uPointTexture != null) {
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, pointTexture);
-        gl.uniform1i(uPointTexture, 0);
+    if (style === "starfield" && starfieldProgram && starfieldPositionBuffer && starfieldSeedBuffer) {
+        const starfieldSpeed = smoothedTimeSpeed * smoothedMovementScale;
+        gl.useProgram(starfieldProgram);
+        if (starfieldUTime)
+            gl.uniform1f(starfieldUTime, time);
+        if (starfieldUCoherence)
+            gl.uniform1f(starfieldUCoherence, coherence);
+        if (starfieldUNoiseAmplitude)
+            gl.uniform1f(starfieldUNoiseAmplitude, noiseAmplitude);
+        if (starfieldUGravityStrength)
+            gl.uniform1f(starfieldUGravityStrength, gravityStrength);
+        if (starfieldUSpeed)
+            gl.uniform1f(starfieldUSpeed, starfieldSpeed);
+        const posLoc = gl.getAttribLocation(starfieldProgram, "a_position");
+        const seedLoc = gl.getAttribLocation(starfieldProgram, "a_seed");
+        gl.bindBuffer(gl.ARRAY_BUFFER, starfieldPositionBuffer);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, starfieldSeedBuffer);
+        gl.enableVertexAttribArray(seedLoc);
+        gl.vertexAttribPointer(seedLoc, 1, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.POINTS, 0, STARFIELD_PARTICLE_COUNT);
     }
-    const posLoc = gl.getAttribLocation(program, "a_position");
-    const seedLoc = gl.getAttribLocation(program, "a_seed");
-    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-    gl.bindBuffer(gl.ARRAY_BUFFER, seedBuffer);
-    gl.enableVertexAttribArray(seedLoc);
-    gl.vertexAttribPointer(seedLoc, 1, gl.FLOAT, false, 0, 0);
-    gl.drawArrays(gl.POINTS, 0, getParticleCount());
+    else {
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, getPositions());
+        gl.useProgram(program);
+        gl.uniform1f(uCoherence, coherence);
+        if (uParticleSizeScale)
+            gl.uniform1f(uParticleSizeScale, particleSizeScale);
+        if (uResolution)
+            gl.uniform2f(uResolution, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        if (pointTexture && uPointTexture != null) {
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, pointTexture);
+            gl.uniform1i(uPointTexture, 0);
+        }
+        const posLoc = gl.getAttribLocation(program, "a_position");
+        const seedLoc = gl.getAttribLocation(program, "a_seed");
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.enableVertexAttribArray(posLoc);
+        gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+        gl.bindBuffer(gl.ARRAY_BUFFER, seedBuffer);
+        gl.enableVertexAttribArray(seedLoc);
+        gl.vertexAttribPointer(seedLoc, 1, gl.FLOAT, false, 0, 0);
+        gl.drawArrays(gl.POINTS, 0, getParticleCount());
+    }
     const err = gl.getError();
     if (err !== gl.NO_ERROR && Math.random() < 0.01) {
         console.warn("[Renderer] WebGL error after draw:", err);
@@ -374,6 +584,18 @@ export function disposeRenderer() {
     if (gl && seedBuffer) {
         gl.deleteBuffer(seedBuffer);
         seedBuffer = null;
+    }
+    if (gl && starfieldPositionBuffer) {
+        gl.deleteBuffer(starfieldPositionBuffer);
+        starfieldPositionBuffer = null;
+    }
+    if (gl && starfieldSeedBuffer) {
+        gl.deleteBuffer(starfieldSeedBuffer);
+        starfieldSeedBuffer = null;
+    }
+    if (gl && starfieldProgram) {
+        gl.deleteProgram(starfieldProgram);
+        starfieldProgram = null;
     }
     if (gl && circleQuadBuffer) {
         gl.deleteBuffer(circleQuadBuffer);
