@@ -16,9 +16,9 @@ import {
 const PLAY_ICON_DURATION_MS = 1000;
 const FADE_DURATION_MS = 400;
 const SESSION_HINT_FADE_MS = 3000;
-const GOO_Y_MAX = 260; // px, CodePen y:260
-const GOO_TIME_SCALE = 2; // CodePen tl.timeScale(2)
-const GOO_SEEK = 120; // CodePen tl.seek(120) – start 120s into timeline
+const GOO_Y_MAX = 260; // vertical travel; kept lower so with scale(2) blobs stay on screen (bottom ~viewBox 600)
+const GOO_TIME_SCALE = 2;
+const GOO_SEEK = 120;
 
 function getGooSvgMarkup(): string {
   return `<svg class="downregulation-goo-svg" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
@@ -45,7 +45,7 @@ function getGooSvgMarkup(): string {
   </radialGradient>
 </defs>
 <rect fill="#05060a" width="600" height="600"/>
-<g filter="url(#gooFilter)">
+<g filter="url(#gooFilter)" transform="translate(300,300) scale(2) translate(-300,-300)">
   <path id="gooBlob0" fill="url(#gooBlobGrad0)" d="M326.2,149.5c-5,19.2-21.4,29.2-37.8,26.6c-16.5-2.9-33.4-12.9-37.1-26.6c-3.8-13.6,12.5-32.1,37.8-34.9C314.4,111.8,331.3,130.4,326.2,149.5z"/>
   <path id="gooBlob1" fill="url(#gooBlobGrad1)" d="M320.5,146.4c-4.4,10.1-16.4,20.2-26.8,25.3c-10.4,5.2-22.4-2.9-26.8-15.2c-4.4-11.6,7.6-20.4,26.8-25.3C312.9,126.3,324.9,135.6,320.5,146.4z"/>
   <path id="gooBlob2" fill="url(#gooBlobGrad2)" d="M278,147.7c2.7-7.1,9.4-15.7,15.4-16.4c5.9-0.4,12.6,8.5,15.4,16.9c2.7,8.4-4.2,14.9-15.4,14.2C282.2,161.5,275.3,154.8,278,147.7z"/>
@@ -60,8 +60,13 @@ function gooAnimationLoop(): void {
     gooRafId = null;
     return;
   }
+  const now = performance.now() / 1000;
+  if (gooLastFrameTime === 0) gooLastFrameTime = now;
+  const deltaTime = Math.min(0.1, now - gooLastFrameTime);
+  gooLastFrameTime = now;
   const movementScale = getMovementScale();
-  const T = (performance.now() / 1000) * GOO_TIME_SCALE * movementScale + GOO_SEEK;
+  gooAccumulatedTime += deltaTime * movementScale * GOO_TIME_SCALE;
+  const T = gooAccumulatedTime + GOO_SEEK;
   for (let i = 0; i < gooBlobElements.length && i < gooBlobParams.length; i++) {
     const el = gooBlobElements[i];
     const p = gooBlobParams[i];
@@ -108,9 +113,12 @@ let settingsBtn: HTMLElement | null = null;
 let prefsModal: HTMLElement | null = null;
 let gooLayer: HTMLElement | null = null;
 let gooBlobElements: SVGElement[] = [];
-/** Per-blob: duration (s), repeatDelay (s), startOffset (timeline seconds). CodePen: duration 14–50, repeatDelay 1–3, stagger (i+1)/0.6, timeScale 2 */
+/** Per-blob: duration (s), repeatDelay (s), startOffset (timeline seconds). CodePen: duration 14–50, repeatDelay 1–3, stagger (i+1)/0.6 */
 const gooBlobParams: { duration: number; repeatDelay: number; startOffset: number }[] = [];
 let gooRafId: number | null = null;
+/** Accumulated timeline time (advances at rate proportional to HR) so HR changes only change speed, no jerk */
+let gooAccumulatedTime = 0;
+let gooLastFrameTime = 0;
 
 function ensureElements(container: HTMLElement): void {
   if (playIconWrap) return;
@@ -469,6 +477,7 @@ export function stopGooLayer(): void {
     cancelAnimationFrame(gooRafId);
     gooRafId = null;
   }
+  gooLastFrameTime = 0;
   if (gooLayer) {
     gooLayer.style.display = "none";
     gooLayer.setAttribute("aria-hidden", "true");
