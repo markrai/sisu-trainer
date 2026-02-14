@@ -9,7 +9,7 @@ import { onBpm, getCurrentBpm } from "../hrMonitor.js";
 import { setCurrentHR, reset as resetHrController, getSmoothedHR } from "./hrController.js";
 import { initRenderer, startRenderLoop, stopRenderLoop, disposeRenderer, resize } from "./renderer.js";
 import { startSession, endSession, cancelSession } from "./sessionStats.js";
-import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap } from "./overlay.js";
+import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap, showSessionHint } from "./overlay.js";
 import { generateUUID, emitWorkoutSummary } from "../workoutSummary.js";
 import { startSession as startStorageSession, getSession, markSummaryEmitted } from "../sessionStore.js";
 import { storeHrSample } from "../workoutStorage.js";
@@ -104,6 +104,7 @@ export function startDownregulationView(
     downregulationSessionId = sessionId;
     downregulationSessionStartTime = Date.now();
     startSession();
+    showSessionHint(containerEl);
     bindTap(containerEl, async () => {
       const stats = endSession();
       const sid = downregulationSessionId;
