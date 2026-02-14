@@ -2,10 +2,91 @@
  * Downregulation overlay: tap-to-stop, play icon (1s fade), and session stats panel.
  * Keeps UI and behavior in one place so the main index stays clean.
  */
-import { getParticleSizeScale, setParticleSizeScale, getParticleStyle, setParticleStyle, } from "./renderer.js";
+import { getParticleSizeScale, setParticleSizeScale, getParticleStyle, setParticleStyle, getMovementScale, } from "./renderer.js";
 const PLAY_ICON_DURATION_MS = 1000;
 const FADE_DURATION_MS = 400;
 const SESSION_HINT_FADE_MS = 3000;
+const GOO_Y_MAX = 260; // px, CodePen y:260
+const GOO_TIME_SCALE = 2; // CodePen tl.timeScale(2)
+const GOO_SEEK = 120; // CodePen tl.seek(120) – start 120s into timeline
+function getGooSvgMarkup() {
+    return `<svg class="downregulation-goo-svg" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+<defs>
+  <filter id="gooFilter">
+    <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur"/>
+    <feColorMatrix in="blur" mode="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 21 -9" result="cm"/>
+  </filter>
+  <!-- Greenish-blue relaxing palette (matches downregulation circle/particles) -->
+  <radialGradient id="gooBlobGrad0" cx="292" cy="171.5" r="56.5" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5ba8c2"/><stop offset="0.35" stop-color="#4a8fa8"/><stop offset="0.65" stop-color="#3a6d82"/><stop offset="1" stop-color="#245257"/>
+  </radialGradient>
+  <radialGradient id="gooBlobGrad1" cx="297" cy="167.5" r="37.2" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5ba8c2"/><stop offset="0.35" stop-color="#4a8fa8"/><stop offset="0.65" stop-color="#3a6d82"/><stop offset="1" stop-color="#245257"/>
+  </radialGradient>
+  <radialGradient id="gooBlobGrad2" cx="294" cy="157" r="23" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5ba8c2"/><stop offset="0.35" stop-color="#4a8fa8"/><stop offset="0.65" stop-color="#3a6d82"/><stop offset="1" stop-color="#245257"/>
+  </radialGradient>
+  <radialGradient id="gooBlobGrad3" cx="291.94" cy="167.46" r="41.08" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5ba8c2"/><stop offset="0.35" stop-color="#4a8fa8"/><stop offset="0.65" stop-color="#3a6d82"/><stop offset="1" stop-color="#245257"/>
+  </radialGradient>
+  <radialGradient id="gooBlobGrad4" cx="306.5" cy="155" r="14.1" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#5ba8c2"/><stop offset="0.35" stop-color="#4a8fa8"/><stop offset="0.65" stop-color="#3a6d82"/><stop offset="1" stop-color="#245257"/>
+  </radialGradient>
+</defs>
+<rect fill="#05060a" width="600" height="600"/>
+<g filter="url(#gooFilter)">
+  <path id="gooBlob0" fill="url(#gooBlobGrad0)" d="M326.2,149.5c-5,19.2-21.4,29.2-37.8,26.6c-16.5-2.9-33.4-12.9-37.1-26.6c-3.8-13.6,12.5-32.1,37.8-34.9C314.4,111.8,331.3,130.4,326.2,149.5z"/>
+  <path id="gooBlob1" fill="url(#gooBlobGrad1)" d="M320.5,146.4c-4.4,10.1-16.4,20.2-26.8,25.3c-10.4,5.2-22.4-2.9-26.8-15.2c-4.4-11.6,7.6-20.4,26.8-25.3C312.9,126.3,324.9,135.6,320.5,146.4z"/>
+  <path id="gooBlob2" fill="url(#gooBlobGrad2)" d="M278,147.7c2.7-7.1,9.4-15.7,15.4-16.4c5.9-0.4,12.6,8.5,15.4,16.9c2.7,8.4-4.2,14.9-15.4,14.2C282.2,161.5,275.3,154.8,278,147.7z"/>
+  <path id="gooBlob3" fill="url(#gooBlobGrad3)" d="M312.7,147.3c-2.1,16.4-15.3,27.2-23.2,25.3c-8.1-1.8-12.6-13-14.8-24.9c-1.9-11.8,2.7-22.7,14.8-25.3C301.5,119.6,314.7,130.8,312.7,147.3z"/>
+  <path id="gooBlob4" fill="url(#gooBlobGrad4)" d="M317.8,147.4c-1,8.2-9.8,10.3-13.8,9.3c-4-0.9-6.5-3-7.6-8.9c-1-5.9,2.3-8.5,8.4-9.8C310.8,136.6,318.8,139.1,317.8,147.4z"/>
+</g>
+</svg>`;
+}
+function gooAnimationLoop() {
+    if (getParticleStyle() !== "goo") {
+        gooRafId = null;
+        return;
+    }
+    const movementScale = getMovementScale();
+    const T = (performance.now() / 1000) * GOO_TIME_SCALE * movementScale + GOO_SEEK;
+    for (let i = 0; i < gooBlobElements.length && i < gooBlobParams.length; i++) {
+        const el = gooBlobElements[i];
+        const p = gooBlobParams[i];
+        const cycle = 2 * p.duration + p.repeatDelay;
+        let localT = ((T - p.startOffset) % cycle + cycle) % cycle;
+        let y;
+        if (localT < p.duration) {
+            y = GOO_Y_MAX * (localT / p.duration);
+        }
+        else if (localT < 2 * p.duration) {
+            y = GOO_Y_MAX * (2 - localT / p.duration);
+        }
+        else {
+            y = 0;
+        }
+        el.setAttribute("transform", `translate(0, ${y})`);
+    }
+    gooRafId = requestAnimationFrame(gooAnimationLoop);
+}
+function updateGooVisibility() {
+    if (!gooLayer)
+        return;
+    if (getParticleStyle() === "goo") {
+        gooLayer.style.display = "block";
+        gooLayer.setAttribute("aria-hidden", "false");
+        if (gooRafId == null)
+            gooAnimationLoop();
+    }
+    else {
+        gooLayer.style.display = "none";
+        gooLayer.setAttribute("aria-hidden", "true");
+        if (gooRafId != null) {
+            cancelAnimationFrame(gooRafId);
+            gooRafId = null;
+        }
+    }
+}
 let playIconWrap = null;
 let sessionHintEl = null;
 let statsPanel = null;
@@ -16,6 +97,11 @@ let onDismissCallback = null;
 let startClickHandler = null;
 let settingsBtn = null;
 let prefsModal = null;
+let gooLayer = null;
+let gooBlobElements = [];
+/** Per-blob: duration (s), repeatDelay (s), startOffset (timeline seconds). CodePen: duration 14–50, repeatDelay 1–3, stagger (i+1)/0.6, timeScale 2 */
+const gooBlobParams = [];
+let gooRafId = null;
 function ensureElements(container) {
     if (playIconWrap)
         return;
@@ -73,6 +159,39 @@ function ensureElements(container) {
     else {
         settingsBtn = container.querySelector("#downregulationSettingsBtn");
     }
+    if (!container.querySelector("#downregulationGooLayer")) {
+        gooLayer = document.createElement("div");
+        gooLayer.id = "downregulationGooLayer";
+        gooLayer.className = "downregulation-goo-layer";
+        gooLayer.setAttribute("aria-hidden", "true");
+        // Lava lamp SVG from CodePen: goo filter (feGaussianBlur + feColorMatrix), lamp clip path, orange blob paths
+        gooLayer.innerHTML = getGooSvgMarkup();
+        container.appendChild(gooLayer);
+        for (let i = 0; i < 5; i++) {
+            const el = gooLayer.querySelector("#gooBlob" + i);
+            if (el)
+                gooBlobElements.push(el);
+        }
+        if (gooBlobParams.length === 0) {
+            const rand = (min, max) => min + Math.random() * (max - min);
+            for (let i = 0; i < 5; i++) {
+                gooBlobParams.push({
+                    duration: rand(14, 50),
+                    repeatDelay: rand(1, 3),
+                    startOffset: (i + 1) / 0.6,
+                });
+            }
+        }
+    }
+    else {
+        gooLayer = container.querySelector("#downregulationGooLayer");
+        gooBlobElements = [];
+        for (let i = 0; i < 5; i++) {
+            const el = gooLayer === null || gooLayer === void 0 ? void 0 : gooLayer.querySelector("#gooBlob" + i);
+            if (el)
+                gooBlobElements.push(el);
+        }
+    }
     if (!document.getElementById("downregulationPrefsModal")) {
         prefsModal = document.createElement("div");
         prefsModal.id = "downregulationPrefsModal";
@@ -92,6 +211,10 @@ function ensureElements(container) {
             <label class="downregulation-style-option">
               <input type="radio" name="downregulationParticleStyle" value="starfield">
               <span>Starfield</span>
+            </label>
+            <label class="downregulation-style-option">
+              <input type="radio" name="downregulationParticleStyle" value="goo">
+              <span>Goo</span>
             </label>
           </div>
         </div>
@@ -119,8 +242,9 @@ function ensureElements(container) {
                 setParticleSizeScale(v);
             }
             const checkedStyle = prefsModal.querySelector('input[name="downregulationParticleStyle"]:checked');
-            if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield")) {
+            if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield" || checkedStyle.value === "goo")) {
                 setParticleStyle(checkedStyle.value);
+                updateGooVisibility();
             }
             prefsModal.style.display = "none";
         };
@@ -128,8 +252,9 @@ function ensureElements(container) {
         closeBtn === null || closeBtn === void 0 ? void 0 : closeBtn.addEventListener("click", applyAndClose);
         styleRadios.forEach((radio) => {
             radio.addEventListener("change", () => {
-                if (radio.checked && (radio.value === "beads" || radio.value === "starfield")) {
+                if (radio.checked && (radio.value === "beads" || radio.value === "starfield" || radio.value === "goo")) {
                     setParticleStyle(radio.value);
+                    updateGooVisibility();
                 }
             });
         });
@@ -149,6 +274,7 @@ function ensureElements(container) {
     else {
         prefsModal = document.getElementById("downregulationPrefsModal");
     }
+    updateGooVisibility();
 }
 /**
  * Show the play icon as "tap to start" — stays visible until the user taps it. On tap, hides the icon and calls onTapToStart (workout begins).
@@ -336,6 +462,19 @@ export function bindTap(container, onTap) {
     container.addEventListener("touchend", handler, { passive: false });
 }
 /**
+ * Stop goo animation and hide the lava lamp layer (e.g. when leaving downregulation view).
+ */
+export function stopGooLayer() {
+    if (gooRafId != null) {
+        cancelAnimationFrame(gooRafId);
+        gooRafId = null;
+    }
+    if (gooLayer) {
+        gooLayer.style.display = "none";
+        gooLayer.setAttribute("aria-hidden", "true");
+    }
+}
+/**
  * Unbind tap handler and hide overlays.
  */
 export function unbindTap(container) {
@@ -352,6 +491,7 @@ export function unbindTap(container) {
     hideStats();
     hidePlayIcon();
     hideSessionHint();
+    stopGooLayer();
     if (prefsModal)
         prefsModal.style.display = "none";
 }

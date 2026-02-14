@@ -133,6 +133,7 @@ void main() {
   outColor = vec4(col, a);
 }
 `;
+// Goo mode: lava lamp is drawn by SVG overlay in overlay.ts (feGaussianBlur + feColorMatrix, lamp clip path).
 // Center circle: blue-green soft halo; lower HR = slower breath, slightly tighter (no snap, no brightness spikes)
 const CIRCLE_VERTEX = `#version 300 es
 in vec2 a_position;
@@ -190,7 +191,7 @@ let particleStyle = PARTICLE_STYLE_DEFAULT;
                 particleSizeScale = v;
         }
         const storedStyle = localStorage.getItem(PARTICLE_STYLE_STORAGE_KEY);
-        if (storedStyle === "beads" || storedStyle === "starfield")
+        if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo")
             particleStyle = storedStyle;
     }
     catch {
@@ -201,6 +202,8 @@ export function getParticleStyle() {
     return particleStyle;
 }
 export function setParticleStyle(value) {
+    if (value !== "beads" && value !== "starfield" && value !== "goo")
+        return;
     particleStyle = value;
     try {
         localStorage.setItem(PARTICLE_STYLE_STORAGE_KEY, value);
@@ -524,6 +527,9 @@ function tick() {
         gl.vertexAttribPointer(seedLoc, 1, gl.FLOAT, false, 0, 0);
         gl.drawArrays(gl.POINTS, 0, STARFIELD_PARTICLE_COUNT);
     }
+    else if (style === "goo") {
+        // Goo is drawn by SVG overlay (lava lamp with feGaussianBlur + feColorMatrix); canvas only does bg + circle
+    }
     else {
         gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
         gl.bufferSubData(gl.ARRAY_BUFFER, 0, getPositions());
@@ -617,6 +623,10 @@ export function disposeRenderer() {
 }
 export function getParticleSizeScale() {
     return particleSizeScale;
+}
+/** 0 = no/low HR (no motion), 1 = high HR. Used by goo overlay to scale animation. */
+export function getMovementScale() {
+    return smoothedMovementScale;
 }
 export function setParticleSizeScale(value) {
     const v = Math.max(1, Math.min(3, value));

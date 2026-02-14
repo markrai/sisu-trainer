@@ -145,6 +145,8 @@ void main() {
 }
 `;
 
+// Goo mode: lava lamp is drawn by SVG overlay in overlay.ts (feGaussianBlur + feColorMatrix, lamp clip path).
+
 // Center circle: blue-green soft halo; lower HR = slower breath, slightly tighter (no snap, no brightness spikes)
 const CIRCLE_VERTEX = `#version 300 es
 in vec2 a_position;
@@ -194,7 +196,7 @@ let pointTexture: WebGLTexture | null = null;
 const PARTICLE_SIZE_STORAGE_KEY = "downregulationParticleSizeScale";
 const PARTICLE_SIZE_DEFAULT = 1.0;
 const PARTICLE_STYLE_STORAGE_KEY = "downregulationParticleStyle";
-export type ParticleStyle = "beads" | "starfield";
+export type ParticleStyle = "beads" | "starfield" | "goo";
 const PARTICLE_STYLE_DEFAULT: ParticleStyle = "beads";
 let particleSizeScale = PARTICLE_SIZE_DEFAULT;
 let particleStyle: ParticleStyle = PARTICLE_STYLE_DEFAULT;
@@ -206,7 +208,7 @@ let particleStyle: ParticleStyle = PARTICLE_STYLE_DEFAULT;
       if (Number.isFinite(v) && v >= 1 && v <= 3) particleSizeScale = v;
     }
     const storedStyle = localStorage.getItem(PARTICLE_STYLE_STORAGE_KEY);
-    if (storedStyle === "beads" || storedStyle === "starfield") particleStyle = storedStyle;
+    if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo") particleStyle = storedStyle;
   } catch {
     /* ignore */
   }
@@ -217,6 +219,7 @@ export function getParticleStyle(): ParticleStyle {
 }
 
 export function setParticleStyle(value: ParticleStyle): void {
+  if (value !== "beads" && value !== "starfield" && value !== "goo") return;
   particleStyle = value;
   try {
     localStorage.setItem(PARTICLE_STYLE_STORAGE_KEY, value);
@@ -546,6 +549,8 @@ function tick(): void {
     gl.enableVertexAttribArray(seedLoc);
     gl.vertexAttribPointer(seedLoc, 1, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.POINTS, 0, STARFIELD_PARTICLE_COUNT);
+  } else if (style === "goo") {
+    // Goo is drawn by SVG overlay (lava lamp with feGaussianBlur + feColorMatrix); canvas only does bg + circle
   } else {
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer!);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, getPositions());
@@ -641,6 +646,11 @@ export function disposeRenderer(): void {
 
 export function getParticleSizeScale(): number {
   return particleSizeScale;
+}
+
+/** 0 = no/low HR (no motion), 1 = high HR. Used by goo overlay to scale animation. */
+export function getMovementScale(): number {
+  return smoothedMovementScale;
 }
 
 export function setParticleSizeScale(value: number): void {

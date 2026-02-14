@@ -747,3 +747,16 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   font-size: 0.9rem;
 }
 
+/* Goo (lava lamp) SVG overlay – full cover, pointer-events none so taps pass through */
+.downregulation-goo-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+}
+.downregulation-goo-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
