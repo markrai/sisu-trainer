@@ -191,7 +191,7 @@ let particleStyle = PARTICLE_STYLE_DEFAULT;
                 particleSizeScale = v;
         }
         const storedStyle = localStorage.getItem(PARTICLE_STYLE_STORAGE_KEY);
-        if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo")
+        if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo" || storedStyle === "noise")
             particleStyle = storedStyle;
     }
     catch {
@@ -202,7 +202,7 @@ export function getParticleStyle() {
     return particleStyle;
 }
 export function setParticleStyle(value) {
-    if (value !== "beads" && value !== "starfield" && value !== "goo")
+    if (value !== "beads" && value !== "starfield" && value !== "goo" && value !== "noise")
         return;
     particleStyle = value;
     try {
@@ -454,6 +454,7 @@ let rafId = null;
 const startTime = Date.now() / 1000;
 let smoothedTimeSpeed = 1.0;
 let smoothedMovementScale = 0.0;
+let smoothedNoiseEntropyScale = 0.0;
 let scaledTime = 0.0;
 let lastFrameTime = Date.now() / 1000;
 const SPEED_SMOOTH_ALPHA = 0.12; // Balance: smooth but visible response to HR within a few seconds
@@ -479,6 +480,12 @@ function tick() {
         targetMovementScale = Math.min(1, (currentHR - 40) / 80);
     }
     smoothedMovementScale = smoothedMovementScale + (targetMovementScale - smoothedMovementScale) * SPEED_SMOOTH_ALPHA;
+    // Noise entropy: 40 bpm → 0, 150 bpm → 1. Used by noise overlay for warp/zoom.
+    let targetNoiseEntropy = 0;
+    if (currentHR != null && currentHR >= 40) {
+        targetNoiseEntropy = Math.min(1, (currentHR - 40) / 110);
+    }
+    smoothedNoiseEntropyScale = smoothedNoiseEntropyScale + (targetNoiseEntropy - smoothedNoiseEntropyScale) * SPEED_SMOOTH_ALPHA;
     // Accumulate scaled time based on current speed (prevents "catch-up" jumps)
     scaledTime += smoothedTimeSpeed * deltaTime;
     const time = scaledTime;
@@ -529,6 +536,9 @@ function tick() {
     }
     else if (style === "goo") {
         // Goo is drawn by SVG overlay (lava lamp with feGaussianBlur + feColorMatrix); canvas only does bg + circle
+    }
+    else if (style === "noise") {
+        // Noise is drawn by canvas overlay (concentric warped circles with simplex noise)
     }
     else {
         gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
@@ -627,6 +637,10 @@ export function getParticleSizeScale() {
 /** 0 = no/low HR (no motion), 1 = high HR. Used by goo overlay to scale animation. */
 export function getMovementScale() {
     return smoothedMovementScale;
+}
+/** 0 = 40 bpm, 1 = 150 bpm. Used by noise overlay for entropy (warp/zoom). */
+export function getNoiseEntropyScale() {
+    return smoothedNoiseEntropyScale;
 }
 export function setParticleSizeScale(value) {
     const v = Math.max(1, Math.min(3, value));

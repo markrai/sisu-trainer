@@ -10,8 +10,10 @@ import {
   getParticleStyle,
   setParticleStyle,
   getMovementScale,
+  getNoiseEntropyScale,
   type ParticleStyle,
 } from "./renderer.js";
+import { SimplexNoise } from "./simplexNoise.js";
 
 const PLAY_ICON_DURATION_MS = 1000;
 const FADE_DURATION_MS = 400;
@@ -97,6 +99,92 @@ function updateGooVisibility(): void {
     if (gooRafId != null) {
       cancelAnimationFrame(gooRafId);
       gooRafId = null;
+    }
+  }
+}
+
+// Noise visualization (concentric warped circles). Based on Johan Karlsson (DonKarlssonSan) 2018; credit: Luke Smetham.
+let noiseLayer: HTMLElement | null = null;
+let noiseCanvas: HTMLCanvasElement | null = null;
+let noiseRafId: number | null = null;
+let noiseW = 0;
+let noiseH = 0;
+let noiseM = 0;
+let noiseSimplex: SimplexNoise | null = null;
+
+function noiseReset(): void {
+  noiseSimplex = new SimplexNoise();
+  if (!noiseCanvas) return;
+  noiseW = noiseCanvas.width;
+  noiseH = noiseCanvas.height;
+  noiseM = Math.min(noiseW, noiseH);
+}
+
+/** Entropy 0–1 from HR (40 bpm → 0, 150 bpm → 1). Drives warp amount and zoom. */
+function noiseCalcPoint(angle: number, r: number, timeSec: number, entropy: number): [number, number] {
+  if (!noiseSimplex) return [noiseW / 2 + Math.cos(angle) * r, noiseH / 2 + Math.sin(angle) * r];
+  const noiseFactor = entropy * 50;
+  const zoom = 50 + entropy * 150;
+  const x = Math.cos(angle) * r + noiseW / 2;
+  const y = Math.sin(angle) * r + noiseH / 2;
+  const n = noiseSimplex.noise3D(x / zoom, y / zoom, timeSec / 2) * noiseFactor;
+  const x2 = Math.cos(angle) * (r + n) + noiseW / 2;
+  const y2 = Math.sin(angle) * (r + n) + noiseH / 2;
+  return [x2, y2];
+}
+
+function noiseDrawCircle(ctx: CanvasRenderingContext2D, r: number, timeSec: number, entropy: number): void {
+  ctx.beginPath();
+  const deltaAngle = (Math.PI * 2) / 400;
+  for (let angle = 0; angle < Math.PI * 2; angle += deltaAngle) {
+    const [x, y] = noiseCalcPoint(angle, r, timeSec, entropy);
+    ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.stroke();
+}
+
+function noiseDraw(timestamp: number): void {
+  if (getParticleStyle() !== "noise") {
+    noiseRafId = null;
+    return;
+  }
+  if (!noiseCanvas || !noiseSimplex) {
+    noiseRafId = requestAnimationFrame(noiseDraw);
+    return;
+  }
+  const ctx = noiseCanvas.getContext("2d");
+  if (!ctx) {
+    noiseRafId = requestAnimationFrame(noiseDraw);
+    return;
+  }
+  const entropy = getNoiseEntropyScale();
+  const movementScale = getMovementScale();
+  const timeSec = (timestamp / 1000) * (0.3 + 0.7 * movementScale);
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, noiseW, noiseH);
+  ctx.strokeStyle = "white";
+  for (let i = 10; i < noiseM / 2 - 40; i += 10) {
+    noiseDrawCircle(ctx, i, timeSec, entropy);
+  }
+  noiseRafId = requestAnimationFrame(noiseDraw);
+}
+
+function updateNoiseVisibility(): void {
+  if (!noiseLayer || !noiseCanvas) return;
+  if (getParticleStyle() === "noise") {
+    noiseLayer.style.display = "block";
+    noiseLayer.setAttribute("aria-hidden", "false");
+    if (noiseRafId == null) {
+      noiseReset();
+      noiseRafId = requestAnimationFrame(noiseDraw);
+    }
+  } else {
+    noiseLayer.style.display = "none";
+    noiseLayer.setAttribute("aria-hidden", "true");
+    if (noiseRafId != null) {
+      cancelAnimationFrame(noiseRafId);
+      noiseRafId = null;
     }
   }
 }
@@ -203,6 +291,29 @@ function ensureElements(container: HTMLElement): void {
       if (el) gooBlobElements.push(el);
     }
   }
+  if (!container.querySelector("#downregulationNoiseLayer")) {
+    noiseLayer = document.createElement("div");
+    noiseLayer.id = "downregulationNoiseLayer";
+    noiseLayer.className = "downregulation-noise-layer";
+    noiseLayer.setAttribute("aria-hidden", "true");
+    noiseCanvas = document.createElement("canvas");
+    noiseCanvas.id = "downregulationNoiseCanvas";
+    noiseCanvas.className = "downregulation-noise-canvas";
+    noiseLayer.appendChild(noiseCanvas);
+    container.appendChild(noiseLayer);
+    const onNoiseResize = () => {
+      if (!noiseCanvas) return;
+      const rect = container.getBoundingClientRect();
+      noiseCanvas.width = rect.width;
+      noiseCanvas.height = rect.height;
+      noiseReset();
+    };
+    window.addEventListener("resize", onNoiseResize);
+    onNoiseResize();
+  } else {
+    noiseLayer = container.querySelector("#downregulationNoiseLayer");
+    noiseCanvas = container.querySelector("#downregulationNoiseCanvas");
+  }
   if (!document.getElementById("downregulationPrefsModal")) {
     prefsModal = document.createElement("div");
     prefsModal.id = "downregulationPrefsModal";
@@ -227,14 +338,20 @@ function ensureElements(container: HTMLElement): void {
               <input type="radio" name="downregulationParticleStyle" value="goo">
               <span>Goo</span>
             </label>
+            <label class="downregulation-style-option">
+              <input type="radio" name="downregulationParticleStyle" value="noise">
+              <span>Noise</span>
+            </label>
           </div>
         </div>
-        <p id="downregulationGooCredit" class="downregulation-goo-credit" style="display: none;">Credit: Luke Smetham</p>
-        <div class="modal-field">
-          <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
-          <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
+        <p id="downregulationVizCredit" class="downregulation-goo-credit" style="display: none;">Credit: Luke Smetham</p>
+        <div id="downregulationParticleSizeWrap" class="modal-field-column">
+          <div class="modal-field">
+            <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
+            <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
+          </div>
+          <p class="label downregulation-particle-size-value" id="downregulationParticleSizeValue" style="margin-top: 0.5rem; opacity: 0.8;"></p>
         </div>
-        <p class="label downregulation-particle-size-value" id="downregulationParticleSizeValue" style="margin-top: 0.5rem; opacity: 0.8;"></p>
         <button type="button" class="button" id="downregulationPrefsCloseBtn">Close</button>
       </div>
     `;
@@ -253,29 +370,40 @@ function ensureElements(container: HTMLElement): void {
         setParticleSizeScale(v);
       }
       const checkedStyle = prefsModal.querySelector<HTMLInputElement>('input[name="downregulationParticleStyle"]:checked');
-      if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield" || checkedStyle.value === "goo")) {
+      if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield" || checkedStyle.value === "goo" || checkedStyle.value === "noise")) {
         setParticleStyle(checkedStyle.value as ParticleStyle);
         updateGooVisibility();
+        updateNoiseVisibility();
       }
       prefsModal!.style.display = "none";
     };
     closeEl?.addEventListener("click", applyAndClose);
     closeBtn?.addEventListener("click", applyAndClose);
-    const gooCreditEl = prefsModal.querySelector("#downregulationGooCredit") as HTMLElement | null;
-    const updateGooCreditVisibility = () => {
+    const vizCreditEl = prefsModal.querySelector("#downregulationVizCredit") as HTMLElement | null;
+    const particleSizeWrap = prefsModal.querySelector("#downregulationParticleSizeWrap") as HTMLElement | null;
+    const updateVizCreditVisibility = () => {
       const checked = prefsModal?.querySelector<HTMLInputElement>('input[name="downregulationParticleStyle"]:checked');
-      if (gooCreditEl) gooCreditEl.style.display = checked?.value === "goo" ? "block" : "none";
+      const showCredit = checked?.value === "goo" || checked?.value === "noise";
+      if (vizCreditEl) vizCreditEl.style.display = showCredit ? "block" : "none";
+    };
+    const updateParticleSizeVisibility = () => {
+      const checked = prefsModal?.querySelector<HTMLInputElement>('input[name="downregulationParticleStyle"]:checked');
+      const showSlider = checked?.value === "beads" || checked?.value === "starfield";
+      if (particleSizeWrap) particleSizeWrap.style.display = showSlider ? "block" : "none";
     };
     styleRadios.forEach((radio) => {
       radio.addEventListener("change", () => {
-        if (radio.checked && (radio.value === "beads" || radio.value === "starfield" || radio.value === "goo")) {
+        if (radio.checked && (radio.value === "beads" || radio.value === "starfield" || radio.value === "goo" || radio.value === "noise")) {
           setParticleStyle(radio.value as ParticleStyle);
           updateGooVisibility();
-          updateGooCreditVisibility();
+          updateNoiseVisibility();
+          updateVizCreditVisibility();
+          updateParticleSizeVisibility();
         }
       });
     });
-    updateGooCreditVisibility();
+    updateVizCreditVisibility();
+    updateParticleSizeVisibility();
     slider?.addEventListener("input", () => {
       updateValueLabel();
       const v = parseFloat((slider as HTMLInputElement).value);
@@ -290,6 +418,7 @@ function ensureElements(container: HTMLElement): void {
     prefsModal = document.getElementById("downregulationPrefsModal");
   }
   updateGooVisibility();
+  updateNoiseVisibility();
 }
 
 /**
@@ -369,14 +498,16 @@ function openDownregulationPrefsModal(): void {
   const slider = prefsModal.querySelector("#downregulationParticleSizeSlider") as HTMLInputElement;
   const valueEl = prefsModal.querySelector("#downregulationParticleSizeValue") as HTMLElement;
   const styleRadios = prefsModal.querySelectorAll<HTMLInputElement>('input[name="downregulationParticleStyle"]');
-  const gooCreditEl = prefsModal.querySelector("#downregulationGooCredit") as HTMLElement | null;
+  const vizCreditEl = prefsModal.querySelector("#downregulationVizCredit") as HTMLElement | null;
+  const particleSizeWrap = prefsModal.querySelector("#downregulationParticleSizeWrap") as HTMLElement | null;
   if (slider) slider.value = String(getParticleSizeScale());
   if (valueEl && slider) valueEl.textContent = String(Math.round(parseFloat(slider.value) * 100) / 100);
   const currentStyle = getParticleStyle();
   styleRadios.forEach((radio) => {
     radio.checked = radio.value === currentStyle;
   });
-  if (gooCreditEl) gooCreditEl.style.display = currentStyle === "goo" ? "block" : "none";
+  if (vizCreditEl) vizCreditEl.style.display = currentStyle === "goo" || currentStyle === "noise" ? "block" : "none";
+  if (particleSizeWrap) particleSizeWrap.style.display = currentStyle === "beads" || currentStyle === "starfield" ? "block" : "none";
   prefsModal.style.display = "flex";
 }
 
@@ -495,6 +626,20 @@ export function stopGooLayer(): void {
 }
 
 /**
+ * Stop noise animation and hide the noise canvas layer (e.g. when leaving downregulation view).
+ */
+export function stopNoiseLayer(): void {
+  if (noiseRafId != null) {
+    cancelAnimationFrame(noiseRafId);
+    noiseRafId = null;
+  }
+  if (noiseLayer) {
+    noiseLayer.style.display = "none";
+    noiseLayer.setAttribute("aria-hidden", "true");
+  }
+}
+
+/**
  * Unbind tap handler and hide overlays.
  */
 export function unbindTap(container: HTMLElement): void {
@@ -512,5 +657,6 @@ export function unbindTap(container: HTMLElement): void {
   hidePlayIcon();
   hideSessionHint();
   stopGooLayer();
+  stopNoiseLayer();
   if (prefsModal) prefsModal.style.display = "none";
 }

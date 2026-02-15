@@ -196,7 +196,7 @@ let pointTexture: WebGLTexture | null = null;
 const PARTICLE_SIZE_STORAGE_KEY = "downregulationParticleSizeScale";
 const PARTICLE_SIZE_DEFAULT = 1.0;
 const PARTICLE_STYLE_STORAGE_KEY = "downregulationParticleStyle";
-export type ParticleStyle = "beads" | "starfield" | "goo";
+export type ParticleStyle = "beads" | "starfield" | "goo" | "noise";
 const PARTICLE_STYLE_DEFAULT: ParticleStyle = "beads";
 let particleSizeScale = PARTICLE_SIZE_DEFAULT;
 let particleStyle: ParticleStyle = PARTICLE_STYLE_DEFAULT;
@@ -208,7 +208,7 @@ let particleStyle: ParticleStyle = PARTICLE_STYLE_DEFAULT;
       if (Number.isFinite(v) && v >= 1 && v <= 3) particleSizeScale = v;
     }
     const storedStyle = localStorage.getItem(PARTICLE_STYLE_STORAGE_KEY);
-    if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo") particleStyle = storedStyle;
+    if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo" || storedStyle === "noise") particleStyle = storedStyle;
   } catch {
     /* ignore */
   }
@@ -219,7 +219,7 @@ export function getParticleStyle(): ParticleStyle {
 }
 
 export function setParticleStyle(value: ParticleStyle): void {
-  if (value !== "beads" && value !== "starfield" && value !== "goo") return;
+  if (value !== "beads" && value !== "starfield" && value !== "goo" && value !== "noise") return;
   particleStyle = value;
   try {
     localStorage.setItem(PARTICLE_STYLE_STORAGE_KEY, value);
@@ -475,6 +475,7 @@ let rafId: number | null = null;
 const startTime = Date.now() / 1000;
 let smoothedTimeSpeed = 1.0;
 let smoothedMovementScale = 0.0;
+let smoothedNoiseEntropyScale = 0.0;
 let scaledTime = 0.0;
 let lastFrameTime = Date.now() / 1000;
 const SPEED_SMOOTH_ALPHA = 0.12; // Balance: smooth but visible response to HR within a few seconds
@@ -501,6 +502,13 @@ function tick(): void {
     targetMovementScale = Math.min(1, (currentHR - 40) / 80);
   }
   smoothedMovementScale = smoothedMovementScale + (targetMovementScale - smoothedMovementScale) * SPEED_SMOOTH_ALPHA;
+
+  // Noise entropy: 40 bpm → 0, 150 bpm → 1. Used by noise overlay for warp/zoom.
+  let targetNoiseEntropy = 0;
+  if (currentHR != null && currentHR >= 40) {
+    targetNoiseEntropy = Math.min(1, (currentHR - 40) / 110);
+  }
+  smoothedNoiseEntropyScale = smoothedNoiseEntropyScale + (targetNoiseEntropy - smoothedNoiseEntropyScale) * SPEED_SMOOTH_ALPHA;
 
   // Accumulate scaled time based on current speed (prevents "catch-up" jumps)
   scaledTime += smoothedTimeSpeed * deltaTime;
@@ -551,6 +559,8 @@ function tick(): void {
     gl.drawArrays(gl.POINTS, 0, STARFIELD_PARTICLE_COUNT);
   } else if (style === "goo") {
     // Goo is drawn by SVG overlay (lava lamp with feGaussianBlur + feColorMatrix); canvas only does bg + circle
+  } else if (style === "noise") {
+    // Noise is drawn by canvas overlay (concentric warped circles with simplex noise)
   } else {
     gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer!);
     gl.bufferSubData(gl.ARRAY_BUFFER, 0, getPositions());
@@ -651,6 +661,11 @@ export function getParticleSizeScale(): number {
 /** 0 = no/low HR (no motion), 1 = high HR. Used by goo overlay to scale animation. */
 export function getMovementScale(): number {
   return smoothedMovementScale;
+}
+
+/** 0 = 40 bpm, 1 = 150 bpm. Used by noise overlay for entropy (warp/zoom). */
+export function getNoiseEntropyScale(): number {
+  return smoothedNoiseEntropyScale;
 }
 
 export function setParticleSizeScale(value: number): void {
