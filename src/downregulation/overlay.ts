@@ -229,11 +229,12 @@ function ensureElements(container: HTMLElement): void {
             </label>
           </div>
         </div>
+        <p id="downregulationGooCredit" class="downregulation-goo-credit" style="display: none;">Credit: Luke Smetham</p>
         <div class="modal-field">
           <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
           <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
         </div>
-        <p class="label" id="downregulationParticleSizeValue" style="margin-top: 0.5rem; opacity: 0.8;"></p>
+        <p class="label downregulation-particle-size-value" id="downregulationParticleSizeValue" style="margin-top: 0.5rem; opacity: 0.8;"></p>
         <button type="button" class="button" id="downregulationPrefsCloseBtn">Close</button>
       </div>
     `;
@@ -260,14 +261,21 @@ function ensureElements(container: HTMLElement): void {
     };
     closeEl?.addEventListener("click", applyAndClose);
     closeBtn?.addEventListener("click", applyAndClose);
+    const gooCreditEl = prefsModal.querySelector("#downregulationGooCredit") as HTMLElement | null;
+    const updateGooCreditVisibility = () => {
+      const checked = prefsModal?.querySelector<HTMLInputElement>('input[name="downregulationParticleStyle"]:checked');
+      if (gooCreditEl) gooCreditEl.style.display = checked?.value === "goo" ? "block" : "none";
+    };
     styleRadios.forEach((radio) => {
       radio.addEventListener("change", () => {
         if (radio.checked && (radio.value === "beads" || radio.value === "starfield" || radio.value === "goo")) {
           setParticleStyle(radio.value as ParticleStyle);
           updateGooVisibility();
+          updateGooCreditVisibility();
         }
       });
     });
+    updateGooCreditVisibility();
     slider?.addEventListener("input", () => {
       updateValueLabel();
       const v = parseFloat((slider as HTMLInputElement).value);
@@ -361,12 +369,14 @@ function openDownregulationPrefsModal(): void {
   const slider = prefsModal.querySelector("#downregulationParticleSizeSlider") as HTMLInputElement;
   const valueEl = prefsModal.querySelector("#downregulationParticleSizeValue") as HTMLElement;
   const styleRadios = prefsModal.querySelectorAll<HTMLInputElement>('input[name="downregulationParticleStyle"]');
+  const gooCreditEl = prefsModal.querySelector("#downregulationGooCredit") as HTMLElement | null;
   if (slider) slider.value = String(getParticleSizeScale());
   if (valueEl && slider) valueEl.textContent = String(Math.round(parseFloat(slider.value) * 100) / 100);
   const currentStyle = getParticleStyle();
   styleRadios.forEach((radio) => {
     radio.checked = radio.value === currentStyle;
   });
+  if (gooCreditEl) gooCreditEl.style.display = currentStyle === "goo" ? "block" : "none";
   prefsModal.style.display = "flex";
 }
 

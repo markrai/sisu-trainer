@@ -746,6 +746,16 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .downregulation-style-option span {
   font-size: 0.9rem;
 }
+.downregulation-goo-credit {
+  margin: 0 0 14px 0;
+  font-size: 0.7rem;
+  opacity: 0.75;
+  text-align: right;
+  color: #e04040;
+}
+.downregulation-particle-size-value {
+  text-align: center;
+}
 
 /* Goo (lava lamp) SVG overlay – full cover, pointer-events none so taps pass through */
 .downregulation-goo-layer {
