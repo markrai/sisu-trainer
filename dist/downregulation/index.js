@@ -13,7 +13,7 @@ import { startSession, endSession, cancelSession } from "./sessionStats.js";
 import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap, showSessionHint, hideSessionHint, teardownOverlay, } from "./overlay.js";
 import { generateUUID, emitWorkoutSummary } from "../workoutSummary.js";
 import { startSession as startStorageSession, clearSession } from "../sessionStore.js";
-import { storeHrSample } from "../workoutStorage.js";
+import { storeHrSample, getHrSamples } from "../workoutStorage.js";
 import { generateDownregulationSummary } from "./workoutSummary.js";
 import { startCalmAudio, stopCalmAudio } from "./calmAudio.js";
 const DOWNREGULATION_DAY = "Downregulation";
@@ -83,6 +83,7 @@ async function endSessionFromTap() {
     const startedAt = downregulationSessionStartTime;
     downregulationSessionId = null;
     downregulationSessionStartTime = null;
+    let hrSamples = [];
     if (sessionId != null && startedAt != null) {
         const endedAt = Date.now();
         try {
@@ -92,6 +93,13 @@ async function endSessionFromTap() {
         catch (err) {
             console.error("[Downregulation] Failed to save workout summary:", err);
         }
+        try {
+            const samples = await getHrSamples(sessionId);
+            hrSamples = samples.map((s) => ({ timestamp_sec: s.timestamp_sec, hr: s.hr }));
+        }
+        catch (err) {
+            console.error("[Downregulation] Failed to load HR samples for graph:", err);
+        }
     }
     clearSession(DOWNREGULATION_DAY);
     if (!running || container !== activeContainer)
@@ -100,7 +108,7 @@ async function endSessionFromTap() {
         if (!running || container !== activeContainer)
             return;
         showReadyState();
-    });
+    }, hrSamples);
 }
 /**
  * Start the Downregulation view: initialize renderer, keep HR display updated, and enter ready state.
