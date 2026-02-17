@@ -479,6 +479,7 @@ let smoothedNoiseEntropyScale = 0.0;
 let scaledTime = 0.0;
 let lastFrameTime = Date.now() / 1000;
 const SPEED_SMOOTH_ALPHA = 0.12; // Balance: smooth but visible response to HR within a few seconds
+const NOISE_ENTROPY_SMOOTH_ALPHA = 0.04; // Slower than speed/movement so circle warp responds gently to HR
 
 function tick(): void {
   if (!gl || !program) return;
@@ -508,7 +509,7 @@ function tick(): void {
   if (currentHR != null && currentHR >= 40) {
     targetNoiseEntropy = Math.min(1, (currentHR - 40) / 110);
   }
-  smoothedNoiseEntropyScale = smoothedNoiseEntropyScale + (targetNoiseEntropy - smoothedNoiseEntropyScale) * SPEED_SMOOTH_ALPHA;
+  smoothedNoiseEntropyScale = smoothedNoiseEntropyScale + (targetNoiseEntropy - smoothedNoiseEntropyScale) * NOISE_ENTROPY_SMOOTH_ALPHA;
 
   // Accumulate scaled time based on current speed (prevents "catch-up" jumps)
   scaledTime += smoothedTimeSpeed * deltaTime;

@@ -246,7 +246,7 @@ function ensureElements(container) {
         settingsBtn.id = "downregulationSettingsBtn";
         settingsBtn.className = "downregulation-settings-btn";
         settingsBtn.setAttribute("aria-label", "Downregulation preferences");
-        settingsBtn.innerHTML = '<img src="settings.svg" alt="" width="28" height="28">';
+        settingsBtn.innerHTML = '<img src="/settings.svg" alt="" width="28" height="28">';
         settingsBtn.onclick = openDownregulationPrefsModal;
         container.appendChild(settingsBtn);
     }

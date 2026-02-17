@@ -569,7 +569,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   }
 }
 
-/* Downregulation: faded HR readout bottom-left */
+/* Downregulation: faded HR readout bottom-left (above goo/noise layers so it stays visible) */
 .downregulation-hr-display {
   position: absolute;
   bottom: 1rem;
@@ -579,6 +579,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   color: rgba(255, 255, 255, 0.4);
   opacity: 0.7;
   pointer-events: none;
+  z-index: 7;
 }
 
 /* Downregulation: tap-to-stop play icon (white, center, 1s then fade) */

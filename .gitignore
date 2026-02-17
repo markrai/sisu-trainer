@@ -1,3 +1,6 @@
 /deploy
 deploy/
 deploy-upload.bat
+
+# Documentation (prompts / specs for LLMs; optional to track in repo)
+docs/
