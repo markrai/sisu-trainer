@@ -666,6 +666,19 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   color: rgba(255, 255, 255, 0.85);
   line-height: 1.5;
 }
+.downregulation-hr-graph-wrap {
+  width: 100%;
+  height: 120px;
+  margin-bottom: 1rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.25);
+}
+.downregulation-hr-graph {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 .downregulation-stats-line {
   margin: 0.35rem 0;
 }

@@ -23,7 +23,7 @@ import {
 } from "./overlay.js";
 import { generateUUID, emitWorkoutSummary } from "../workoutSummary.js";
 import { startSession as startStorageSession, clearSession } from "../sessionStore.js";
-import { storeHrSample } from "../workoutStorage.js";
+import { storeHrSample, getHrSamples } from "../workoutStorage.js";
 import { generateDownregulationSummary } from "./workoutSummary.js";
 import { startCalmAudio, stopCalmAudio } from "./calmAudio.js";
 
@@ -100,6 +100,7 @@ async function endSessionFromTap(): Promise<void> {
   downregulationSessionId = null;
   downregulationSessionStartTime = null;
 
+  let hrSamples: { timestamp_sec: number; hr: number }[] = [];
   if (sessionId != null && startedAt != null) {
     const endedAt = Date.now();
     try {
@@ -108,6 +109,12 @@ async function endSessionFromTap(): Promise<void> {
     } catch (err) {
       console.error("[Downregulation] Failed to save workout summary:", err);
     }
+    try {
+      const samples = await getHrSamples(sessionId);
+      hrSamples = samples.map((s) => ({ timestamp_sec: s.timestamp_sec, hr: s.hr }));
+    } catch (err) {
+      console.error("[Downregulation] Failed to load HR samples for graph:", err);
+    }
   }
   clearSession(DOWNREGULATION_DAY);
 
@@ -115,7 +122,7 @@ async function endSessionFromTap(): Promise<void> {
   showStats(activeContainer, stats, () => {
     if (!running || container !== activeContainer) return;
     showReadyState();
-  });
+  }, hrSamples);
 }
 
 /**

@@ -659,14 +659,107 @@ export function showPlayIcon(container: HTMLElement, onComplete: () => void): vo
   }, PLAY_ICON_DURATION_MS);
 }
 
+/** HR sample for the session graph: time in seconds from start, BPM */
+export type HrSampleForGraph = { timestamp_sec: number; hr: number };
+
+function drawHrGraph(canvas: HTMLCanvasElement, samples: HrSampleForGraph[]): void {
+  if (samples.length < 2) return;
+  const dpr = Math.min(window.devicePixelRatio ?? 1, 2);
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  ctx.scale(dpr, dpr);
+  const width = rect.width;
+  const height = rect.height;
+  const padding = { top: 10, right: 8, bottom: 20, left: 36 };
+  const chartLeft = padding.left;
+  const chartTop = padding.top;
+  const chartWidth = width - padding.left - padding.right;
+  const chartHeight = height - padding.top - padding.bottom;
+  if (chartWidth <= 0 || chartHeight <= 0) return;
+
+  const maxT = Math.max(...samples.map((s) => s.timestamp_sec), 1);
+  const hrs = samples.map((s) => s.hr);
+  const minHr = Math.min(...hrs);
+  const maxHr = Math.max(...hrs);
+  const hrRange = maxHr - minHr || 1;
+  const hrMin = Math.max(0, minHr - hrRange * 0.1);
+  const hrMax = maxHr + hrRange * 0.1;
+
+  ctx.fillStyle = "rgba(255,255,255,0.06)";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1;
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
+  const yTicks = 4;
+  for (let i = 0; i <= yTicks; i++) {
+    const y = chartTop + (chartHeight * i) / yTicks;
+    ctx.beginPath();
+    ctx.moveTo(chartLeft, y);
+    ctx.lineTo(chartLeft + chartWidth, y);
+    ctx.stroke();
+    const bpm = Math.round(hrMax - (hrMax - hrMin) * (i / yTicks));
+    ctx.fillText(String(bpm), 2, y + 4);
+  }
+  const xTicks = 4;
+  for (let i = 0; i <= xTicks; i++) {
+    const x = chartLeft + (chartWidth * i) / xTicks;
+    ctx.beginPath();
+    ctx.moveTo(x, chartTop);
+    ctx.lineTo(x, chartTop + chartHeight);
+    ctx.stroke();
+    const t = (maxT * i) / xTicks;
+    const label = t >= 60 ? `${Math.round(t / 60)}m` : `${Math.round(t)}s`;
+    ctx.fillText(label, x - 10, chartTop + chartHeight + 14);
+  }
+
+  ctx.beginPath();
+  const first = samples[0];
+  const x0 = chartLeft + (first.timestamp_sec / maxT) * chartWidth;
+  const y0 = chartTop + chartHeight - ((first.hr - hrMin) / (hrMax - hrMin)) * chartHeight;
+  ctx.moveTo(x0, y0);
+  for (let i = 1; i < samples.length; i++) {
+    const s = samples[i];
+    const x = chartLeft + (s.timestamp_sec / maxT) * chartWidth;
+    const y = chartTop + chartHeight - ((s.hr - hrMin) / (hrMax - hrMin)) * chartHeight;
+    ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = "rgba(61, 124, 255, 0.9)";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+
 /**
  * Show the stats panel with the given stats. Done button calls onDismiss.
+ * If hrSamples is provided and non-empty, an HR-over-time graph is shown above the stats.
  */
-export function showStats(container: HTMLElement, stats: DownregulationSessionStats, onDismiss: () => void): void {
+export function showStats(
+  container: HTMLElement,
+  stats: DownregulationSessionStats,
+  onDismiss: () => void,
+  hrSamples?: HrSampleForGraph[]
+): void {
   ensureElements(container);
   onDismissCallback = onDismiss;
   if (statsContent) {
-    statsContent.innerHTML = stats.summaryLines.map((line) => `<p class="downregulation-stats-line">${escapeHtml(line)}</p>`).join("");
+    const hasGraph = hrSamples != null && hrSamples.length >= 2;
+    const graphHtml = hasGraph
+      ? `<div class="downregulation-hr-graph-wrap" aria-hidden="true"><canvas class="downregulation-hr-graph" width="400" height="120"></canvas></div>`
+      : "";
+    const linesHtml = stats.summaryLines.map((line) => `<p class="downregulation-stats-line">${escapeHtml(line)}</p>`).join("");
+    statsContent.innerHTML = graphHtml + linesHtml;
+    if (hasGraph) {
+      const canvas = statsContent.querySelector(".downregulation-hr-graph") as HTMLCanvasElement | null;
+      if (canvas) {
+        requestAnimationFrame(() => drawHrGraph(canvas, hrSamples!));
+      }
+    }
   }
   if (statsPanel) {
     statsPanel.style.display = "block";
