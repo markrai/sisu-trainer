@@ -25,6 +25,7 @@ import { generateUUID, emitWorkoutSummary } from "../workoutSummary.js";
 import { startSession as startStorageSession, clearSession } from "../sessionStore.js";
 import { storeHrSample } from "../workoutStorage.js";
 import { generateDownregulationSummary } from "./workoutSummary.js";
+import { startCalmAudio, stopCalmAudio } from "./calmAudio.js";
 
 const DOWNREGULATION_DAY = "Downregulation";
 
@@ -77,6 +78,7 @@ function startSessionFromPlay(): void {
   startSession();
   uiState = "active";
   showSessionHint(container);
+  startCalmAudio();
   bindTap(container, () => {
     void endSessionFromTap();
   });
@@ -90,6 +92,7 @@ async function endSessionFromTap(): Promise<void> {
   uiState = "summary";
   unbindTap(activeContainer);
   hideSessionHint();
+  stopCalmAudio();
 
   const stats = endSession();
   const sessionId = downregulationSessionId;
@@ -175,6 +178,7 @@ export function stopDownregulationView(): void {
   uiState = "ready";
   cancelSession();
   resetSessionContext();
+  stopCalmAudio();
 
   if (container) teardownOverlay(container);
   else teardownOverlay();

@@ -14,6 +14,7 @@ import {
   type ParticleStyle,
 } from "./renderer.js";
 import { SimplexNoise } from "./simplexNoise.js";
+import { getSoundStyle, setSoundStyle, restartCalmAudioIfRunning, type SoundStyle } from "./calmAudio.js";
 
 const PLAY_ICON_DURATION_MS = 1000;
 const FADE_DURATION_MS = 400;
@@ -326,34 +327,59 @@ function ensureElements(container: HTMLElement): void {
       <div class="modal downregulation-prefs-modal">
         <div class="close-btn" id="downregulationPrefsClose" aria-label="Close">✕</div>
         <h3 class="downregulation-stats-title">Downregulation preferences</h3>
-        <div class="modal-field modal-field-column">
-          <span class="modal-label">Particle style</span>
-          <div class="downregulation-style-toggle" role="group" aria-label="Particle style">
-            <label class="downregulation-style-option">
-              <input type="radio" name="downregulationParticleStyle" value="beads" checked>
-              <span>Beads</span>
-            </label>
-            <label class="downregulation-style-option">
-              <input type="radio" name="downregulationParticleStyle" value="starfield">
-              <span>Starfield</span>
-            </label>
-            <label class="downregulation-style-option">
-              <input type="radio" name="downregulationParticleStyle" value="goo">
-              <span>Goo</span>
-            </label>
-            <label class="downregulation-style-option">
-              <input type="radio" name="downregulationParticleStyle" value="noise">
-              <span>Noise</span>
-            </label>
+        <div class="tab-buttons downregulation-prefs-tabs" role="tablist">
+          <button type="button" class="tab-button active" role="tab" aria-selected="true" aria-controls="downregulationPrefsVizTab" id="downregulationPrefsVizTabBtn" data-tab="viz">Visualization</button>
+          <button type="button" class="tab-button" role="tab" aria-selected="false" aria-controls="downregulationPrefsSoundTab" id="downregulationPrefsSoundTabBtn" data-tab="sound">Sound</button>
+        </div>
+        <div id="downregulationPrefsVizTab" class="tab-content active" role="tabpanel">
+          <div class="modal-field modal-field-column">
+            <span class="modal-label">Particle style</span>
+            <div class="downregulation-style-toggle" role="group" aria-label="Particle style">
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationParticleStyle" value="beads" checked>
+                <span>Beads</span>
+              </label>
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationParticleStyle" value="starfield">
+                <span>Starfield</span>
+              </label>
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationParticleStyle" value="goo">
+                <span>Goo</span>
+              </label>
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationParticleStyle" value="noise">
+                <span>Noise</span>
+              </label>
+            </div>
+          </div>
+          <p id="downregulationVizCredit" class="downregulation-goo-credit" style="display: none;">Credit: Luke Smetham</p>
+          <div id="downregulationParticleSizeWrap" class="modal-field-column">
+            <div class="modal-field">
+              <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
+              <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
+            </div>
+            <p class="label downregulation-particle-size-value" id="downregulationParticleSizeValue" style="margin-top: 0.5rem; opacity: 0.8;"></p>
           </div>
         </div>
-        <p id="downregulationVizCredit" class="downregulation-goo-credit" style="display: none;">Credit: Luke Smetham</p>
-        <div id="downregulationParticleSizeWrap" class="modal-field-column">
-          <div class="modal-field">
-            <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
-            <input type="range" id="downregulationParticleSizeSlider" min="1" max="3" step="0.05" value="1">
+        <div id="downregulationPrefsSoundTab" class="tab-content" role="tabpanel">
+          <div class="modal-field modal-field-column">
+            <span class="modal-label">Sound</span>
+            <div class="downregulation-style-toggle" role="group" aria-label="Sound style">
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationSoundStyle" value="binaural" checked>
+                <span>Binaural</span>
+              </label>
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationSoundStyle" value="whale">
+                <span>Whale</span>
+              </label>
+              <label class="downregulation-style-option">
+                <input type="radio" name="downregulationSoundStyle" value="none">
+                <span>None</span>
+              </label>
+            </div>
           </div>
-          <p class="label downregulation-particle-size-value" id="downregulationParticleSizeValue" style="margin-top: 0.5rem; opacity: 0.8;"></p>
         </div>
         <button type="button" class="button" id="downregulationPrefsCloseBtn">Close</button>
       </div>
@@ -377,6 +403,10 @@ function ensureElements(container: HTMLElement): void {
         setParticleStyle(checkedStyle.value as ParticleStyle);
         updateGooVisibility();
         updateNoiseVisibility();
+      }
+      const checkedSound = prefsModal.querySelector<HTMLInputElement>('input[name="downregulationSoundStyle"]:checked');
+      if (checkedSound && (checkedSound.value === "binaural" || checkedSound.value === "whale" || checkedSound.value === "none")) {
+        setSoundStyle(checkedSound.value as SoundStyle);
       }
       prefsModal!.style.display = "none";
     };
@@ -407,6 +437,29 @@ function ensureElements(container: HTMLElement): void {
     });
     updateVizCreditVisibility();
     updateParticleSizeVisibility();
+    const vizTabBtn = prefsModal.querySelector("#downregulationPrefsVizTabBtn");
+    const soundTabBtn = prefsModal.querySelector("#downregulationPrefsSoundTabBtn");
+    const vizTab = prefsModal.querySelector("#downregulationPrefsVizTab");
+    const soundTab = prefsModal.querySelector("#downregulationPrefsSoundTab");
+    const switchPrefsTab = (tab: "viz" | "sound") => {
+      vizTabBtn?.classList.toggle("active", tab === "viz");
+      soundTabBtn?.classList.toggle("active", tab === "sound");
+      vizTab?.classList.toggle("active", tab === "viz");
+      soundTab?.classList.toggle("active", tab === "sound");
+      (vizTabBtn as HTMLElement)?.setAttribute("aria-selected", String(tab === "viz"));
+      (soundTabBtn as HTMLElement)?.setAttribute("aria-selected", String(tab === "sound"));
+    };
+    vizTabBtn?.addEventListener("click", () => switchPrefsTab("viz"));
+    soundTabBtn?.addEventListener("click", () => switchPrefsTab("sound"));
+    const soundRadios = prefsModal.querySelectorAll<HTMLInputElement>('input[name="downregulationSoundStyle"]');
+    soundRadios.forEach((radio) => {
+      radio.addEventListener("change", () => {
+        if (radio.checked && (radio.value === "binaural" || radio.value === "whale" || radio.value === "none")) {
+          setSoundStyle(radio.value as SoundStyle);
+          restartCalmAudioIfRunning();
+        }
+      });
+    });
     slider?.addEventListener("input", () => {
       updateValueLabel();
       const v = parseFloat((slider as HTMLInputElement).value);
@@ -543,6 +596,11 @@ function openDownregulationPrefsModal(): void {
   });
   if (vizCreditEl) vizCreditEl.style.display = currentStyle === "goo" || currentStyle === "noise" ? "block" : "none";
   if (particleSizeWrap) particleSizeWrap.style.display = currentStyle === "beads" || currentStyle === "starfield" ? "block" : "none";
+  const soundRadiosOpen = prefsModal.querySelectorAll<HTMLInputElement>('input[name="downregulationSoundStyle"]');
+  const currentSound = getSoundStyle();
+  soundRadiosOpen.forEach((radio) => {
+    radio.checked = radio.value === currentSound;
+  });
   prefsModal.style.display = "flex";
 }
 

@@ -712,6 +712,12 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .downregulation-prefs-modal {
   max-width: 20rem;
 }
+.downregulation-prefs-modal .tab-content {
+  min-height: 0;
+}
+.downregulation-prefs-tabs.tab-buttons {
+  margin-bottom: 1rem;
+}
 .downregulation-prefs-modal .modal-field-column {
   flex-direction: column;
   align-items: stretch;
