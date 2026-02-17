@@ -722,6 +722,16 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   flex-direction: column;
   align-items: stretch;
 }
+
+/* Target HR number input: uses .modal-input; constrain width and style number spinners for dark theme */
+.downregulation-prefs-modal .downregulation-noise-target-hr {
+  max-width: 6rem;
+}
+.downregulation-prefs-modal .downregulation-noise-target-hr::-webkit-outer-spin-button,
+.downregulation-prefs-modal .downregulation-noise-target-hr::-webkit-inner-spin-button {
+  opacity: 0.7;
+  color: #fff;
+}
 .downregulation-style-toggle {
   display: flex;
   gap: 0;

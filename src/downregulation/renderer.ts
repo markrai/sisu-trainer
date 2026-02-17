@@ -198,8 +198,12 @@ const PARTICLE_SIZE_DEFAULT = 1.0;
 const PARTICLE_STYLE_STORAGE_KEY = "downregulationParticleStyle";
 export type ParticleStyle = "beads" | "starfield" | "goo" | "noise";
 const PARTICLE_STYLE_DEFAULT: ParticleStyle = "beads";
+const NOISE_ENTROPY_MIN_BPM_KEY = "downregulationNoiseEntropyMinBpm";
+const NOISE_ENTROPY_MIN_BPM_DEFAULT = 40;
+const NOISE_ENTROPY_MAX_BPM = 150;
 let particleSizeScale = PARTICLE_SIZE_DEFAULT;
 let particleStyle: ParticleStyle = PARTICLE_STYLE_DEFAULT;
+let noiseEntropyMinBpm = NOISE_ENTROPY_MIN_BPM_DEFAULT;
 (function loadParticlePreferences() {
   try {
     const storedSize = localStorage.getItem(PARTICLE_SIZE_STORAGE_KEY);
@@ -209,6 +213,11 @@ let particleStyle: ParticleStyle = PARTICLE_STYLE_DEFAULT;
     }
     const storedStyle = localStorage.getItem(PARTICLE_STYLE_STORAGE_KEY);
     if (storedStyle === "beads" || storedStyle === "starfield" || storedStyle === "goo" || storedStyle === "noise") particleStyle = storedStyle;
+    const storedMinBpm = localStorage.getItem(NOISE_ENTROPY_MIN_BPM_KEY);
+    if (storedMinBpm != null) {
+      const v = parseInt(storedMinBpm, 10);
+      if (Number.isFinite(v) && v >= 30 && v < NOISE_ENTROPY_MAX_BPM) noiseEntropyMinBpm = v;
+    }
   } catch {
     /* ignore */
   }
@@ -223,6 +232,20 @@ export function setParticleStyle(value: ParticleStyle): void {
   particleStyle = value;
   try {
     localStorage.setItem(PARTICLE_STYLE_STORAGE_KEY, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getNoiseEntropyMinBpm(): number {
+  return noiseEntropyMinBpm;
+}
+
+export function setNoiseEntropyMinBpm(value: number): void {
+  const v = Math.floor(Math.max(30, Math.min(NOISE_ENTROPY_MAX_BPM - 1, value)));
+  noiseEntropyMinBpm = v;
+  try {
+    localStorage.setItem(NOISE_ENTROPY_MIN_BPM_KEY, String(v));
   } catch {
     /* ignore */
   }
@@ -504,10 +527,12 @@ function tick(): void {
   }
   smoothedMovementScale = smoothedMovementScale + (targetMovementScale - smoothedMovementScale) * SPEED_SMOOTH_ALPHA;
 
-  // Noise entropy: 40 bpm → 0, 150 bpm → 1. Used by noise overlay for warp/zoom.
+  // Noise entropy: noiseEntropyMinBpm → 0, 150 bpm → 1. Used by noise overlay for warp/zoom.
+  const minBpm = noiseEntropyMinBpm;
+  const rangeBpm = NOISE_ENTROPY_MAX_BPM - minBpm;
   let targetNoiseEntropy = 0;
-  if (currentHR != null && currentHR >= 40) {
-    targetNoiseEntropy = Math.min(1, (currentHR - 40) / 110);
+  if (currentHR != null && rangeBpm > 0 && currentHR >= minBpm) {
+    targetNoiseEntropy = Math.min(1, (currentHR - minBpm) / rangeBpm);
   }
   smoothedNoiseEntropyScale = smoothedNoiseEntropyScale + (targetNoiseEntropy - smoothedNoiseEntropyScale) * NOISE_ENTROPY_SMOOTH_ALPHA;
 

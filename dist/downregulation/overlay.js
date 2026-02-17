@@ -2,7 +2,7 @@
  * Downregulation overlay: tap-to-stop, play icon (1s fade), and session stats panel.
  * Keeps UI and behavior in one place so the main index stays clean.
  */
-import { getParticleSizeScale, setParticleSizeScale, getParticleStyle, setParticleStyle, getMovementScale, getNoiseEntropyScale, } from "./renderer.js";
+import { getParticleSizeScale, setParticleSizeScale, getParticleStyle, setParticleStyle, getMovementScale, getNoiseEntropyScale, getNoiseEntropyMinBpm, setNoiseEntropyMinBpm, } from "./renderer.js";
 import { SimplexNoise } from "./simplexNoise.js";
 import { getSoundStyle, setSoundStyle, restartCalmAudioIfRunning } from "./calmAudio.js";
 const PLAY_ICON_DURATION_MS = 1000;
@@ -351,6 +351,12 @@ function ensureElements(container) {
             </div>
           </div>
           <p id="downregulationVizCredit" class="downregulation-goo-credit" style="display: none;">Credit: Luke Smetham</p>
+          <div id="downregulationNoiseTargetHrWrap" class="modal-field-column" style="display: none;">
+            <div class="modal-field">
+              <label class="modal-label" for="downregulationNoiseTargetHr">Target HR:</label>
+              <input type="number" id="downregulationNoiseTargetHr" class="modal-input downregulation-noise-target-hr" min="30" max="149" step="1" value="40" aria-label="Target HR (circles stop below this)">
+            </div>
+          </div>
           <div id="downregulationParticleSizeWrap" class="modal-field-column">
             <div class="modal-field">
               <label class="modal-label" for="downregulationParticleSizeSlider">Increase size of particles</label>
@@ -396,6 +402,11 @@ function ensureElements(container) {
                 const v = parseFloat(slider.value);
                 setParticleSizeScale(v);
             }
+            if (noiseTargetHrInput) {
+                const v = parseInt(noiseTargetHrInput.value, 10);
+                if (Number.isFinite(v))
+                    setNoiseEntropyMinBpm(v);
+            }
             const checkedStyle = prefsModal.querySelector('input[name="downregulationParticleStyle"]:checked');
             if (checkedStyle && (checkedStyle.value === "beads" || checkedStyle.value === "starfield" || checkedStyle.value === "goo" || checkedStyle.value === "noise")) {
                 setParticleStyle(checkedStyle.value);
@@ -412,6 +423,8 @@ function ensureElements(container) {
         closeBtn === null || closeBtn === void 0 ? void 0 : closeBtn.addEventListener("click", applyAndClose);
         const vizCreditEl = prefsModal.querySelector("#downregulationVizCredit");
         const particleSizeWrap = prefsModal.querySelector("#downregulationParticleSizeWrap");
+        const noiseTargetHrWrap = prefsModal.querySelector("#downregulationNoiseTargetHrWrap");
+        const noiseTargetHrInput = prefsModal.querySelector("#downregulationNoiseTargetHr");
         const updateVizCreditVisibility = () => {
             const checked = prefsModal === null || prefsModal === void 0 ? void 0 : prefsModal.querySelector('input[name="downregulationParticleStyle"]:checked');
             const showCredit = (checked === null || checked === void 0 ? void 0 : checked.value) === "goo" || (checked === null || checked === void 0 ? void 0 : checked.value) === "noise";
@@ -424,6 +437,12 @@ function ensureElements(container) {
             if (particleSizeWrap)
                 particleSizeWrap.style.display = showSlider ? "block" : "none";
         };
+        const updateNoiseTargetHrVisibility = () => {
+            const checked = prefsModal === null || prefsModal === void 0 ? void 0 : prefsModal.querySelector('input[name="downregulationParticleStyle"]:checked');
+            const show = (checked === null || checked === void 0 ? void 0 : checked.value) === "noise";
+            if (noiseTargetHrWrap)
+                noiseTargetHrWrap.style.display = show ? "block" : "none";
+        };
         styleRadios.forEach((radio) => {
             radio.addEventListener("change", () => {
                 if (radio.checked && (radio.value === "beads" || radio.value === "starfield" || radio.value === "goo" || radio.value === "noise")) {
@@ -432,11 +451,19 @@ function ensureElements(container) {
                     updateNoiseVisibility();
                     updateVizCreditVisibility();
                     updateParticleSizeVisibility();
+                    updateNoiseTargetHrVisibility();
                 }
             });
         });
+        noiseTargetHrInput === null || noiseTargetHrInput === void 0 ? void 0 : noiseTargetHrInput.addEventListener("input", () => {
+            var _a;
+            const v = parseInt((_a = noiseTargetHrInput === null || noiseTargetHrInput === void 0 ? void 0 : noiseTargetHrInput.value) !== null && _a !== void 0 ? _a : "", 10);
+            if (Number.isFinite(v))
+                setNoiseEntropyMinBpm(v);
+        });
         updateVizCreditVisibility();
         updateParticleSizeVisibility();
+        updateNoiseTargetHrVisibility();
         const vizTabBtn = prefsModal.querySelector("#downregulationPrefsVizTabBtn");
         const soundTabBtn = prefsModal.querySelector("#downregulationPrefsSoundTabBtn");
         const vizTab = prefsModal.querySelector("#downregulationPrefsVizTab");
@@ -602,6 +629,12 @@ function openDownregulationPrefsModal() {
         vizCreditEl.style.display = currentStyle === "goo" || currentStyle === "noise" ? "block" : "none";
     if (particleSizeWrap)
         particleSizeWrap.style.display = currentStyle === "beads" || currentStyle === "starfield" ? "block" : "none";
+    const noiseTargetHrWrapOpen = prefsModal.querySelector("#downregulationNoiseTargetHrWrap");
+    const noiseTargetHrInputOpen = prefsModal.querySelector("#downregulationNoiseTargetHr");
+    if (noiseTargetHrWrapOpen)
+        noiseTargetHrWrapOpen.style.display = currentStyle === "noise" ? "block" : "none";
+    if (noiseTargetHrInputOpen)
+        noiseTargetHrInputOpen.value = String(getNoiseEntropyMinBpm());
     const soundRadiosOpen = prefsModal.querySelectorAll('input[name="downregulationSoundStyle"]');
     const currentSound = getSoundStyle();
     soundRadiosOpen.forEach((radio) => {
