@@ -194,6 +194,9 @@ let sessionHintEl: HTMLElement | null = null;
 let statsPanel: HTMLElement | null = null;
 let statsContent: HTMLElement | null = null;
 let doneButton: HTMLElement | null = null;
+let playHideTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let sessionHintFadeTimeoutId: ReturnType<typeof setTimeout> | null = null;
+let sessionHintHideTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let tapHandler: ((e: MouseEvent | TouchEvent) => void) | null = null;
 let onDismissCallback: (() => void) | null = null;
 let startClickHandler: ((e: MouseEvent | TouchEvent) => void) | null = null;
@@ -244,7 +247,7 @@ function ensureElements(container: HTMLElement): void {
     sessionHintEl.id = "downregulationSessionHint";
     sessionHintEl.className = "downregulation-session-hint";
     sessionHintEl.setAttribute("aria-hidden", "true");
-    sessionHintEl.textContent = "Try to calm the starfield...";
+    sessionHintEl.textContent = "Try to calm the motion";
     container.appendChild(sessionHintEl);
   } else {
     sessionHintEl = container.querySelector("#downregulationSessionHint");
@@ -427,6 +430,11 @@ function ensureElements(container: HTMLElement): void {
 export function showPlayIconForStart(container: HTMLElement, onTapToStart: () => void): void {
   ensureElements(container);
   if (!playIconWrap) return;
+  if (startClickHandler) {
+    playIconWrap.removeEventListener("click", startClickHandler);
+    playIconWrap.removeEventListener("touchend", startClickHandler);
+    startClickHandler = null;
+  }
   playIconWrap.classList.remove("downregulation-play-wrap--fade");
   playIconWrap.classList.add("downregulation-play-wrap--clickable");
   playIconWrap.style.display = "flex";
@@ -440,9 +448,14 @@ export function showPlayIconForStart(container: HTMLElement, onTapToStart: () =>
     playIconWrap?.removeEventListener("touchend", handler);
     startClickHandler = null;
     playIconWrap?.classList.add("downregulation-play-wrap--fade");
-    window.setTimeout(() => {
+    onTapToStart();
+    if (playHideTimeoutId != null) {
+      window.clearTimeout(playHideTimeoutId);
+      playHideTimeoutId = null;
+    }
+    playHideTimeoutId = window.setTimeout(() => {
+      playHideTimeoutId = null;
       hidePlayIcon();
-      onTapToStart();
     }, FADE_DURATION_MS);
   };
   startClickHandler = handler;
@@ -454,6 +467,10 @@ export function showPlayIconForStart(container: HTMLElement, onTapToStart: () =>
  * Hide the play icon (e.g. after user tapped to start the workout).
  */
 export function hidePlayIcon(): void {
+  if (playHideTimeoutId != null) {
+    window.clearTimeout(playHideTimeoutId);
+    playHideTimeoutId = null;
+  }
   if (playIconWrap) {
     playIconWrap.style.display = "none";
     playIconWrap.classList.remove("downregulation-play-wrap--clickable", "downregulation-play-wrap--fade");
@@ -461,21 +478,31 @@ export function hidePlayIcon(): void {
 }
 
 /**
- * Show the session hint "Try to calm the starfield..." with a 3s fade-in, then 3s fade-out.
+ * Show the session hint "Try to calm the motion" with a 3s fade-in, then 3s fade-out.
  * Call when the session has just begun.
  */
 export function showSessionHint(container: HTMLElement): void {
   ensureElements(container);
   if (!sessionHintEl) return;
+  if (sessionHintFadeTimeoutId != null) {
+    window.clearTimeout(sessionHintFadeTimeoutId);
+    sessionHintFadeTimeoutId = null;
+  }
+  if (sessionHintHideTimeoutId != null) {
+    window.clearTimeout(sessionHintHideTimeoutId);
+    sessionHintHideTimeoutId = null;
+  }
   sessionHintEl.style.display = "flex";
   sessionHintEl.style.transition = `opacity ${SESSION_HINT_FADE_MS}ms ease`;
   sessionHintEl.style.opacity = "0";
   sessionHintEl.offsetHeight;
   sessionHintEl.style.opacity = "1";
-  window.setTimeout(() => {
+  sessionHintFadeTimeoutId = window.setTimeout(() => {
+    sessionHintFadeTimeoutId = null;
     if (!sessionHintEl) return;
     sessionHintEl.style.opacity = "0";
-    window.setTimeout(() => {
+    sessionHintHideTimeoutId = window.setTimeout(() => {
+      sessionHintHideTimeoutId = null;
       if (sessionHintEl) {
         sessionHintEl.style.display = "none";
         sessionHintEl.style.opacity = "";
@@ -486,6 +513,14 @@ export function showSessionHint(container: HTMLElement): void {
 }
 
 export function hideSessionHint(): void {
+  if (sessionHintFadeTimeoutId != null) {
+    window.clearTimeout(sessionHintFadeTimeoutId);
+    sessionHintFadeTimeoutId = null;
+  }
+  if (sessionHintHideTimeoutId != null) {
+    window.clearTimeout(sessionHintHideTimeoutId);
+    sessionHintHideTimeoutId = null;
+  }
   if (sessionHintEl) {
     sessionHintEl.style.display = "none";
     sessionHintEl.style.opacity = "";
@@ -640,7 +675,7 @@ export function stopNoiseLayer(): void {
 }
 
 /**
- * Unbind tap handler and hide overlays.
+ * Unbind only the session tap-to-end handler.
  */
 export function unbindTap(container: HTMLElement): void {
   if (tapHandler) {
@@ -648,6 +683,13 @@ export function unbindTap(container: HTMLElement): void {
     container.removeEventListener("touchend", tapHandler);
     tapHandler = null;
   }
+}
+
+/**
+ * Fully hide/reset overlay UI and stop style-specific layers (used when leaving the view).
+ */
+export function teardownOverlay(container?: HTMLElement): void {
+  if (container) unbindTap(container);
   if (startClickHandler && playIconWrap) {
     playIconWrap.removeEventListener("click", startClickHandler);
     playIconWrap.removeEventListener("touchend", startClickHandler);
@@ -659,4 +701,15 @@ export function unbindTap(container: HTMLElement): void {
   stopGooLayer();
   stopNoiseLayer();
   if (prefsModal) prefsModal.style.display = "none";
+  playIconWrap = null;
+  sessionHintEl = null;
+  statsPanel = null;
+  statsContent = null;
+  doneButton = null;
+  settingsBtn = null;
+  gooLayer = null;
+  gooBlobElements = [];
+  noiseLayer = null;
+  noiseCanvas = null;
+  prefsModal = null;
 }

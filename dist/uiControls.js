@@ -424,13 +424,7 @@ function renderWorkout(state) {
             downregEl.style.display = "block";
             const canvas = document.getElementById("downregulationCanvas");
             if (canvas) {
-                startDownregulationView(downregEl, canvas, {
-                    onDismiss: () => {
-                        stopDownregulationView();
-                        setSelectedDay("Monday");
-                        updateDisplay();
-                    },
-                });
+                startDownregulationView(downregEl, canvas);
             }
         }
         return;

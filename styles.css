@@ -763,7 +763,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 6;
+  z-index: 5;
 }
 .downregulation-goo-svg {
   width: 100%;
@@ -776,7 +776,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   position: absolute;
   inset: 0;
   pointer-events: none;
-  z-index: 6;
+  z-index: 5;
 }
 .downregulation-noise-canvas {
   display: block;

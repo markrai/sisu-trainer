@@ -1,62 +1,130 @@
 /**
- * Downregulation view entry: start/stop WebGL particle view and wire HR input.
- * - On start: init renderer, start loop, subscribe to hrMonitor onBpm, start session tracking, bind tap-to-stop.
- * - On tap: end session, show play icon (1s fade), then show stats; on Done call onDismiss (e.g. exit to list).
- * - On stop: stop loop, dispose renderer, reset hrController, unbind tap.
+ * Downregulation view lifecycle.
+ * Canonical flow (all visualization modes):
+ * 1) Ready: play button visible
+ * 2) Play pressed: start one session and bind tap-to-end
+ * 3) Tap during session: end session, save summary, show stats
+ * 4) Done on stats: return to ready state (play visible again)
  */
 import { onBpm, getCurrentBpm } from "../hrMonitor.js";
 import { setCurrentHR, reset as resetHrController, getSmoothedHR } from "./hrController.js";
 import { initRenderer, startRenderLoop, stopRenderLoop, disposeRenderer, resize } from "./renderer.js";
 import { startSession, endSession, cancelSession } from "./sessionStats.js";
-import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap, showSessionHint, stopGooLayer } from "./overlay.js";
+import { showPlayIconForStart, showStats, hideStats, bindTap, unbindTap, showSessionHint, hideSessionHint, teardownOverlay, } from "./overlay.js";
 import { generateUUID, emitWorkoutSummary } from "../workoutSummary.js";
-import { startSession as startStorageSession, markSummaryEmitted } from "../sessionStore.js";
+import { startSession as startStorageSession, clearSession } from "../sessionStore.js";
 import { storeHrSample } from "../workoutStorage.js";
 import { generateDownregulationSummary } from "./workoutSummary.js";
+const DOWNREGULATION_DAY = "Downregulation";
 let container = null;
 let canvas = null;
 let running = false;
+let uiState = "ready";
 let hrDisplayIntervalId = null;
 let resizeHandler = null;
-/** Set when user taps play to start; cleared when session ends or view stops. Used for HR sample storage and summary generation. */
 let downregulationSessionId = null;
 let downregulationSessionStartTime = null;
 function onBpmCallback(bpm) {
-    if (running)
-        setCurrentHR(bpm);
-    if (running && downregulationSessionId != null && downregulationSessionStartTime != null) {
-        const elapsedSec = Math.floor((Date.now() - downregulationSessionStartTime) / 1000);
-        storeHrSample(downregulationSessionId, elapsedSec, bpm).catch((err) => console.error("[Downregulation] Error storing HR sample:", err));
+    if (!running)
+        return;
+    setCurrentHR(bpm);
+    if (uiState !== "active")
+        return;
+    if (downregulationSessionId == null || downregulationSessionStartTime == null)
+        return;
+    const elapsedSec = Math.floor((Date.now() - downregulationSessionStartTime) / 1000);
+    storeHrSample(downregulationSessionId, elapsedSec, bpm).catch((err) => console.error("[Downregulation] Error storing HR sample:", err));
+}
+function resetSessionContext() {
+    downregulationSessionId = null;
+    downregulationSessionStartTime = null;
+    clearSession(DOWNREGULATION_DAY);
+}
+function showReadyState() {
+    if (!running || !container)
+        return;
+    uiState = "ready";
+    unbindTap(container);
+    hideStats();
+    hideSessionHint();
+    showPlayIconForStart(container, startSessionFromPlay);
+}
+function startSessionFromPlay() {
+    if (!running || !container)
+        return;
+    if (uiState !== "ready")
+        return;
+    const startedAt = Date.now();
+    const sessionId = generateUUID();
+    startStorageSession(DOWNREGULATION_DAY, startedAt, sessionId);
+    downregulationSessionId = sessionId;
+    downregulationSessionStartTime = startedAt;
+    startSession();
+    uiState = "active";
+    showSessionHint(container);
+    bindTap(container, () => {
+        void endSessionFromTap();
+    });
+}
+async function endSessionFromTap() {
+    if (!running || !container)
+        return;
+    if (uiState !== "active")
+        return;
+    const activeContainer = container;
+    uiState = "summary";
+    unbindTap(activeContainer);
+    hideSessionHint();
+    const stats = endSession();
+    const sessionId = downregulationSessionId;
+    const startedAt = downregulationSessionStartTime;
+    downregulationSessionId = null;
+    downregulationSessionStartTime = null;
+    if (sessionId != null && startedAt != null) {
+        const endedAt = Date.now();
+        try {
+            const summary = await generateDownregulationSummary(sessionId, startedAt, endedAt, stats);
+            await emitWorkoutSummary(summary);
+        }
+        catch (err) {
+            console.error("[Downregulation] Failed to save workout summary:", err);
+        }
     }
+    clearSession(DOWNREGULATION_DAY);
+    if (!running || container !== activeContainer)
+        return;
+    showStats(activeContainer, stats, () => {
+        if (!running || container !== activeContainer)
+            return;
+        showReadyState();
+    });
 }
 /**
- * Start the Downregulation view: show container/canvas, init WebGL, start render loop,
- * subscribe to live BPM (or simulate HR if no monitor connected), start session tracking, bind tap-to-stop.
+ * Start the Downregulation view: initialize renderer, keep HR display updated, and enter ready state.
  * Idempotent: if already running for this container, no-op.
  */
-export function startDownregulationView(containerEl, canvasEl, options) {
-    var _a;
-    console.log("[Downregulation] startDownregulationView called");
-    if (running && container === containerEl) {
-        console.log("[Downregulation] Already running, skipping");
+export function startDownregulationView(containerEl, canvasEl) {
+    if (running && container === containerEl)
         return;
-    }
+    if (running && container !== containerEl)
+        stopDownregulationView();
     container = containerEl;
     canvas = canvasEl;
     running = true;
+    uiState = "ready";
     resetHrController();
-    console.log("[Downregulation] Initializing WebGL2 renderer...");
+    cancelSession();
+    resetSessionContext();
     if (!initRenderer(canvasEl)) {
-        console.error("[Downregulation] Failed to initialize renderer");
         running = false;
+        container = null;
+        canvas = null;
         return;
     }
-    console.log("[Downregulation] Renderer initialized successfully");
     onBpm(onBpmCallback);
     const currentBpm = getCurrentBpm();
     if (currentBpm != null && currentBpm > 0)
         setCurrentHR(currentBpm);
-    // No simulated HR: only use real strap data. Without a strap, display shows "—" and coherence stays low.
     resizeHandler = () => {
         if (canvas)
             resize(canvas);
@@ -65,65 +133,34 @@ export function startDownregulationView(containerEl, canvasEl, options) {
     const hrEl = containerEl.querySelector("#downregulationHrDisplay");
     if (hrEl) {
         const updateHrDisplay = () => {
-            if (!running || !hrEl)
+            if (!running)
                 return;
-            // Only show HR if there's actually a live monitor connected
             const liveBpm = getCurrentBpm();
             if (liveBpm == null || liveBpm <= 0) {
-                hrEl.textContent = "—";
+                hrEl.textContent = "-";
                 return;
             }
             const bpm = getSmoothedHR();
-            hrEl.textContent = bpm != null ? `${Math.round(bpm)} bpm` : "—";
+            hrEl.textContent = bpm != null ? `${Math.round(bpm)} bpm` : "-";
         };
         updateHrDisplay();
         hrDisplayIntervalId = setInterval(updateHrDisplay, 1000);
     }
-    const onDismiss = (_a = options === null || options === void 0 ? void 0 : options.onDismiss) !== null && _a !== void 0 ? _a : (() => { });
     startRenderLoop(canvasEl);
-    /** Start a new session and bind tap-to-end; when user taps Done on the summary, we show play again. */
-    function startSessionAndBindTap() {
-        const sessionId = generateUUID();
-        startStorageSession("Downregulation", Date.now(), sessionId);
-        downregulationSessionId = sessionId;
-        downregulationSessionStartTime = Date.now();
-        startSession();
-        showSessionHint(containerEl);
-        bindTap(containerEl, async () => {
-            const stats = endSession();
-            const sid = downregulationSessionId;
-            const start = downregulationSessionStartTime;
-            downregulationSessionId = null;
-            downregulationSessionStartTime = null;
-            if (sid != null && start != null) {
-                try {
-                    const summary = await generateDownregulationSummary(sid, start, Date.now(), stats);
-                    await emitWorkoutSummary(summary);
-                    markSummaryEmitted("Downregulation");
-                }
-                catch (err) {
-                    console.error("[Downregulation] Failed to save workout summary:", err);
-                }
-            }
-            showStats(containerEl, stats, () => {
-                showPlayIconForStart(containerEl, startSessionAndBindTap);
-            });
-        });
-    }
-    showPlayIconForStart(containerEl, startSessionAndBindTap);
+    showReadyState();
 }
 /**
- * Stop the Downregulation view: stop loop, dispose renderer, clear HR subscription effect, unbind tap, reset HR controller.
+ * Stop the Downregulation view and tear down all session/overlay/renderer resources.
  */
 export function stopDownregulationView() {
     running = false;
-    downregulationSessionId = null;
-    downregulationSessionStartTime = null;
+    uiState = "ready";
     cancelSession();
+    resetSessionContext();
     if (container)
-        unbindTap(container);
-    stopGooLayer();
-    hideStats();
+        teardownOverlay(container);
+    else
+        teardownOverlay();
     if (hrDisplayIntervalId != null) {
         clearInterval(hrDisplayIntervalId);
         hrDisplayIntervalId = null;
