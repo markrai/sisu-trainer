@@ -1,6 +1,6 @@
 {
-  "name": "vo2max",
-  "version": "0.9.7",
+  "name": "sisu-trainer",
+  "version": "0.9.8",
   "private": true,
   "type": "module",
   "scripts": {

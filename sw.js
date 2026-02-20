@@ -1,4 +1,4 @@
-// Service Worker for VO2 Max Coach PWA
+// Service Worker for Sisu Trainer PWA
 // Cache name is derived from version.js (single source of truth)
 
 const urlsToCache = [
@@ -36,9 +36,9 @@ function getCacheName() {
     .then((text) => {
       const m = text.match(/APP_VERSION\\s*=\\s*['\"]([^'\"]+)['\"]/);
       const version = (m && m[1]) ? m[1] : '0';
-      return 'vo2-coach-' + version;
+      return 'sisu-trainer-' + version;
     })
-    .catch(() => 'vo2-coach-unknown');
+    .catch(() => 'sisu-trainer-unknown');
   return _cacheNamePromise;
 }
 

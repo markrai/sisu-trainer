@@ -1,4 +1,4 @@
-// Shared domain types for VO2 Max Coach
+// Shared domain types for Sisu Trainer
 export type DayName =
   | "Monday"
   | "Tuesday"

@@ -1,7 +1,7 @@
 {
-  "name": "VO2 Max Coach",
-  "short_name": "VO2 Coach",
-  "description": "Workout coaching app for VO2 max training with heart rate monitoring",
+  "name": "Sisu Trainer",
+  "short_name": "Sisu Trainer",
+  "description": "Workout coaching app with heart rate monitoring",
   "start_url": "/",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
@@ -9,8 +9,8 @@
   "theme_color": "#0c0c0c",
   "orientation": "portrait-primary",
   "icons": [
-    {"src": "heart.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-    {"src": "heart.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+    {"src": "logo.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+    {"src": "logo.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
     {"src": "favicon.ico", "sizes": "48x48", "type": "image/x-icon", "purpose": "any"}
   ]
 }

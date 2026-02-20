@@ -135,7 +135,7 @@ async function connectSISU() {
   const currentHost = window.location.hostname;
   if (host === currentHost || (host.includes("vo2") && !host.includes("sisu"))) {
     await updateSISUStatus(
-      `That looks like the VO2 host (${host}). Enter your SISU host (e.g. sisu.int.oyehoy.net).`,
+      `That looks like this app's host (${host}). Enter your SISU host (e.g. sisu.int.oyehoy.net).`,
       false
     );
     return;

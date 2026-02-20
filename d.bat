@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 REM Always run from the folder where this batch file lives (project root)
 cd /d "%~dp0"
 
-echo Starting VO2 Max Coach development server...
+echo Starting Sisu Trainer development server...
 echo.
 
 REM Build and update deploy folder (syncs version, compiles TS to dist, copies to deploy)

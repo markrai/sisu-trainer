@@ -20,7 +20,7 @@ if %errorlevel% equ 0 goto :upload_done
 
 REM Synology often has "subsystem request failed" for SCP; use SFTP instead
 echo SCP failed, trying SFTP...
-set "SFTP_SCRIPT=%TEMP%\vo2-deploy-sftp-%RANDOM%.txt"
+set "SFTP_SCRIPT=%TEMP%\sisu-trainer-deploy-sftp-%RANDOM%.txt"
 (
   echo lcd deploy
   echo cd %REMOTE_PATH%
