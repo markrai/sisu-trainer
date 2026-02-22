@@ -270,5 +270,36 @@
 
 <script type="module" src="./dist/main.js"></script>
 
+<script>
+  (function() {
+    var ua = navigator.userAgent || '';
+    var isFacebookInApp = /FBAN|FBAV|Instagram/i.test(ua);
+    if (isFacebookInApp) {
+      var url = window.location.href;
+      window.openInExternalBrowser = function() {
+        var isAndroid = /Android/i.test(ua);
+        var isIOS = /iPhone|iPad|iPod/i.test(ua);
+        if (isAndroid) {
+          var fallback = encodeURIComponent(url);
+          var intentPath = url.replace(/^https?:\/\//i, '');
+          var intentUrl = 'intent://' + intentPath + '#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url=' + fallback + ';end';
+          window.location.href = intentUrl;
+        } else if (isIOS) {
+          var safariUrl = 'x-safari-https://' + url.replace(/^https?:\/\//i, '');
+          window.location.href = safariUrl;
+        } else {
+          window.open(url, '_blank');
+        }
+      };
+      document.body.innerHTML = ''
+        + '<main role="main" style="position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;background:#16161a;color:#e8e8e8;font-family:system-ui,-apple-system,sans-serif;text-align:center;">'
+        + '<h1 style="margin:0 0 16px;font-size:1.5rem;font-weight:600;">Open in Browser</h1>'
+        + '<p style="margin:0 0 24px;max-width:320px;font-size:0.95rem;line-height:1.5;">This app uses WebAssembly and Web Audio that Facebook\'s in-app browser doesn\'t support.</p>'
+        + '<button type="button" onclick="window.openInExternalBrowser()" style="padding:12px 24px;font-size:1rem;font-weight:600;color:#16161a;background:#00f5d4;border:none;border-radius:8px;cursor:pointer;">Open in Browser</button>'
+        + '<p style="margin:24px 0 0;font-size:0.8rem;color:#888;">If nothing happens, use the menu (⋯) and choose "Open in browser" or "Open in Chrome".</p>'
+        + '</main>';
+    }
+  })();
+</script>
 </body>
 </html>
