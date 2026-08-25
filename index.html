@@ -54,7 +54,7 @@
       <button class="tab-button" onclick="switchTab('preferences')"><span class="tab-label-long">Preferences</span><span class="tab-label-short">Prefs</span></button>
       <button class="tab-button" onclick="switchTab('workouts')">Workouts</button>
       <button class="tab-button" onclick="switchTab('sisu')">Sync</button>
-      <button class="tab-button" onclick="switchTab('install')">Install</button>
+      <button class="tab-button" id="installTabButton" onclick="switchTab('install')">Install</button>
     </div>
     
     <!-- Profile Tab -->
@@ -156,8 +156,15 @@
             Connect to SISU to sync workouts and HRV baseline.
           </div>
           <div class="modal-field">
+            <label class="modal-label" for="sisuProtocol">Protocol</label>
+            <select id="sisuProtocol" class="modal-input">
+              <option value="https">HTTPS</option>
+              <option value="http">HTTP</option>
+            </select>
+          </div>
+          <div class="modal-field">
             <label class="modal-label" for="sisuHost">SISU Host</label>
-            <input id="sisuHost" class="modal-input" type="text" placeholder="192.168.1.100">
+            <input id="sisuHost" class="modal-input" type="text" placeholder="sisu.example.com">
           </div>
           <div class="modal-field">
             <label class="modal-label" for="sisuPort">Port</label>

@@ -145,7 +145,7 @@ async function deleteWorkoutSummary(sessionId) {
         return false;
     }
 }
-async function storeSisuSettings(host, port) {
+async function storeSisuSettings(host, port, protocol) {
     try {
         const database = await initDB();
         const tx = database.transaction([STORE_SISU_SETTINGS], "readwrite");
@@ -154,6 +154,7 @@ async function storeSisuSettings(host, port) {
             key: "config",
             host,
             port,
+            protocol,
             last_connected: new Date().toISOString(),
             last_sync: null,
         });

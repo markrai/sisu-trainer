@@ -1,4 +1,5 @@
 import { APP_VERSION } from "./version.js";
+import { isNativeRuntime } from "./platform/runtime.js";
 
 let serviceWorkerRegistration: ServiceWorkerRegistration | null = null;
 let updateAvailable = false;
@@ -252,7 +253,25 @@ function registerInstallPromptHandlers() {
   });
 }
 
+function disableNativeInstallUi() {
+  document.getElementById("installTabButton")?.remove();
+  document.getElementById("installTab")?.remove();
+  document.getElementById("installPromptBg")?.remove();
+}
+
 export function registerPwaGlobals() {
+  if (isNativeRuntime()) {
+    const noOp = () => {};
+    (window as any).reloadForUpdate = noOp;
+    (window as any).dismissUpdateNotification = noOp;
+    (window as any).closeInstallPrompt = noOp;
+    (window as any).installPWAFromPrompt = noOp;
+    (window as any).installPWA = noOp;
+    (window as any).refreshInstallTabContent = noOp;
+    deferredPrompt = null;
+    disableNativeInstallUi();
+    return;
+  }
   (window as any).reloadForUpdate = reloadForUpdate;
   (window as any).dismissUpdateNotification = dismissUpdateNotification;
   (window as any).closeInstallPrompt = closeInstallPrompt;

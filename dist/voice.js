@@ -1,4 +1,6 @@
+import { isNativeRuntime } from "./platform/runtime.js";
 let lastSpokenPhase = null;
+let speechRequestId = 0;
 function announcePhaseIfChanged(phaseDisplayName) {
     if (!phaseDisplayName || phaseDisplayName === "Not Started") {
         resetVoiceState();
@@ -10,6 +12,17 @@ function announcePhaseIfChanged(phaseDisplayName) {
     if (phaseDisplayName === lastSpokenPhase)
         return;
     lastSpokenPhase = phaseDisplayName;
+    const requestId = ++speechRequestId;
+    if (isNativeRuntime()) {
+        void import("./platform/nativeSpeech.js")
+            .then(({ speakNative }) => {
+            if (requestId !== speechRequestId || lastSpokenPhase !== phaseDisplayName)
+                return;
+            return speakNative(phaseDisplayName);
+        })
+            .catch((error) => console.error("Native speech error:", error));
+        return;
+    }
     if (!("speechSynthesis" in window))
         return;
     window.speechSynthesis.cancel();
@@ -20,6 +33,13 @@ function announcePhaseIfChanged(phaseDisplayName) {
 }
 function resetVoiceState() {
     lastSpokenPhase = null;
+    speechRequestId++;
+    if (isNativeRuntime()) {
+        void import("./platform/nativeSpeech.js")
+            .then(({ stopNativeSpeech }) => stopNativeSpeech())
+            .catch((error) => console.error("Native speech stop error:", error));
+        return;
+    }
     if ("speechSynthesis" in window) {
         window.speechSynthesis.cancel();
     }

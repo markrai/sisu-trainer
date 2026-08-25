@@ -148,7 +148,7 @@ async function deleteWorkoutSummary(sessionId: string) {
   }
 }
 
-async function storeSisuSettings(host: string, port: number) {
+async function storeSisuSettings(host: string, port: number, protocol?: "https" | "http") {
   try {
     const database = await initDB();
     const tx = database.transaction([STORE_SISU_SETTINGS], "readwrite");
@@ -157,6 +157,7 @@ async function storeSisuSettings(host: string, port: number) {
       key: "config",
       host,
       port,
+      protocol,
       last_connected: new Date().toISOString(),
       last_sync: null,
     } as SisuSettings);

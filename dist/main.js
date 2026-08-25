@@ -12,6 +12,8 @@ import "./hrMonitor.js";
 import { registerUiGlobals, updateDisplay } from "./uiControls.js";
 import { registerPwaGlobals } from "./pwaInstall.js";
 import { getSession, isSessionStale, clearSession } from "./sessionStore.js";
+import { applyRuntimeDocumentState } from "./platform/runtime.js";
+applyRuntimeDocumentState();
 function cleanupStaleWorkoutSessions() {
     const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
     days.forEach((day) => {
