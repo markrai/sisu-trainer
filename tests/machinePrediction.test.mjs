@@ -24,6 +24,7 @@ import {
   MIN_SHADOW_DIRECTION_CONSISTENCY,
   MIN_SHADOW_DOSE_SAMPLES,
   predictedHrDeltaForActualStep,
+  predictedHrDeltaForShadowSuggestion,
   resetShadowPredictionsForMachine,
   SHADOW_PREDICTION_LIMIT,
   SHADOW_PREDICTION_STORAGE_KEY,
@@ -274,7 +275,8 @@ test("increase shadow suggestion uses ceil deficit and does not alter the contro
   });
   assert.deepEqual(suggestion, {
     estimatedLevelsNeeded: 3,
-    shadowAppliedCapLevels: 3,
+    shadowCappedLevels: 3,
+    shadowEffectiveLevels: 3,
     shadowSuggestedResistance: 13,
   });
 });
@@ -287,19 +289,24 @@ test("increase shadow suggestion caps estimated steps at 3", () => {
     medianIncreaseHrPerLevel: 4,
   });
   assert.equal(suggestion.estimatedLevelsNeeded, 8);
-  assert.equal(suggestion.shadowAppliedCapLevels, 3);
+  assert.equal(suggestion.shadowCappedLevels, 3);
+  assert.equal(suggestion.shadowEffectiveLevels, 3);
   assert.equal(suggestion.shadowSuggestedResistance, 13);
 });
 
-test("increase shadow suggestion never exceeds R15", () => {
+test("increase shadow suggestion at R14 uses one effective level after the R15 bound", () => {
   const suggestion = shadowIncreaseSuggestion({
     preChangeHr: 130,
     targetHeartRateMin: 160,
     fromResistance: 14,
     medianIncreaseHrPerLevel: 4,
   });
-  assert.equal(suggestion.shadowAppliedCapLevels, 3);
+  assert.equal(suggestion.estimatedLevelsNeeded >= 3, true);
+  assert.equal(suggestion.shadowCappedLevels, 3);
   assert.equal(suggestion.shadowSuggestedResistance, 15);
+  assert.equal(suggestion.shadowEffectiveLevels, 1);
+  assert.equal(predictedHrDeltaForShadowSuggestion(4, suggestion.shadowEffectiveLevels), 4);
+  assert.equal(130 + predictedHrDeltaForShadowSuggestion(4, suggestion.shadowEffectiveLevels), 134);
 });
 
 test("decrease shadow suggestion uses ceil excess and stays independent of the controller step", () => {
@@ -311,9 +318,37 @@ test("decrease shadow suggestion uses ceil excess and stays independent of the c
   });
   assert.deepEqual(suggestion, {
     estimatedLevelsNeeded: 3,
-    shadowAppliedCapLevels: 3,
+    shadowCappedLevels: 3,
+    shadowEffectiveLevels: 3,
     shadowSuggestedResistance: 7,
   });
+});
+
+test("decrease shadow suggestion at R2 uses one effective level after the R1 bound", () => {
+  const suggestion = shadowDecreaseSuggestion({
+    preChangeHr: 178,
+    targetHeartRateMax: 170,
+    fromResistance: 2,
+    medianDecreaseHrPerLevel: -3,
+  });
+  assert.equal(suggestion.estimatedLevelsNeeded >= 3, true);
+  assert.equal(suggestion.shadowCappedLevels, 3);
+  assert.equal(suggestion.shadowSuggestedResistance, 1);
+  assert.equal(suggestion.shadowEffectiveLevels, 1);
+  assert.equal(predictedHrDeltaForShadowSuggestion(-3, suggestion.shadowEffectiveLevels), -3);
+});
+
+test("non-boundary shadow suggestion keeps capped and effective levels equal", () => {
+  const suggestion = shadowIncreaseSuggestion({
+    preChangeHr: 150,
+    targetHeartRateMin: 160,
+    fromResistance: 10,
+    medianIncreaseHrPerLevel: 4,
+  });
+  assert.equal(suggestion.shadowSuggestedResistance, 13);
+  assert.equal(suggestion.shadowCappedLevels, 3);
+  assert.equal(suggestion.shadowEffectiveLevels, 3);
+  assert.equal(predictedHrDeltaForShadowSuggestion(4, suggestion.shadowEffectiveLevels), 12);
 });
 
 test("actual-step HR prediction and realized error for an increase", () => {
@@ -470,6 +505,8 @@ test("realized shadow event records actual-step prediction, not the hypothetical
   assert.equal(event.targetHeartRateMin, 160);
   assert.equal(event.modelMedianHrPerLevel, 4);
   assert.equal(event.estimatedLevelsNeeded, 3);
+  assert.equal(event.shadowCappedLevels, 3);
+  assert.equal(event.shadowEffectiveLevels, 3);
   assert.equal(event.shadowSuggestedResistance, 13);
   assert.equal(event.predictedHrDeltaForActualStep, 4);
   assert.equal(event.predictedSettledHrAfterActualStep, 154);
@@ -485,6 +522,50 @@ test("realized shadow event records actual-step prediction, not the hypothetical
   assert.equal(listed[0].increase.medianAbsolutePredictionErrorBpm, 6);
   assert.equal(listed[0].increase.directionMatchCount, 1);
   assert.equal(listed[0].increase.directionEvaluatedCount, 1);
+});
+
+test("stored shadow HR prediction uses effective levels after the R15 bound", () => {
+  const storage = memoryStorage();
+  seedIncreaseModel(storage, [3, 4, 4, 5, 4]);
+  const { summary, samples } = increaseWorkout({
+    fromResistance: 14,
+    toResistance: 15,
+    baselineHr: 130,
+    settledHr: 140,
+    sessionId: "r15-bound",
+  });
+  const predictions = applyCompletedWorkoutShadowPredictions(summary, samples, storage);
+  assert.equal(predictions.length, 1);
+  const event = predictions[0];
+  assert.equal(event.estimatedLevelsNeeded >= 3, true);
+  assert.equal(event.shadowCappedLevels, 3);
+  assert.equal(event.shadowSuggestedResistance, 15);
+  assert.equal(event.shadowEffectiveLevels, 1);
+  assert.equal(event.predictedHrDeltaForShadowSuggestion, 4);
+  assert.equal(event.predictedHrAtShadowSuggestion, 134);
+  assert.equal(event.predictedHrDeltaForActualStep, 4);
+});
+
+test("stored shadow HR prediction uses effective levels after the R1 bound", () => {
+  const storage = memoryStorage();
+  seedDecreaseModel(storage, [-2, -3, -3, -4, -3]);
+  const { summary, samples } = decreaseWorkout({
+    fromResistance: 2,
+    toResistance: 1,
+    baselineHr: 178,
+    settledHr: 170,
+    sessionId: "r1-bound",
+  });
+  const predictions = applyCompletedWorkoutShadowPredictions(summary, samples, storage);
+  assert.equal(predictions.length, 1);
+  const event = predictions[0];
+  assert.equal(event.estimatedLevelsNeeded >= 3, true);
+  assert.equal(event.shadowCappedLevels, 3);
+  assert.equal(event.shadowSuggestedResistance, 1);
+  assert.equal(event.shadowEffectiveLevels, 1);
+  assert.equal(event.predictedHrDeltaForShadowSuggestion, -3);
+  assert.equal(event.predictedHrAtShadowSuggestion, 175);
+  assert.equal(event.predictedHrDeltaForActualStep, -3);
 });
 
 test("shadow prediction uses the change event target range and skips missing targets", () => {

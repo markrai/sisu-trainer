@@ -1,6 +1,6 @@
 import { deriveHrDynamicsObservations, workoutEligibleForHrDynamics } from "../dynamics/derive.js";
 import { learningKey } from "../learning/types.js";
-import { directionMatched, predictedHrDeltaForActualStep, shadowDecreaseSuggestion, shadowIncreaseSuggestion, trustedDirectionalHrPerLevelEstimate, } from "./estimate.js";
+import { directionMatched, predictedHrDeltaForActualStep, predictedHrDeltaForShadowSuggestion, shadowDecreaseSuggestion, shadowIncreaseSuggestion, trustedDirectionalHrPerLevelEstimate, } from "./estimate.js";
 function validTarget(value) {
     return Number.isInteger(value) && Number.isFinite(value);
 }
@@ -49,7 +49,7 @@ export function deriveShadowResistancePredictions(summary, hrSamples, preWorkout
             continue;
         const actualDelta = observation.toResistance - observation.fromResistance;
         const predictedActual = predictedHrDeltaForActualStep(estimate.medianHrPerLevel, actualDelta);
-        const predictedShadow = estimate.medianHrPerLevel * suggestion.shadowAppliedCapLevels;
+        const predictedShadow = predictedHrDeltaForShadowSuggestion(estimate.medianHrPerLevel, suggestion.shadowEffectiveLevels);
         const prediction = {
             version: 1,
             sessionId: summary.external_session_id,
@@ -72,7 +72,8 @@ export function deriveShadowResistancePredictions(summary, hrSamples, preWorkout
             modelMadBpm: estimate.madBpm,
             modelDirectionConsistency: estimate.signConsistency,
             estimatedLevelsNeeded: suggestion.estimatedLevelsNeeded,
-            shadowAppliedCapLevels: suggestion.shadowAppliedCapLevels,
+            shadowCappedLevels: suggestion.shadowCappedLevels,
+            shadowEffectiveLevels: suggestion.shadowEffectiveLevels,
             shadowSuggestedResistance: suggestion.shadowSuggestedResistance,
             predictedHrDeltaForActualStep: predictedActual,
             predictedSettledHrAfterActualStep: observation.baselineHr + predictedActual,

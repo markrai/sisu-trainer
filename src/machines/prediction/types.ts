@@ -38,7 +38,8 @@ export interface MachineShadowResistancePrediction {
   modelMadBpm: number;
   modelDirectionConsistency: number;
   estimatedLevelsNeeded: number;
-  shadowAppliedCapLevels: number;
+  shadowCappedLevels: number;
+  shadowEffectiveLevels: number;
   shadowSuggestedResistance: number;
   predictedHrDeltaForActualStep: number;
   predictedSettledHrAfterActualStep: number;

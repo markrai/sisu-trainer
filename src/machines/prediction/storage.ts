@@ -68,24 +68,36 @@ function sanitizePrediction(
   const actualToResistance = sanitizeResistance(raw.actualToResistance);
   if (fromResistance === undefined || actualToResistance === undefined) return undefined;
   if (!isInt(raw.preChangeHr)) return undefined;
+  const preChangeHr = raw.preChangeHr;
   if (!isInt(raw.targetHeartRateMin) || !isInt(raw.targetHeartRateMax)) return undefined;
   if (!isInt(raw.modelSampleCount) || raw.modelSampleCount < 1) return undefined;
   if (!isInt(raw.modelMedianHrPerLevel) || !isInt(raw.modelMadBpm) || raw.modelMadBpm < 0) return undefined;
+  const modelMedianHrPerLevel = raw.modelMedianHrPerLevel;
   if (!isFiniteNumber(raw.modelDirectionConsistency) || raw.modelDirectionConsistency < 0 || raw.modelDirectionConsistency > 1) {
     return undefined;
   }
   if (!isInt(raw.estimatedLevelsNeeded) || raw.estimatedLevelsNeeded < 0) return undefined;
-  if (
-    !isInt(raw.shadowAppliedCapLevels) ||
-    raw.shadowAppliedCapLevels < 0 ||
-    raw.shadowAppliedCapLevels > MAX_SHADOW_SUGGESTED_LEVELS
-  ) {
+  const shadowCappedLevels = isInt(raw.shadowCappedLevels) ? raw.shadowCappedLevels : raw.shadowAppliedCapLevels;
+  if (!isInt(shadowCappedLevels) || shadowCappedLevels < 0 || shadowCappedLevels > MAX_SHADOW_SUGGESTED_LEVELS) {
     return undefined;
   }
   const shadowSuggestedResistance = sanitizeResistance(raw.shadowSuggestedResistance);
   if (shadowSuggestedResistance === undefined) return undefined;
+  const shadowEffectiveLevels = isInt(raw.shadowEffectiveLevels)
+    ? raw.shadowEffectiveLevels
+    : Math.abs(shadowSuggestedResistance - fromResistance);
+  if (shadowEffectiveLevels < 0 || shadowEffectiveLevels > MAX_SHADOW_SUGGESTED_LEVELS) return undefined;
   if (!isInt(raw.predictedHrDeltaForActualStep) || !isInt(raw.predictedSettledHrAfterActualStep)) return undefined;
-  if (!isInt(raw.predictedHrDeltaForShadowSuggestion) || !isInt(raw.predictedHrAtShadowSuggestion)) return undefined;
+  let predictedHrDeltaForShadowSuggestion: number;
+  let predictedHrAtShadowSuggestion: number;
+  if (isInt(raw.shadowEffectiveLevels)) {
+    if (!isInt(raw.predictedHrDeltaForShadowSuggestion) || !isInt(raw.predictedHrAtShadowSuggestion)) return undefined;
+    predictedHrDeltaForShadowSuggestion = raw.predictedHrDeltaForShadowSuggestion;
+    predictedHrAtShadowSuggestion = raw.predictedHrAtShadowSuggestion;
+  } else {
+    predictedHrDeltaForShadowSuggestion = modelMedianHrPerLevel * shadowEffectiveLevels;
+    predictedHrAtShadowSuggestion = preChangeHr + predictedHrDeltaForShadowSuggestion;
+  }
   const event: MachineShadowResistancePrediction = {
     version: 1,
     machineId: parts.machineId,
@@ -98,20 +110,21 @@ function sanitizePrediction(
     direction,
     fromResistance,
     actualToResistance,
-    preChangeHr: raw.preChangeHr,
+    preChangeHr,
     targetHeartRateMin: raw.targetHeartRateMin,
     targetHeartRateMax: raw.targetHeartRateMax,
     modelSampleCount: raw.modelSampleCount,
-    modelMedianHrPerLevel: raw.modelMedianHrPerLevel,
+    modelMedianHrPerLevel,
     modelMadBpm: raw.modelMadBpm,
     modelDirectionConsistency: raw.modelDirectionConsistency,
     estimatedLevelsNeeded: raw.estimatedLevelsNeeded,
-    shadowAppliedCapLevels: raw.shadowAppliedCapLevels,
+    shadowCappedLevels,
+    shadowEffectiveLevels,
     shadowSuggestedResistance,
     predictedHrDeltaForActualStep: raw.predictedHrDeltaForActualStep,
     predictedSettledHrAfterActualStep: raw.predictedSettledHrAfterActualStep,
-    predictedHrDeltaForShadowSuggestion: raw.predictedHrDeltaForShadowSuggestion,
-    predictedHrAtShadowSuggestion: raw.predictedHrAtShadowSuggestion,
+    predictedHrDeltaForShadowSuggestion,
+    predictedHrAtShadowSuggestion,
   };
   if (typeof raw.sessionId === "string" && raw.sessionId.trim() !== "") event.sessionId = raw.sessionId;
   if (isInt(raw.intervalIndex) && raw.intervalIndex >= 0) event.intervalIndex = raw.intervalIndex;

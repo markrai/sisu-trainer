@@ -32,6 +32,7 @@ export {
 export {
   directionMatched,
   predictedHrDeltaForActualStep,
+  predictedHrDeltaForShadowSuggestion,
   shadowDecreaseSuggestion,
   shadowIncreaseSuggestion,
   trustedDirectionalHrPerLevelEstimate,

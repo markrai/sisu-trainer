@@ -19,7 +19,8 @@ export interface TrustedDirectionalHrPerLevelEstimate {
 
 export interface ShadowResistanceSuggestion {
   estimatedLevelsNeeded: number;
-  shadowAppliedCapLevels: number;
+  shadowCappedLevels: number;
+  shadowEffectiveLevels: number;
   shadowSuggestedResistance: number;
 }
 
@@ -53,6 +54,19 @@ function capSuggestedLevels(estimatedLevelsNeeded: number): number {
   return Math.min(MAX_SHADOW_SUGGESTED_LEVELS, Math.max(1, estimatedLevelsNeeded));
 }
 
+function effectiveShadowLevels(fromResistance: number, suggestedResistance: number): number {
+  return Math.abs(suggestedResistance - fromResistance);
+}
+
+function noChangeSuggestion(fromResistance: number): ShadowResistanceSuggestion {
+  return {
+    estimatedLevelsNeeded: 0,
+    shadowCappedLevels: 0,
+    shadowEffectiveLevels: 0,
+    shadowSuggestedResistance: fromResistance,
+  };
+}
+
 export function shadowIncreaseSuggestion(params: {
   preChangeHr: number;
   targetHeartRateMin: number;
@@ -61,19 +75,15 @@ export function shadowIncreaseSuggestion(params: {
 }): ShadowResistanceSuggestion | undefined {
   if (!(params.medianIncreaseHrPerLevel > 0)) return undefined;
   const deficit = params.targetHeartRateMin - params.preChangeHr;
-  if (deficit <= 0) {
-    return {
-      estimatedLevelsNeeded: 0,
-      shadowAppliedCapLevels: 0,
-      shadowSuggestedResistance: params.fromResistance,
-    };
-  }
+  if (deficit <= 0) return noChangeSuggestion(params.fromResistance);
   const estimatedLevelsNeeded = Math.ceil(deficit / params.medianIncreaseHrPerLevel);
-  const shadowAppliedCapLevels = capSuggestedLevels(estimatedLevelsNeeded);
+  const shadowCappedLevels = capSuggestedLevels(estimatedLevelsNeeded);
+  const shadowSuggestedResistance = Math.min(MAX_SHADOW_RESISTANCE, params.fromResistance + shadowCappedLevels);
   return {
     estimatedLevelsNeeded,
-    shadowAppliedCapLevels,
-    shadowSuggestedResistance: Math.min(MAX_SHADOW_RESISTANCE, params.fromResistance + shadowAppliedCapLevels),
+    shadowCappedLevels,
+    shadowEffectiveLevels: effectiveShadowLevels(params.fromResistance, shadowSuggestedResistance),
+    shadowSuggestedResistance,
   };
 }
 
@@ -85,19 +95,15 @@ export function shadowDecreaseSuggestion(params: {
 }): ShadowResistanceSuggestion | undefined {
   if (!(params.medianDecreaseHrPerLevel < 0)) return undefined;
   const excess = params.preChangeHr - params.targetHeartRateMax;
-  if (excess <= 0) {
-    return {
-      estimatedLevelsNeeded: 0,
-      shadowAppliedCapLevels: 0,
-      shadowSuggestedResistance: params.fromResistance,
-    };
-  }
+  if (excess <= 0) return noChangeSuggestion(params.fromResistance);
   const estimatedLevelsNeeded = Math.ceil(excess / Math.abs(params.medianDecreaseHrPerLevel));
-  const shadowAppliedCapLevels = capSuggestedLevels(estimatedLevelsNeeded);
+  const shadowCappedLevels = capSuggestedLevels(estimatedLevelsNeeded);
+  const shadowSuggestedResistance = Math.max(MIN_SHADOW_RESISTANCE, params.fromResistance - shadowCappedLevels);
   return {
     estimatedLevelsNeeded,
-    shadowAppliedCapLevels,
-    shadowSuggestedResistance: Math.max(MIN_SHADOW_RESISTANCE, params.fromResistance - shadowAppliedCapLevels),
+    shadowCappedLevels,
+    shadowEffectiveLevels: effectiveShadowLevels(params.fromResistance, shadowSuggestedResistance),
+    shadowSuggestedResistance,
   };
 }
 
@@ -106,6 +112,13 @@ export function predictedHrDeltaForActualStep(
   actualResistanceDelta: number
 ): number {
   return medianHrPerLevel * Math.abs(actualResistanceDelta);
+}
+
+export function predictedHrDeltaForShadowSuggestion(
+  medianHrPerLevel: number,
+  shadowEffectiveLevels: number
+): number {
+  return medianHrPerLevel * shadowEffectiveLevels;
 }
 
 export function directionMatched(

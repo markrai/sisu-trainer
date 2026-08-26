@@ -5,6 +5,7 @@ import { learningKey, type LearningHrSample, type LearningKeyParts } from "../le
 import {
   directionMatched,
   predictedHrDeltaForActualStep,
+  predictedHrDeltaForShadowSuggestion,
   shadowDecreaseSuggestion,
   shadowIncreaseSuggestion,
   trustedDirectionalHrPerLevelEstimate,
@@ -67,7 +68,10 @@ export function deriveShadowResistancePredictions(
     if (!suggestion) continue;
     const actualDelta = observation.toResistance - observation.fromResistance;
     const predictedActual = predictedHrDeltaForActualStep(estimate.medianHrPerLevel, actualDelta);
-    const predictedShadow = estimate.medianHrPerLevel * suggestion.shadowAppliedCapLevels;
+    const predictedShadow = predictedHrDeltaForShadowSuggestion(
+      estimate.medianHrPerLevel,
+      suggestion.shadowEffectiveLevels
+    );
     const prediction: MachineShadowResistancePrediction = {
       version: 1,
       sessionId: summary.external_session_id,
@@ -90,7 +94,8 @@ export function deriveShadowResistancePredictions(
       modelMadBpm: estimate.madBpm,
       modelDirectionConsistency: estimate.signConsistency,
       estimatedLevelsNeeded: suggestion.estimatedLevelsNeeded,
-      shadowAppliedCapLevels: suggestion.shadowAppliedCapLevels,
+      shadowCappedLevels: suggestion.shadowCappedLevels,
+      shadowEffectiveLevels: suggestion.shadowEffectiveLevels,
       shadowSuggestedResistance: suggestion.shadowSuggestedResistance,
       predictedHrDeltaForActualStep: predictedActual,
       predictedSettledHrAfterActualStep: observation.baselineHr + predictedActual,
