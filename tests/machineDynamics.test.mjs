@@ -12,6 +12,7 @@ import {
   mergeObservationIntoEntry,
   putDynamicsEntry,
   resetHrDynamicsForMachine,
+  responseDetectionRate,
 } from "../dist/machines/dynamics/index.js";
 import {
   applyCompletedWorkoutLearning,
@@ -143,6 +144,8 @@ test("work-start observation uses pre-work baseline and persistent onset", () =>
   assert.equal(start.responseDelaySeconds, 25);
   assert.equal(start.settledHr, 147);
   assert.equal(start.hrDelta, 17);
+  assert.equal(start.windowObservable, true);
+  assert.equal(start.responseDetected, true);
   assert.equal(observations.some((observation) => observation.kind !== "work_start"), false);
 });
 
@@ -155,6 +158,8 @@ test("a single HR spike does not count as response onset", () => {
   const start = deriveHrDynamicsObservations(summary, samples).find((observation) => observation.kind === "work_start");
   assert.equal(start?.baselineHr, 130);
   assert.equal(start?.responseDelaySeconds, undefined);
+  assert.equal(start?.windowObservable, true);
+  assert.equal(start?.responseDetected, false);
 });
 
 test("in-work resistance increase is a +1 observation", () => {
@@ -291,6 +296,8 @@ test("insufficient HR leaves response metrics undefined and does not update stor
     assert.equal(start?.responseDelaySeconds, undefined);
     assert.equal(start?.baselineHr, undefined);
     assert.equal(start?.hrDelta, undefined);
+    assert.equal(start?.windowObservable, false);
+    assert.equal(start?.responseDetected, false);
     assert.deepEqual(applyCompletedWorkoutDynamics(summary, samples, storage), []);
   }
   assert.deepEqual(loadDynamicsStore(storage).entries, {});
@@ -315,6 +322,8 @@ test("dynamics store starts empty and round-trips", () => {
   const loaded = loadDynamicsStore(storage);
   assert.equal(loaded.version, 1);
   assert.deepEqual(loaded.entries[learningKey(vo2ShortKey)].workStartDelays, [29]);
+  assert.equal(loaded.entries[learningKey(vo2ShortKey)].workStartObservationCount, 0);
+  assert.equal(loaded.entries[learningKey(vo2ShortKey)].workStartDetectedResponseCount, 0);
   assert.equal(JSON.parse(storage.getItem(DYNAMICS_STORAGE_KEY)).version, 1);
 });
 
@@ -492,6 +501,8 @@ test("qualifying completed workouts update dynamics; cancelled, elliptical, and 
   assert.equal(saved.length, 1);
   assert.equal(saved[0].workStartSampleCount, 1);
   assert.equal(saved[0].medianWorkStartDelaySeconds, 25);
+  assert.equal(saved[0].workStartObservationCount, 1);
+  assert.equal(saved[0].workStartDetectedResponseCount, 1);
   assert.equal(
     applyCompletedWorkoutDynamics(bikeSummary({ cancelled: true, machine_guidance_trace: [workEntry(100, 11)] }), risingWorkStartHr(), storage).length,
     0
@@ -584,6 +595,183 @@ test("learning starting resistance and HR dynamics can update from the same work
   const dynamics = applyCompletedWorkoutDynamics(summary, samples, storage);
   assert.equal(learned?.resistance, 12);
   assert.equal(dynamics[0].workStartSampleCount, 6);
+  assert.equal(dynamics[0].workStartObservationCount, 6);
+  assert.equal(dynamics[0].workStartDetectedResponseCount, 6);
   assert.equal(loadLearnedStore(storage).entries[learningKey(vo2ShortKey)].resistance, 12);
   assert.equal(loadDynamicsStore(storage).entries[learningKey(vo2ShortKey)].workStartDelays.length, 6);
+});
+
+test("an observable window with no persistent HR response is censored, not dropped", () => {
+  const summary = bikeSummary({
+    machine_guidance_trace: [workEntry(100, 11), recoveryEntry(160)],
+  });
+  const samples = [...fillRange(85, 100, 130), ...fillRange(100, 160, 131)];
+  const start = deriveHrDynamicsObservations(summary, samples).find((observation) => observation.kind === "work_start");
+  assert.equal(start?.windowObservable, true);
+  assert.equal(start?.responseDetected, false);
+  assert.equal(start?.responseDelaySeconds, undefined);
+  const storage = memoryStorage();
+  const saved = applyCompletedWorkoutDynamics(summary, samples, storage);
+  assert.equal(saved[0].workStartObservationCount, 1);
+  assert.equal(saved[0].workStartDetectedResponseCount, 0);
+  assert.deepEqual(saved[0].workStartDelaySampleCount, 0);
+  assert.equal(responseDetectionRate(saved[0].workStartDetectedResponseCount, saved[0].workStartObservationCount), 0);
+});
+
+test("HR dropout is not counted as a non-response opportunity", () => {
+  const summary = bikeSummary({
+    machine_guidance_trace: [workEntry(100, 11), recoveryEntry(160)],
+  });
+  const samples = [...fillRange(85, 100, 130), { elapsedSeconds: 101, bpm: 131 }];
+  const start = deriveHrDynamicsObservations(summary, samples)[0];
+  assert.equal(start.windowObservable, false);
+  assert.equal(start.responseDetected, false);
+  const storage = memoryStorage();
+  assert.deepEqual(applyCompletedWorkoutDynamics(summary, samples, storage), []);
+  assert.deepEqual(loadDynamicsStore(storage).entries, {});
+});
+
+test("three non-consecutive evaluable rolling seconds are not an observation opportunity", () => {
+  const summary = bikeSummary({
+    machine_guidance_trace: [workEntry(100, 11), recoveryEntry(160)],
+  });
+  const samples = [
+    ...fillRange(85, 100, 130),
+    ...fillRange(106, 111, 131),
+    ...fillRange(126, 131, 131),
+    ...fillRange(146, 151, 131),
+  ];
+  const start = deriveHrDynamicsObservations(summary, samples)[0];
+  assert.equal(start.windowObservable, false);
+  assert.equal(start.responseDetected, false);
+  const storage = memoryStorage();
+  applyCompletedWorkoutDynamics(summary, samples, storage);
+  assert.equal(
+    loadDynamicsStore(storage).entries[learningKey(vo2ShortKey)]?.workStartObservationCount ?? 0,
+    0
+  );
+});
+
+test("three consecutive evaluable rolling seconds make a window observable", () => {
+  const summary = bikeSummary({
+    machine_guidance_trace: [workEntry(100, 11), recoveryEntry(160)],
+  });
+  const samples = [...fillRange(85, 100, 130), ...fillRange(110, 117, 131)];
+  const start = deriveHrDynamicsObservations(summary, samples)[0];
+  assert.equal(start.windowObservable, true);
+  assert.equal(start.responseDetected, false);
+  const storage = memoryStorage();
+  const saved = applyCompletedWorkoutDynamics(summary, samples, storage);
+  assert.equal(saved[0].workStartObservationCount, 1);
+  assert.equal(saved[0].workStartDetectedResponseCount, 0);
+});
+
+test("a truncated window too short to observe a response is not an opportunity", () => {
+  const summary = bikeSummary({
+    machine_guidance_trace: [workEntry(100, 11, { work: 12 }), recoveryEntry(112)],
+  });
+  const samples = [...fillRange(85, 100, 130), ...fillRange(100, 112, 140)];
+  const start = deriveHrDynamicsObservations(summary, samples)[0];
+  assert.equal(start.observationWindowSeconds, 12);
+  assert.equal(start.windowObservable, false);
+  const storage = memoryStorage();
+  const saved = applyCompletedWorkoutDynamics(summary, samples, storage);
+  if (saved.length > 0) {
+    assert.equal(saved[0].workStartObservationCount, 0);
+    assert.equal(saved[0].workStartDetectedResponseCount, 0);
+  }
+});
+
+test("increase and decrease reliability counts stay independent", () => {
+  const summary = bikeSummary({
+    intent: "vo2_priority",
+    machine_guidance_trace: [
+      workEntry(0, 8, { work: 240, phaseElapsedSeconds: 0 }),
+      workEntry(100, 9, { work: 240, phaseElapsedSeconds: 100, estimatedWatts: 114 }),
+    ],
+  });
+  const samples = [
+    ...fillRange(0, 15, 130).map((sample) => ({ ...sample, elapsedSeconds: sample.elapsedSeconds - 15 })),
+    ...fillRange(0, 90, 140),
+    ...fillRange(90, 100, 150),
+    ...fillRange(100, 190, 151),
+  ];
+  const observations = deriveHrDynamicsObservations(summary, samples);
+  const start = observations.find((observation) => observation.kind === "work_start");
+  const increase = observations.find((observation) => observation.kind === "resistance_increase");
+  assert.equal(start?.windowObservable, true);
+  assert.equal(start?.responseDetected, true);
+  assert.equal(increase?.windowObservable, true);
+  assert.equal(increase?.responseDetected, false);
+  const storage = memoryStorage();
+  const saved = applyCompletedWorkoutDynamics(summary, samples, storage)[0];
+  assert.equal(saved.workStartObservationCount, 1);
+  assert.equal(saved.workStartDetectedResponseCount, 1);
+  assert.equal(saved.increaseObservationCount, 1);
+  assert.equal(saved.increaseDetectedResponseCount, 0);
+  assert.equal(saved.decreaseObservationCount, 0);
+  assert.equal(responseDetectionRate(1, 2), 0.5);
+  assert.equal(responseDetectionRate(10, 20), 0.5);
+  assert.equal(responseDetectionRate(10, 10), 1);
+  assert.equal(responseDetectionRate(0, 0), undefined);
+});
+
+test("reliability counts do not use UI sample-count maxima and missing counts sanitize to zero", () => {
+  const storage = memoryStorage({
+    [DYNAMICS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      entries: {
+        [learningKey(vo2ShortKey)]: {
+          workStartDelays: [29, 30],
+          workStartHrDeltas: [17, 16, 18, 15, 19],
+          increaseDelays: [],
+          increaseHrPerLevel: [],
+          decreaseDelays: [],
+          decreaseHrPerLevel: [],
+          workStartObservationCount: 20,
+          workStartDetectedResponseCount: 10,
+          increaseObservationCount: -4,
+          increaseDetectedResponseCount: 99,
+          updatedAt: "t",
+        },
+      },
+    }),
+  });
+  const listed = listHrDynamics("proform-smart-power-10", storage)[0];
+  assert.equal(listed.workStartSampleCount, 5);
+  assert.equal(listed.workStartDelaySampleCount, 2);
+  assert.equal(listed.workStartObservationCount, 20);
+  assert.equal(listed.workStartDetectedResponseCount, 10);
+  assert.equal(listed.increaseObservationCount, 0);
+  assert.equal(listed.increaseDetectedResponseCount, 0);
+  assert.equal(responseDetectionRate(listed.workStartDetectedResponseCount, listed.workStartObservationCount), 0.5);
+});
+
+test("observation counts are lifetime and are not capped at the delay sample limit", () => {
+  let entry;
+  for (let index = 0; index < 25; index++) {
+    entry = mergeObservationIntoEntry(
+      entry,
+      {
+        machineId: "proform-smart-power-10",
+        machineProfileVersion: 1,
+        activity: "bike",
+        intent: "vo2_primer",
+        durationClass: "short",
+        phaseId: "work:1",
+        toResistance: 11,
+        changeElapsedSeconds: 100,
+        observationWindowSeconds: 60,
+        kind: "work_start",
+        responseDelaySeconds: 30,
+        hrDelta: 12,
+        windowObservable: true,
+        responseDetected: true,
+      },
+      "t"
+    );
+  }
+  assert.equal(entry.workStartDelays.length, DYNAMICS_SAMPLE_LIMIT);
+  assert.equal(entry.workStartObservationCount, 25);
+  assert.equal(entry.workStartDetectedResponseCount, 25);
 });

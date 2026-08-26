@@ -1,5 +1,5 @@
 import type { WorkoutSummary } from "../../types.js";
-import { qualifiedHrMedian, samplesInRange, validDistinctHr } from "../hrQuality.js";
+import { qualifiedHrMedian, samplesInRange, validDistinctHr, MIN_HR_SAMPLES, MIN_HR_SPAN_SECONDS } from "../hrQuality.js";
 import { getMachineDefinition } from "../registry.js";
 import type { MachineGuidanceTraceEntry } from "../trace.js";
 import {
@@ -14,6 +14,7 @@ import {
   MAX_ABS_HR_DELTA,
   MAX_ABS_HR_PER_LEVEL,
   MAX_RESISTANCE_STEP,
+  MIN_OBSERVABLE_WINDOW_SECONDS,
   RESPONSE_ONSET_BPM,
   RESPONSE_PERSISTENCE_SECONDS,
   RESPONSE_SEARCH_SECONDS,
@@ -148,21 +149,69 @@ function responseOnsetDelay(
   return undefined;
 }
 
+function hasEvaluableOnsetRun(
+  samples: readonly LearningHrSample[],
+  changeElapsed: number,
+  windowEnd: number
+): boolean {
+  const distinct = validDistinctHr(samples);
+  const firstT = Math.ceil(changeElapsed + 1);
+  const lastT = Math.floor(windowEnd) - 1;
+  let runLength = 0;
+  for (let t = firstT; t <= lastT; t++) {
+    const window = distinct.filter(
+      (sample) =>
+        sample.elapsedSeconds > changeElapsed &&
+        sample.elapsedSeconds <= t &&
+        sample.elapsedSeconds >= t - ROLLING_ONSET_LOOKBACK_SECONDS
+    );
+    if (qualifiedHrMedian(window) !== undefined) {
+      runLength += 1;
+      if (runLength >= RESPONSE_PERSISTENCE_SECONDS) return true;
+    } else {
+      runLength = 0;
+    }
+  }
+  return false;
+}
+
+export function observationWindowIsObservable(
+  samples: readonly LearningHrSample[],
+  changeElapsed: number,
+  windowEnd: number,
+  baseline: number | undefined
+): boolean {
+  if (baseline === undefined) return false;
+  if (windowEnd - changeElapsed < MIN_OBSERVABLE_WINDOW_SECONDS) return false;
+  const post = validDistinctHr(samplesInRange(samples, changeElapsed, windowEnd, { startExclusive: true }));
+  if (post.length < MIN_HR_SAMPLES) return false;
+  const span = post[post.length - 1].elapsedSeconds - post[0].elapsedSeconds;
+  if (span < MIN_HR_SPAN_SECONDS) return false;
+  if (post[post.length - 1].elapsedSeconds - changeElapsed < MIN_OBSERVABLE_WINDOW_SECONDS - 1) return false;
+  return hasEvaluableOnsetRun(samples, changeElapsed, windowEnd);
+}
+
+export function responseDetectionRate(detected: number, observed: number): number | undefined {
+  if (!Number.isInteger(observed) || observed <= 0) return undefined;
+  if (!Number.isInteger(detected) || detected < 0) return undefined;
+  return detected / observed;
+}
+
 function roundedDelta(settled: number | undefined, baseline: number | undefined): number | undefined {
   if (settled === undefined || baseline === undefined) return undefined;
   return Math.round(settled - baseline);
 }
 
-export function observationPassesSanity(observation: MachineHrResponseObservation): boolean {
-  if (observation.responseDelaySeconds !== undefined) {
-    if (
-      !Number.isInteger(observation.responseDelaySeconds) ||
-      observation.responseDelaySeconds < 0 ||
-      observation.responseDelaySeconds > RESPONSE_SEARCH_SECONDS
-    ) {
-      return false;
-    }
-  }
+export function observationDelayIsSane(observation: MachineHrResponseObservation): boolean {
+  if (observation.responseDelaySeconds === undefined) return true;
+  return (
+    Number.isInteger(observation.responseDelaySeconds) &&
+    observation.responseDelaySeconds >= 0 &&
+    observation.responseDelaySeconds <= RESPONSE_SEARCH_SECONDS
+  );
+}
+
+export function observationHrDeltaIsSane(observation: MachineHrResponseObservation): boolean {
   if (observation.hrDelta !== undefined && Math.abs(observation.hrDelta) > MAX_ABS_HR_DELTA) return false;
   if (
     observation.resistanceDelta !== undefined &&
@@ -175,8 +224,16 @@ export function observationPassesSanity(observation: MachineHrResponseObservatio
   return true;
 }
 
+export function observationPassesSanity(observation: MachineHrResponseObservation): boolean {
+  return observationDelayIsSane(observation) && observationHrDeltaIsSane(observation);
+}
+
 export function observationHasAggregatableMetric(observation: MachineHrResponseObservation): boolean {
   return observation.responseDelaySeconds !== undefined || observation.hrDelta !== undefined;
+}
+
+export function observationContributesToStore(observation: MachineHrResponseObservation): boolean {
+  return observation.windowObservable || observationHasAggregatableMetric(observation);
 }
 
 function observeEvent(params: {
@@ -197,6 +254,13 @@ function observeEvent(params: {
       ? undefined
       : responseOnsetDelay(params.samples, params.changeElapsed, params.windowEnd, params.baseline, params.direction);
   const settled = settledHr(params.samples, params.changeElapsed, params.windowEnd);
+  const windowObservable = observationWindowIsObservable(
+    params.samples,
+    params.changeElapsed,
+    params.windowEnd,
+    params.baseline
+  );
+  const responseDetected = delay !== undefined;
   return {
     machineId: params.key.machineId,
     machineProfileVersion: params.key.machineProfileVersion,
@@ -214,6 +278,8 @@ function observeEvent(params: {
     hrDelta: roundedDelta(settled, params.baseline),
     responseDelaySeconds: delay,
     observationWindowSeconds: Math.max(0, Math.round(params.windowEnd - params.changeElapsed)),
+    windowObservable,
+    responseDetected,
     kind: params.kind,
   };
 }

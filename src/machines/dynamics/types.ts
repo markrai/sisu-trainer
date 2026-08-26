@@ -18,6 +18,7 @@ export const ROLLING_ONSET_LOOKBACK_SECONDS = 4;
 export const MAX_ABS_HR_DELTA = 40;
 export const MAX_ABS_HR_PER_LEVEL = 20;
 export const MAX_RESISTANCE_STEP = 2;
+export const MIN_OBSERVABLE_WINDOW_SECONDS = 15;
 
 export type HrResponseKind = "work_start" | "resistance_increase" | "resistance_decrease";
 
@@ -38,6 +39,8 @@ export interface MachineHrResponseObservation {
   hrDelta?: number;
   responseDelaySeconds?: number;
   observationWindowSeconds: number;
+  windowObservable: boolean;
+  responseDetected: boolean;
   kind: HrResponseKind;
 }
 
@@ -48,6 +51,12 @@ export interface StoredDynamicsEntry {
   increaseHrPerLevel: number[];
   decreaseDelays: number[];
   decreaseHrPerLevel: number[];
+  workStartObservationCount: number;
+  workStartDetectedResponseCount: number;
+  increaseObservationCount: number;
+  increaseDetectedResponseCount: number;
+  decreaseObservationCount: number;
+  decreaseDetectedResponseCount: number;
   updatedAt: string;
 }
 
@@ -74,6 +83,12 @@ export interface LearnedHrDynamics {
   decreaseDelaySampleCount: number;
   medianDecreaseDelaySeconds?: number;
   medianDecreaseHrDeltaPerStep?: number;
+  workStartObservationCount: number;
+  workStartDetectedResponseCount: number;
+  increaseObservationCount: number;
+  increaseDetectedResponseCount: number;
+  decreaseObservationCount: number;
+  decreaseDetectedResponseCount: number;
   timingPersonalized?: boolean;
   updatedAt: string;
 }

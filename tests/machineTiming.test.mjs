@@ -429,6 +429,23 @@ test("learned starting resistance still applies when medium evaluation is delaye
   assert.equal(update?.guidance.resistance, 13);
 });
 
+test("later-only timing still personalizes when detection rate is only 50 percent", () => {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  putDynamicsEntry(
+    mediumKey,
+    delayEntry({
+      workStartDelays: [48, 51, 52, 54, 55],
+      workStartObservationCount: 20,
+      workStartDetectedResponseCount: 10,
+    }),
+    storage
+  );
+  assert.deepEqual(lookupPersonalizedTiming({ ...mediumKey, durationSeconds: 120 }, storage), {
+    initialEvaluationSeconds: 67,
+  });
+});
+
 test("waiting for personalized timing does not append a trace or voice event", () => {
   const storage = memoryStorage();
   setSelectedMachine("bike", "proform-smart-power-10", storage);

@@ -3,8 +3,9 @@ import type { WorkoutSummary } from "../../types.js";
 import { learningKey, workDurationClass, type LearningKeyParts } from "../learning/types.js";
 import {
   deriveHrDynamicsObservations,
-  observationHasAggregatableMetric,
-  observationPassesSanity,
+  observationContributesToStore,
+  observationDelayIsSane,
+  observationHrDeltaIsSane,
 } from "./derive.js";
 import {
   appendBoundedSample,
@@ -28,6 +29,7 @@ export {
   MAX_ABS_HR_DELTA,
   MAX_ABS_HR_PER_LEVEL,
   MAX_RESISTANCE_STEP,
+  MIN_OBSERVABLE_WINDOW_SECONDS,
   RESPONSE_SEARCH_SECONDS,
   type LearnedHrDynamics,
   type LearnedHrDynamicsStore,
@@ -36,8 +38,11 @@ export {
 } from "./types.js";
 export {
   deriveHrDynamicsObservations,
+  observationContributesToStore,
   observationHasAggregatableMetric,
   observationPassesSanity,
+  observationWindowIsObservable,
+  responseDetectionRate,
   workoutEligibleForHrDynamics,
 } from "./derive.js";
 export {
@@ -79,27 +84,36 @@ export function mergeObservationIntoEntry(
   updatedAt: string
 ): StoredDynamicsEntry {
   const next = previous ? cloneEntry({ ...previous, updatedAt }) : emptyDynamicsEntry(updatedAt);
-  if (!observationPassesSanity(observation) || !observationHasAggregatableMetric(observation)) return next;
+  const delaySane = observationDelayIsSane(observation);
+  const deltaSane = observationHrDeltaIsSane(observation);
+  const detected = observation.responseDetected === true && observation.responseDelaySeconds !== undefined && delaySane;
+  const observable = observation.windowObservable === true;
+  const delay = delaySane ? observation.responseDelaySeconds : undefined;
+  const hrDelta = deltaSane ? observation.hrDelta : undefined;
+  const perLevel = hrDelta === undefined ? undefined : perLevelDelta({ ...observation, hrDelta });
   if (observation.kind === "work_start") {
-    if (observation.responseDelaySeconds !== undefined) {
-      next.workStartDelays = appendBoundedSample(next.workStartDelays, observation.responseDelaySeconds);
+    if (observable) {
+      next.workStartObservationCount += 1;
+      if (detected) next.workStartDetectedResponseCount += 1;
     }
-    if (observation.hrDelta !== undefined) {
-      next.workStartHrDeltas = appendBoundedSample(next.workStartHrDeltas, observation.hrDelta);
-    }
+    if (delay !== undefined) next.workStartDelays = appendBoundedSample(next.workStartDelays, delay);
+    if (hrDelta !== undefined) next.workStartHrDeltas = appendBoundedSample(next.workStartHrDeltas, hrDelta);
     return next;
   }
-  const perLevel = perLevelDelta(observation);
   if (observation.kind === "resistance_increase") {
-    if (observation.responseDelaySeconds !== undefined) {
-      next.increaseDelays = appendBoundedSample(next.increaseDelays, observation.responseDelaySeconds);
+    if (observable) {
+      next.increaseObservationCount += 1;
+      if (detected) next.increaseDetectedResponseCount += 1;
     }
+    if (delay !== undefined) next.increaseDelays = appendBoundedSample(next.increaseDelays, delay);
     if (perLevel !== undefined) next.increaseHrPerLevel = appendBoundedSample(next.increaseHrPerLevel, perLevel);
     return next;
   }
-  if (observation.responseDelaySeconds !== undefined) {
-    next.decreaseDelays = appendBoundedSample(next.decreaseDelays, observation.responseDelaySeconds);
+  if (observable) {
+    next.decreaseObservationCount += 1;
+    if (detected) next.decreaseDetectedResponseCount += 1;
   }
+  if (delay !== undefined) next.decreaseDelays = appendBoundedSample(next.decreaseDelays, delay);
   if (perLevel !== undefined) next.decreaseHrPerLevel = appendBoundedSample(next.decreaseHrPerLevel, perLevel);
   return next;
 }
@@ -110,9 +124,7 @@ export function applyCompletedWorkoutDynamics(
   storage?: DynamicsStorage,
   updatedAt = new Date().toISOString()
 ): LearnedHrDynamics[] {
-  const observations = deriveHrDynamicsObservations(summary, hrSamples).filter(
-    (observation) => observationPassesSanity(observation) && observationHasAggregatableMetric(observation)
-  );
+  const observations = deriveHrDynamicsObservations(summary, hrSamples).filter(observationContributesToStore);
   if (observations.length === 0) return [];
   const store = loadDynamicsStore(storage);
   const grouped = new Map<string, { parts: LearningKeyParts; merged: StoredDynamicsEntry }>();

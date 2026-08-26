@@ -12,3 +12,4 @@ export const ROLLING_ONSET_LOOKBACK_SECONDS = 4;
 export const MAX_ABS_HR_DELTA = 40;
 export const MAX_ABS_HR_PER_LEVEL = 20;
 export const MAX_RESISTANCE_STEP = 2;
+export const MIN_OBSERVABLE_WINDOW_SECONDS = 15;

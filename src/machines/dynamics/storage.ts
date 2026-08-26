@@ -29,6 +29,12 @@ function emptyEntry(updatedAt: string): StoredDynamicsEntry {
     increaseHrPerLevel: [],
     decreaseDelays: [],
     decreaseHrPerLevel: [],
+    workStartObservationCount: 0,
+    workStartDetectedResponseCount: 0,
+    increaseObservationCount: 0,
+    increaseDetectedResponseCount: 0,
+    decreaseObservationCount: 0,
+    decreaseDetectedResponseCount: 0,
     updatedAt,
   };
 }
@@ -49,6 +55,15 @@ function sanitizeNumberArray(value: unknown, allowed: (item: number) => boolean)
     clean.push(item);
   }
   return clean.slice(-DYNAMICS_SAMPLE_LIMIT);
+}
+
+function sanitizeCount(value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 0) return 0;
+  return value as number;
+}
+
+function sanitizeDetectedCount(detected: unknown, observed: number): number {
+  return Math.min(sanitizeCount(detected), observed);
 }
 
 function delayAllowed(value: number): boolean {
@@ -74,6 +89,21 @@ function sanitizeStoredEntry(value: unknown): StoredDynamicsEntry | undefined {
     increaseHrPerLevel: sanitizeNumberArray(raw.increaseHrPerLevel, perLevelAllowed),
     decreaseDelays: sanitizeNumberArray(raw.decreaseDelays, delayAllowed),
     decreaseHrPerLevel: sanitizeNumberArray(raw.decreaseHrPerLevel, perLevelAllowed),
+    workStartObservationCount: sanitizeCount(raw.workStartObservationCount),
+    workStartDetectedResponseCount: sanitizeDetectedCount(
+      raw.workStartDetectedResponseCount,
+      sanitizeCount(raw.workStartObservationCount)
+    ),
+    increaseObservationCount: sanitizeCount(raw.increaseObservationCount),
+    increaseDetectedResponseCount: sanitizeDetectedCount(
+      raw.increaseDetectedResponseCount,
+      sanitizeCount(raw.increaseObservationCount)
+    ),
+    decreaseObservationCount: sanitizeCount(raw.decreaseObservationCount),
+    decreaseDetectedResponseCount: sanitizeDetectedCount(
+      raw.decreaseDetectedResponseCount,
+      sanitizeCount(raw.decreaseObservationCount)
+    ),
     updatedAt: raw.updatedAt,
   };
 }
@@ -135,6 +165,12 @@ export function toPublicDynamics(parts: LearningKeyParts, entry: StoredDynamicsE
     decreaseDelaySampleCount: entry.decreaseDelays.length,
     medianDecreaseDelaySeconds: integerMedian(entry.decreaseDelays),
     medianDecreaseHrDeltaPerStep: integerMedian(entry.decreaseHrPerLevel),
+    workStartObservationCount: entry.workStartObservationCount,
+    workStartDetectedResponseCount: entry.workStartDetectedResponseCount,
+    increaseObservationCount: entry.increaseObservationCount,
+    increaseDetectedResponseCount: entry.increaseDetectedResponseCount,
+    decreaseObservationCount: entry.decreaseObservationCount,
+    decreaseDetectedResponseCount: entry.decreaseDetectedResponseCount,
     updatedAt: entry.updatedAt,
   };
   if (hasActiveTimingPersonalization(entry, parts.durationClass)) listed.timingPersonalized = true;
@@ -195,7 +231,10 @@ export function entryHasDynamicsSamples(entry: StoredDynamicsEntry): boolean {
     entry.increaseDelays.length > 0 ||
     entry.increaseHrPerLevel.length > 0 ||
     entry.decreaseDelays.length > 0 ||
-    entry.decreaseHrPerLevel.length > 0
+    entry.decreaseHrPerLevel.length > 0 ||
+    entry.workStartObservationCount > 0 ||
+    entry.increaseObservationCount > 0 ||
+    entry.decreaseObservationCount > 0
   );
 }
 
@@ -207,6 +246,12 @@ export function cloneEntry(entry: StoredDynamicsEntry): StoredDynamicsEntry {
     increaseHrPerLevel: [...entry.increaseHrPerLevel],
     decreaseDelays: [...entry.decreaseDelays],
     decreaseHrPerLevel: [...entry.decreaseHrPerLevel],
+    workStartObservationCount: entry.workStartObservationCount ?? 0,
+    workStartDetectedResponseCount: entry.workStartDetectedResponseCount ?? 0,
+    increaseObservationCount: entry.increaseObservationCount ?? 0,
+    increaseDetectedResponseCount: entry.increaseDetectedResponseCount ?? 0,
+    decreaseObservationCount: entry.decreaseObservationCount ?? 0,
+    decreaseDetectedResponseCount: entry.decreaseDetectedResponseCount ?? 0,
     updatedAt: entry.updatedAt,
   };
 }

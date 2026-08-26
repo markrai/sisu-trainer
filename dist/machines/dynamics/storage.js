@@ -14,6 +14,12 @@ function emptyEntry(updatedAt) {
         increaseHrPerLevel: [],
         decreaseDelays: [],
         decreaseHrPerLevel: [],
+        workStartObservationCount: 0,
+        workStartDetectedResponseCount: 0,
+        increaseObservationCount: 0,
+        increaseDetectedResponseCount: 0,
+        decreaseObservationCount: 0,
+        decreaseDetectedResponseCount: 0,
         updatedAt,
     };
 }
@@ -33,6 +39,14 @@ function sanitizeNumberArray(value, allowed) {
         clean.push(item);
     }
     return clean.slice(-DYNAMICS_SAMPLE_LIMIT);
+}
+function sanitizeCount(value) {
+    if (!Number.isInteger(value) || value < 0)
+        return 0;
+    return value;
+}
+function sanitizeDetectedCount(detected, observed) {
+    return Math.min(sanitizeCount(detected), observed);
 }
 function delayAllowed(value) {
     return Number.isInteger(value) && value >= 0 && value <= RESPONSE_SEARCH_SECONDS;
@@ -56,6 +70,12 @@ function sanitizeStoredEntry(value) {
         increaseHrPerLevel: sanitizeNumberArray(raw.increaseHrPerLevel, perLevelAllowed),
         decreaseDelays: sanitizeNumberArray(raw.decreaseDelays, delayAllowed),
         decreaseHrPerLevel: sanitizeNumberArray(raw.decreaseHrPerLevel, perLevelAllowed),
+        workStartObservationCount: sanitizeCount(raw.workStartObservationCount),
+        workStartDetectedResponseCount: sanitizeDetectedCount(raw.workStartDetectedResponseCount, sanitizeCount(raw.workStartObservationCount)),
+        increaseObservationCount: sanitizeCount(raw.increaseObservationCount),
+        increaseDetectedResponseCount: sanitizeDetectedCount(raw.increaseDetectedResponseCount, sanitizeCount(raw.increaseObservationCount)),
+        decreaseObservationCount: sanitizeCount(raw.decreaseObservationCount),
+        decreaseDetectedResponseCount: sanitizeDetectedCount(raw.decreaseDetectedResponseCount, sanitizeCount(raw.decreaseObservationCount)),
         updatedAt: raw.updatedAt,
     };
 }
@@ -114,6 +134,12 @@ export function toPublicDynamics(parts, entry) {
         decreaseDelaySampleCount: entry.decreaseDelays.length,
         medianDecreaseDelaySeconds: integerMedian(entry.decreaseDelays),
         medianDecreaseHrDeltaPerStep: integerMedian(entry.decreaseHrPerLevel),
+        workStartObservationCount: entry.workStartObservationCount,
+        workStartDetectedResponseCount: entry.workStartDetectedResponseCount,
+        increaseObservationCount: entry.increaseObservationCount,
+        increaseDetectedResponseCount: entry.increaseDetectedResponseCount,
+        decreaseObservationCount: entry.decreaseObservationCount,
+        decreaseDetectedResponseCount: entry.decreaseDetectedResponseCount,
         updatedAt: entry.updatedAt,
     };
     if (hasActiveTimingPersonalization(entry, parts.durationClass))
@@ -166,9 +192,13 @@ export function entryHasDynamicsSamples(entry) {
         entry.increaseDelays.length > 0 ||
         entry.increaseHrPerLevel.length > 0 ||
         entry.decreaseDelays.length > 0 ||
-        entry.decreaseHrPerLevel.length > 0);
+        entry.decreaseHrPerLevel.length > 0 ||
+        entry.workStartObservationCount > 0 ||
+        entry.increaseObservationCount > 0 ||
+        entry.decreaseObservationCount > 0);
 }
 export function cloneEntry(entry) {
+    var _a, _b, _c, _d, _e, _f;
     return {
         workStartDelays: [...entry.workStartDelays],
         workStartHrDeltas: [...entry.workStartHrDeltas],
@@ -176,6 +206,12 @@ export function cloneEntry(entry) {
         increaseHrPerLevel: [...entry.increaseHrPerLevel],
         decreaseDelays: [...entry.decreaseDelays],
         decreaseHrPerLevel: [...entry.decreaseHrPerLevel],
+        workStartObservationCount: (_a = entry.workStartObservationCount) !== null && _a !== void 0 ? _a : 0,
+        workStartDetectedResponseCount: (_b = entry.workStartDetectedResponseCount) !== null && _b !== void 0 ? _b : 0,
+        increaseObservationCount: (_c = entry.increaseObservationCount) !== null && _c !== void 0 ? _c : 0,
+        increaseDetectedResponseCount: (_d = entry.increaseDetectedResponseCount) !== null && _d !== void 0 ? _d : 0,
+        decreaseObservationCount: (_e = entry.decreaseObservationCount) !== null && _e !== void 0 ? _e : 0,
+        decreaseDetectedResponseCount: (_f = entry.decreaseDetectedResponseCount) !== null && _f !== void 0 ? _f : 0,
         updatedAt: entry.updatedAt,
     };
 }
