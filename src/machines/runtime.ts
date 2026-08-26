@@ -3,6 +3,7 @@ import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommenda
 import { getMachineDefinition } from "./registry.js";
 import { getSelectedMachineId, type EquipmentStorage } from "./selection.js";
 import type {
+  CompletedShortWorkPhase,
   MachineDefinition,
   MachineGuidance,
   MachineGuidanceState,
@@ -12,6 +13,17 @@ import type {
   MachineId,
 } from "./types.js";
 
+interface PendingShortWorkPhase {
+  phaseId: string;
+  phaseDurationSeconds: number;
+  phaseElapsedSeconds: number;
+  workoutElapsedSeconds: number;
+  resistance: number;
+  targetHeartRateMin?: number;
+  targetHeartRateMax?: number;
+  recentHeartRates: MachineHeartRateSample[];
+}
+
 interface MachineRuntimeState {
   sessionId: string | null;
   machineId?: MachineId;
@@ -20,6 +32,7 @@ interface MachineRuntimeState {
   recentHeartRates: MachineHeartRateSample[];
   trace: MachineGuidanceTraceEntry[];
   lastPhaseId?: string;
+  pendingShortWork?: PendingShortWorkPhase;
 }
 
 export interface MachineGuidanceRuntimeInput {
@@ -98,6 +111,40 @@ export function appendMachineGuidanceTrace(
   return [...trace, entry];
 }
 
+function workPhaseHeartRates(
+  samples: readonly MachineHeartRateSample[],
+  workoutElapsedSeconds: number,
+  phaseElapsedSeconds: number
+): MachineHeartRateSample[] {
+  const workStart = workoutElapsedSeconds - phaseElapsedSeconds;
+  const cutoff = Math.max(workStart, workoutElapsedSeconds - 15);
+  return samples
+    .filter((sample) => sample.elapsedSeconds >= cutoff && sample.elapsedSeconds <= workoutElapsedSeconds)
+    .slice(-32);
+}
+
+function completedShortWorkFromPending(
+  pending: PendingShortWorkPhase,
+  liveSamples: readonly MachineHeartRateSample[]
+): CompletedShortWorkPhase {
+  const workStart = pending.workoutElapsedSeconds - pending.phaseElapsedSeconds;
+  const workEnd = workStart + pending.phaseDurationSeconds;
+  const merged = new Map<number, MachineHeartRateSample>();
+  for (const sample of [...pending.recentHeartRates, ...liveSamples]) {
+    if (sample.elapsedSeconds >= workEnd - 15 && sample.elapsedSeconds < workEnd) {
+      merged.set(sample.elapsedSeconds, sample);
+    }
+  }
+  return {
+    phaseId: pending.phaseId,
+    phaseDurationSeconds: pending.phaseDurationSeconds,
+    resistance: pending.resistance,
+    targetHeartRateMin: pending.targetHeartRateMin,
+    targetHeartRateMax: pending.targetHeartRateMax,
+    recentHeartRates: [...merged.values()].sort((a, b) => a.elapsedSeconds - b.elapsedSeconds).slice(-32),
+  };
+}
+
 export function updateMachineGuidanceRuntime(
   input: MachineGuidanceRuntimeInput,
   storage?: EquipmentStorage
@@ -117,7 +164,14 @@ export function updateMachineGuidanceRuntime(
     runtime.previousGuidance = undefined;
     runtime.trace = [];
     runtime.lastPhaseId = undefined;
+    runtime.pendingShortWork = undefined;
   }
+  const leavingShortWork = runtime.pendingShortWork !== undefined &&
+    (input.phaseId !== runtime.pendingShortWork.phaseId || input.phaseKind !== "work");
+  const completedShortWork = leavingShortWork && runtime.pendingShortWork && !runtime.guidanceState.shortIntervalEvaluated
+    ? completedShortWorkFromPending(runtime.pendingShortWork, runtime.recentHeartRates)
+    : undefined;
+  if (leavingShortWork) runtime.pendingShortWork = undefined;
   const phaseChanged = runtime.lastPhaseId !== input.phaseId;
   const result = getMachineGuidance(
     {
@@ -134,6 +188,7 @@ export function updateMachineGuidanceRuntime(
       targetHeartRateMax: input.targetHeartRateMax,
       recentHeartRates: runtime.recentHeartRates,
       previousGuidance: runtime.previousGuidance,
+      completedShortWork,
     },
     runtime.guidanceState
   );
@@ -144,6 +199,22 @@ export function updateMachineGuidanceRuntime(
   runtime.guidanceState = result.state;
   runtime.previousGuidance = result.guidance;
   runtime.lastPhaseId = input.phaseId;
+  if (input.phaseKind === "work" && input.phaseDurationSeconds <= 75) {
+    runtime.pendingShortWork = {
+      phaseId: input.phaseId,
+      phaseDurationSeconds: input.phaseDurationSeconds,
+      phaseElapsedSeconds: input.phaseElapsedSeconds,
+      workoutElapsedSeconds: input.workoutElapsedSeconds,
+      resistance: result.state.currentResistance ?? result.guidance.resistance ?? 11,
+      targetHeartRateMin: input.targetHeartRateMin,
+      targetHeartRateMax: input.targetHeartRateMax,
+      recentHeartRates: workPhaseHeartRates(
+        runtime.recentHeartRates,
+        input.workoutElapsedSeconds,
+        input.phaseElapsedSeconds
+      ),
+    };
+  }
   const voiceEvent = phaseChanged || recommendationChanged
     ? {
         machineId,

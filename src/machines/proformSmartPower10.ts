@@ -1,4 +1,5 @@
 import type {
+  CompletedShortWorkPhase,
   MachineAdapter,
   MachineGuidance,
   MachineGuidanceContext,
@@ -32,12 +33,25 @@ export function clampAutomaticResistance(resistance: number): number {
   return Math.max(1, Math.min(15, Math.round(resistance)));
 }
 
-function rollingMedian(context: MachineGuidanceContext): number | undefined {
-  const values = context.recentHeartRates
-    .map((sample) => sample.bpm)
-    .filter((bpm) => Number.isFinite(bpm) && bpm > 0)
-    .sort((a, b) => a - b);
-  if (values.length === 0) return undefined;
+function validDistinctSamples(recentHeartRates: MachineGuidanceContext["recentHeartRates"]) {
+  const byElapsed = new Map<number, number>();
+  for (const sample of recentHeartRates) {
+    if (!Number.isFinite(sample.bpm) || sample.bpm <= 0) continue;
+    byElapsed.set(sample.elapsedSeconds, sample.bpm);
+  }
+  return [...byElapsed.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([elapsedSeconds, bpm]) => ({ elapsedSeconds, bpm }));
+}
+
+function rollingMedian(
+  context: Pick<MachineGuidanceContext, "recentHeartRates">
+): number | undefined {
+  const samples = validDistinctSamples(context.recentHeartRates);
+  if (samples.length < 5) return undefined;
+  const span = samples[samples.length - 1].elapsedSeconds - samples[0].elapsedSeconds;
+  if (span < 4) return undefined;
+  const values = samples.map((sample) => sample.bpm).sort((a, b) => a - b);
   const middle = Math.floor(values.length / 2);
   return values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
 }
@@ -75,7 +89,30 @@ function recommendation(
   return guidance;
 }
 
-function adaptWorkResistance(context: MachineGuidanceContext, currentResistance: number): {
+export function finalizeProFormShortWork(
+  completed: CompletedShortWorkPhase,
+  state: MachineGuidanceState
+): MachineGuidanceState {
+  if (completed.phaseDurationSeconds > 75 || state.shortIntervalEvaluated) return state;
+  const adapted = adaptWorkResistance(
+    {
+      recentHeartRates: completed.recentHeartRates,
+      targetHeartRateMin: completed.targetHeartRateMin,
+      targetHeartRateMax: completed.targetHeartRateMax,
+    },
+    completed.resistance
+  );
+  return {
+    ...state,
+    shortIntervalEvaluated: true,
+    nextWorkResistance: adapted.evaluated ? adapted.resistance : completed.resistance,
+  };
+}
+
+function adaptWorkResistance(
+  context: Pick<MachineGuidanceContext, "recentHeartRates" | "targetHeartRateMin" | "targetHeartRateMax">,
+  currentResistance: number
+): {
   resistance: number;
   median?: number;
   evaluated: boolean;
@@ -140,7 +177,12 @@ function recoveryGuidance(
     }
   }
   const action = actionForResistance(state.currentResistance, resistance, phaseChanged);
-  const nextState = { ...state, currentResistance: resistance, currentCadenceRpm: 63 };
+  const nextState = {
+    ...state,
+    currentResistance: resistance,
+    currentCadenceRpm: 63,
+    nextWorkResistance: state.nextWorkResistance,
+  };
   return {
     guidance: recommendation(resistance, 63, action, reason, false),
     state: nextState,
@@ -161,7 +203,9 @@ function workGuidance(
     ...state,
     currentResistance: resistance,
     currentCadenceRpm: 70,
-    nextWorkResistance: resistance,
+    nextWorkResistance: context.phaseDurationSeconds <= 75 && state.shortIntervalEvaluated
+      ? state.nextWorkResistance ?? resistance
+      : resistance,
   };
 
   if (context.phaseDurationSeconds <= 75) {
@@ -234,17 +278,20 @@ export function getProFormSmartPower10Guidance(
   context: MachineGuidanceContext,
   state: MachineGuidanceState
 ): MachineGuidanceResult {
-  const phaseChanged = state.currentPhaseId !== context.phaseId;
+  const finalizedState = context.completedShortWork
+    ? finalizeProFormShortWork(context.completedShortWork, state)
+    : state;
+  const phaseChanged = finalizedState.currentPhaseId !== context.phaseId;
   const phaseState: MachineGuidanceState = phaseChanged
     ? {
-        ...state,
+        ...finalizedState,
         currentPhaseId: context.phaseId,
         currentPhaseKind: context.phaseKind,
         lastEvaluationPhaseElapsedSeconds: undefined,
         shortIntervalEvaluated: false,
         mediumIntervalEvaluated: false,
       }
-    : state;
+    : finalizedState;
   if (context.phaseKind === "warmup") return warmupGuidance(context, phaseState, phaseChanged);
   if (context.phaseKind === "work") return workGuidance(context, phaseState, phaseChanged);
   if (context.phaseKind === "recovery") return recoveryGuidance(context, phaseState, phaseChanged, false);

@@ -40,6 +40,10 @@ function recent(bpm, count = 11) {
   return Array.from({ length: count }, (_, index) => ({ elapsedSeconds: index, bpm }));
 }
 
+function samplesAt(bpm, elapsedSeconds) {
+  return elapsedSeconds.map((elapsed) => ({ elapsedSeconds: elapsed, bpm }));
+}
+
 function context(overrides = {}) {
   return {
     machineId: "proform-smart-power-10",
@@ -285,6 +289,93 @@ test("missing HR or targets does not consume work evaluations", () => {
   assert.equal(result.state.lastEvaluationPhaseElapsedSeconds, 91);
 });
 
+test("work adaptation requires at least five distinct HR seconds spanning four seconds", () => {
+  const oneSample = samplesAt(150, [59]);
+  const sameSecond = Array.from({ length: 5 }, () => ({ elapsedSeconds: 59, bpm: 150 }));
+  const tooShortSpan = samplesAt(150, [55, 56, 57, 58, 58]);
+  const clustered = samplesAt(150, [55, 55.25, 55.5, 55.75, 56]);
+  const sufficient = samplesAt(150, [54, 55, 56, 57, 58]);
+
+  let result = getProFormSmartPower10Guidance(context(), createMachineGuidanceState());
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: oneSample }),
+    result.state
+  );
+  assert.equal(result.state.shortIntervalEvaluated, false);
+  assert.equal(result.state.nextWorkResistance, 11);
+
+  result = getProFormSmartPower10Guidance(
+    context({
+      phaseKind: "recovery",
+      phaseId: "recovery:1",
+      completedShortWork: {
+        phaseId: "work:1",
+        phaseDurationSeconds: 60,
+        resistance: 11,
+        targetHeartRateMin: 160,
+        targetHeartRateMax: 170,
+        recentHeartRates: sameSecond,
+      },
+    }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 2);
+  assert.equal(result.state.nextWorkResistance, 11);
+
+  result = getProFormSmartPower10Guidance(context(), createMachineGuidanceState());
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: tooShortSpan }),
+    result.state
+  );
+  assert.equal(result.state.shortIntervalEvaluated, false);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: clustered }),
+    result.state
+  );
+  assert.equal(result.state.shortIntervalEvaluated, false);
+
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: sufficient }),
+    result.state
+  );
+  assert.equal(result.state.shortIntervalEvaluated, true);
+  assert.equal(result.state.nextWorkResistance, 12);
+
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 120 }),
+    createMachineGuidanceState()
+  );
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 120, phaseElapsedSeconds: 60, recentHeartRates: oneSample }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 10);
+  assert.equal(result.state.mediumIntervalEvaluated, false);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 120, phaseElapsedSeconds: 61, recentHeartRates: sufficient }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 11);
+  assert.equal(result.state.mediumIntervalEvaluated, true);
+
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 240 }),
+    createMachineGuidanceState()
+  );
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 240, phaseElapsedSeconds: 90, recentHeartRates: sameSecond }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 8);
+  assert.equal(result.state.lastEvaluationPhaseElapsedSeconds, undefined);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 240, phaseElapsedSeconds: 91, recentHeartRates: sufficient }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 9);
+  assert.equal(result.state.lastEvaluationPhaseElapsedSeconds, 91);
+});
+
 test("resistance 13 and 14 require a five-bpm deficit and resistance 15 cannot increase", () => {
   for (const resistance of [13, 14]) {
     let result = getProFormSmartPower10Guidance(
@@ -447,6 +538,253 @@ test("workout history receives machine identity, profile version, and change-onl
   assert.equal(summary.machine_id, "proform-smart-power-10");
   assert.equal(summary.machine_profile_version, 1);
   assert.deepEqual(summary.machine_guidance_trace, trace);
+});
+
+function bikeSession(sessionId = "session-boundary") {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  resetMachineGuidanceRuntime(sessionId);
+  return { storage, sessionId };
+}
+
+function recordHrWindow(sessionId, fromElapsed, toElapsed, bpm) {
+  for (let elapsed = fromElapsed; elapsed <= toElapsed; elapsed++) {
+    recordMachineHeartRateSample(sessionId, elapsed, bpm);
+  }
+}
+
+function workTick(sessionId, storage, overrides = {}) {
+  return updateMachineGuidanceRuntime({
+    sessionId,
+    activity: "bike",
+    phaseKind: "work",
+    phaseId: "work:1",
+    phaseDisplayName: "hard",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 60,
+    workoutElapsedSeconds: 0,
+    intervalIndex: 1,
+    targetHeartRateMin: 160,
+    targetHeartRateMax: 170,
+    ...overrides,
+  }, storage);
+}
+
+function recoveryTick(sessionId, storage, overrides = {}) {
+  return updateMachineGuidanceRuntime({
+    sessionId,
+    activity: "bike",
+    phaseKind: "recovery",
+    phaseId: "recovery:1",
+    phaseDisplayName: "easy",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 60,
+    workoutElapsedSeconds: 60,
+    targetHeartRateMin: 120,
+    targetHeartRateMax: 135,
+    ...overrides,
+  }, storage);
+}
+
+function runMissedFinalSecondWork(sessionId, storage, { workStart = 0, intervalIndex = 1, bpm, includeTargets = true } = {}) {
+  const targetOverrides = includeTargets ? {} : { targetHeartRateMin: undefined, targetHeartRateMax: undefined };
+  const started = workTick(sessionId, storage, {
+    phaseId: `work:${intervalIndex}`,
+    phaseElapsedSeconds: 0,
+    workoutElapsedSeconds: workStart,
+    intervalIndex,
+    ...targetOverrides,
+  });
+  workTick(sessionId, storage, {
+    phaseId: `work:${intervalIndex}`,
+    phaseElapsedSeconds: 30,
+    workoutElapsedSeconds: workStart + 30,
+    intervalIndex,
+    ...targetOverrides,
+  });
+  if (bpm !== undefined) recordHrWindow(sessionId, workStart + 43, workStart + 58, bpm);
+  const lateWork = workTick(sessionId, storage, {
+    phaseId: `work:${intervalIndex}`,
+    phaseElapsedSeconds: 58,
+    workoutElapsedSeconds: workStart + 58,
+    intervalIndex,
+    ...targetOverrides,
+  });
+  const recovery = recoveryTick(sessionId, storage, {
+    phaseId: `recovery:${intervalIndex}`,
+    workoutElapsedSeconds: workStart + 60,
+  });
+  return { started, lateWork, recovery };
+}
+
+test("short-interval missed final-second tick still adapts the next rep", () => {
+  const { storage, sessionId } = bikeSession("session-a");
+  const { started, lateWork, recovery } = runMissedFinalSecondWork(sessionId, storage, { bpm: 150 });
+  assert.equal(started?.guidance.resistance, 11);
+  assert.equal(lateWork?.guidance.resistance, 11);
+  assert.equal(recovery?.guidance.resistance, 2);
+  assert.equal(recovery?.guidance.cadenceRpm, 63);
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    phaseElapsedSeconds: 0,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 12);
+});
+
+test("short-interval evaluation at the final tick is not repeated on transition", () => {
+  const { storage, sessionId } = bikeSession("session-b");
+  workTick(sessionId, storage, { phaseElapsedSeconds: 58, workoutElapsedSeconds: 58 });
+  recordHrWindow(sessionId, 44, 59, 150);
+  const finalTick = workTick(sessionId, storage, { phaseElapsedSeconds: 59, workoutElapsedSeconds: 59 });
+  assert.equal(finalTick?.guidance.resistance, 11);
+  const recovery = recoveryTick(sessionId, storage);
+  assert.equal(recovery?.guidance.resistance, 2);
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 12);
+});
+
+test("missing HR at short-rep end carries resistance and ignores later recovery HR", () => {
+  const { storage, sessionId } = bikeSession("session-c");
+  const { lateWork, recovery } = runMissedFinalSecondWork(sessionId, storage, {});
+  assert.equal(lateWork?.guidance.resistance, 11);
+  assert.equal(recovery?.guidance.resistance, 2);
+  recordHrWindow(sessionId, 60, 90, 180);
+  recoveryTick(sessionId, storage, { phaseElapsedSeconds: 30, workoutElapsedSeconds: 90 });
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 11);
+});
+
+test("missing HR targets at short-rep end do not adapt", () => {
+  const { storage, sessionId } = bikeSession("session-d");
+  const { recovery } = runMissedFinalSecondWork(sessionId, storage, { bpm: 150, includeTargets: false });
+  assert.equal(recovery?.guidance.resistance, 2);
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 11);
+});
+
+test("high final HR reduces the next short rep after a missed final-second tick", () => {
+  const { storage, sessionId } = bikeSession("session-e");
+  runMissedFinalSecondWork(sessionId, storage, { bpm: 175 });
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 10);
+});
+
+test("in-range final HR holds the next short-rep resistance", () => {
+  const { storage, sessionId } = bikeSession("session-f");
+  runMissedFinalSecondWork(sessionId, storage, { bpm: 165 });
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 11);
+});
+
+test("short-rep R15 stays capped after a missed final-second tick", () => {
+  let result = getProFormSmartPower10Guidance(
+    context(),
+    { ...createMachineGuidanceState(), nextWorkResistance: 15 }
+  );
+  assert.equal(result.guidance.resistance, 15);
+  result = getProFormSmartPower10Guidance(
+    context({
+      phaseKind: "recovery",
+      phaseId: "recovery:1",
+      phaseElapsedSeconds: 0,
+      phaseDurationSeconds: 60,
+      targetHeartRateMin: 120,
+      targetHeartRateMax: 135,
+      recentHeartRates: recent(180),
+      completedShortWork: {
+        phaseId: "work:1",
+        phaseDurationSeconds: 60,
+        resistance: 15,
+        targetHeartRateMin: 160,
+        targetHeartRateMax: 170,
+        recentHeartRates: recent(140),
+      },
+    }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 2);
+  assert.equal(result.state.nextWorkResistance, 15);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseId: "work:2", intervalIndex: 2, workoutElapsedSeconds: 120 }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 15);
+});
+
+test("recovery HR samples do not change a completed short work rep", () => {
+  const { storage, sessionId } = bikeSession("session-h");
+  workTick(sessionId, storage, { phaseElapsedSeconds: 0, workoutElapsedSeconds: 0 });
+  recordHrWindow(sessionId, 43, 58, 150);
+  workTick(sessionId, storage, { phaseElapsedSeconds: 58, workoutElapsedSeconds: 58 });
+  recordHrWindow(sessionId, 60, 60, 180);
+  const recovery = recoveryTick(sessionId, storage);
+  assert.equal(recovery?.guidance.resistance, 2);
+  recordHrWindow(sessionId, 61, 90, 185);
+  recoveryTick(sessionId, storage, { phaseElapsedSeconds: 30, workoutElapsedSeconds: 90 });
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 12);
+});
+
+test("internal next-work adaptation does not append a trace entry during recovery", () => {
+  const { storage, sessionId } = bikeSession("session-i");
+  const { recovery } = runMissedFinalSecondWork(sessionId, storage, { bpm: 150 });
+  assert.equal(recovery?.guidance.resistance, 2);
+  const afterRecovery = getMachineUsageSnapshot(sessionId);
+  assert.deepEqual(afterRecovery?.guidanceTrace.map((entry) => entry.resistance), [11, 2]);
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.equal(next?.guidance.resistance, 12);
+  const afterNext = getMachineUsageSnapshot(sessionId);
+  assert.deepEqual(afterNext?.guidanceTrace.map((entry) => entry.resistance), [11, 2, 12]);
+});
+
+test("short-rep boundary finalization does not emit an extra machine voice event", () => {
+  const { storage, sessionId } = bikeSession("session-j");
+  const { started, lateWork, recovery } = runMissedFinalSecondWork(sessionId, storage, { bpm: 150 });
+  assert.ok(started?.voiceEvent);
+  assert.match(formatMachineGuidanceSpeech(started.voiceEvent), /Resistance 11/);
+  assert.equal(lateWork?.voiceEvent, null);
+  assert.ok(recovery?.voiceEvent);
+  const recoverySpeech = formatMachineGuidanceSpeech(recovery.voiceEvent);
+  assert.match(recoverySpeech, /Resistance 2/);
+  assert.match(recoverySpeech, /63 RPM/);
+  assert.doesNotMatch(recoverySpeech, /previous repetition/i);
+  const next = workTick(sessionId, storage, {
+    phaseId: "work:2",
+    intervalIndex: 2,
+    workoutElapsedSeconds: 120,
+  });
+  assert.ok(next?.voiceEvent);
+  assert.match(formatMachineGuidanceSpeech(next.voiceEvent), /Resistance 12/);
 });
 
 test("workout definitions use activities and structured interval kinds", async () => {

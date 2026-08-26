@@ -20,6 +20,15 @@ export interface MachineHeartRateSample {
   bpm: number;
 }
 
+export interface CompletedShortWorkPhase {
+  phaseId: string;
+  phaseDurationSeconds: number;
+  resistance: number;
+  targetHeartRateMin?: number;
+  targetHeartRateMax?: number;
+  recentHeartRates: readonly MachineHeartRateSample[];
+}
+
 export interface MachineGuidanceContext {
   machineId: MachineId;
   activity: Activity;
@@ -34,6 +43,7 @@ export interface MachineGuidanceContext {
   targetHeartRateMax?: number;
   recentHeartRates: readonly MachineHeartRateSample[];
   previousGuidance?: MachineGuidance;
+  completedShortWork?: CompletedShortWorkPhase;
 }
 
 export interface MachineGuidance {
