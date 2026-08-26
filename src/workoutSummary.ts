@@ -6,6 +6,7 @@ import { getMachineUsageSnapshot, type MachineUsageSnapshot } from "./machines/r
 import { getSession } from "./sessionStore.js";
 import { getWorkoutMetadata } from "./workoutData.js";
 import { getActiveWorkoutActivity } from "./workoutActivity.js";
+import { learnFromCompletedWorkout } from "./machines/learning/index.js";
 
 // Generate stable UUID (v4-ish)
 function generateUUID(): string {
@@ -174,6 +175,7 @@ async function generateWorkoutSummary(
 
 async function emitWorkoutSummary(summary: WorkoutSummary) {
   await storeWorkoutSummary(summary);
+  await learnFromCompletedWorkout(summary);
 }
 
 export function registerSummaryGlobals() {

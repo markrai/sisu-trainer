@@ -55,6 +55,9 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .modal-actions .button { flex: 1; width: auto; }
 .activity-select-options { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
 .activity-select-options .button { width: 100%; }
+.learned-guidance-list { display: flex; flex-direction: column; gap: 8px; }
+.learned-guidance-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.95rem; }
+.learned-guidance-row span:last-child { font-variant-numeric: tabular-nums; opacity: 0.9; }
 .modal-actions .button.secondary { background: #444; }
 .modal-actions .button.secondary:hover { background: #555; }
 .modal-field { margin-bottom: 14px; display: flex; align-items: center; gap: 12px; }

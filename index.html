@@ -145,6 +145,12 @@
           </select>
         </div>
       </div>
+      <div id="learnedGuidanceSection" class="modal-section" hidden>
+        <div class="modal-section-title">Learned guidance</div>
+        <div id="learnedGuidanceList" class="learned-guidance-list"></div>
+        <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Based on completed workouts</div>
+        <button type="button" class="button secondary" onclick="promptResetLearnedGuidance()">Reset learned guidance</button>
+      </div>
     </div>
     
     <!-- Workouts Tab -->
@@ -251,6 +257,18 @@
     <div class="modal-actions">
       <button class="button" onclick="confirmDeleteWorkout()">Yes, delete it</button>
       <button class="button secondary" onclick="closeDeleteWorkoutModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="resetLearnedModalBg" style="z-index: 16;">
+  <div class="modal">
+    <div class="close-btn" onclick="closeResetLearnedModal()">×</div>
+    <div class="modal-title">Reset learned guidance?</div>
+    <div class="label" style="text-align:center;">This removes learned starting resistance for ProForm SMART Power 10.0. Workout history, equipment selection, and calibration are not changed.</div>
+    <div class="modal-actions">
+      <button class="button" onclick="confirmResetLearnedGuidance()">Reset</button>
+      <button class="button secondary" onclick="closeResetLearnedModal()">Cancel</button>
     </div>
   </div>
 </div>

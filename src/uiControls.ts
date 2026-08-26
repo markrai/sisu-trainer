@@ -30,6 +30,11 @@ import {
   updateMachineGuidanceRuntime,
   type MachineGuidanceRuntimeUpdate,
 } from "./machines/runtime.js";
+import {
+  formatLearnedGuidanceLabel,
+  listLearnedStarts,
+  resetLearnedGuidanceForMachine,
+} from "./machines/learning/index.js";
 import type { Activity, WorkoutPhaseState } from "./types.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 
@@ -682,6 +687,7 @@ function renderWorkout(state: WorkoutDisplayState) {
         heartRateBpm: active.liveBpm ?? undefined,
         targetHeartRateMin: targetRange?.min,
         targetHeartRateMax: targetRange?.max,
+        intent: active.workoutMetadata[active.day]?.intent,
       })
     : null;
   renderMachineGuidance(machineUpdate);
@@ -805,11 +811,52 @@ function loadEquipmentSettings() {
     select.appendChild(option);
   }
   select.value = getEquipmentSelection().bike ?? "";
+  renderLearnedGuidancePanel();
+}
+
+function renderLearnedGuidancePanel() {
+  const section = document.getElementById("learnedGuidanceSection");
+  const list = document.getElementById("learnedGuidanceList");
+  if (!section || !list) return;
+  const machineId = getEquipmentSelection().bike;
+  const entries = machineId ? listLearnedStarts(machineId) : [];
+  if (!machineId || entries.length === 0) {
+    section.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+  list.innerHTML = entries
+    .map(
+      (entry) =>
+        `<div class="learned-guidance-row"><span>${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</span><span>R${entry.resistance}</span></div>`
+    )
+    .join("");
+}
+
+function promptResetLearnedGuidance() {
+  const machineId = getEquipmentSelection().bike;
+  if (!machineId) return;
+  const bg = document.getElementById("resetLearnedModalBg");
+  if (bg) bg.style.display = "flex";
+}
+
+function closeResetLearnedModal() {
+  const bg = document.getElementById("resetLearnedModalBg");
+  if (bg) bg.style.display = "none";
+}
+
+function confirmResetLearnedGuidance() {
+  const machineId = getEquipmentSelection().bike;
+  if (machineId) resetLearnedGuidanceForMachine(machineId);
+  closeResetLearnedModal();
+  renderLearnedGuidancePanel();
 }
 
 function saveBikeEquipmentSelection(value: string) {
   if (value && !isMachineId(value)) return;
   setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
+  renderLearnedGuidancePanel();
   updateDisplay();
 }
 async function loadWorkoutSummaries() {
@@ -1208,6 +1255,9 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).savePreferenceVoicePrompts = savePreferenceVoicePrompts;
   (window as any).loadEquipmentSettings = loadEquipmentSettings;
   (window as any).saveBikeEquipmentSelection = saveBikeEquipmentSelection;
+  (window as any).promptResetLearnedGuidance = promptResetLearnedGuidance;
+  (window as any).closeResetLearnedModal = closeResetLearnedModal;
+  (window as any).confirmResetLearnedGuidance = confirmResetLearnedGuidance;
   (window as any).loadWorkoutSummaries = loadWorkoutSummaries;
   (window as any).viewWorkoutSummary = viewWorkoutSummary;
   (window as any).showWorkoutSummaryModal = showWorkoutSummaryModal;

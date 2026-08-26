@@ -62,6 +62,13 @@ function startingWorkResistance(durationSeconds: number): number {
   return 8;
 }
 
+function workStartResistance(context: MachineGuidanceContext): { resistance: number; learned: boolean } {
+  const fallback = startingWorkResistance(context.phaseDurationSeconds);
+  const learned = context.learnedStartingResistance;
+  if (learned === undefined || !Number.isFinite(learned)) return { resistance: fallback, learned: false };
+  return { resistance: clampAutomaticResistance(learned), learned: true };
+}
+
 function actionForResistance(previous: number | undefined, next: number, phaseChanged: boolean): MachineGuidance["action"] {
   if (phaseChanged || previous === undefined) return "set";
   if (next > previous) return "increase";
@@ -194,11 +201,15 @@ function workGuidance(
   state: MachineGuidanceState,
   phaseChanged: boolean
 ): MachineGuidanceResult {
+  const start = workStartResistance(context);
+  const usingLearnedStart = phaseChanged && state.nextWorkResistance === undefined && start.learned;
   let resistance = phaseChanged
-    ? state.nextWorkResistance ?? startingWorkResistance(context.phaseDurationSeconds)
-    : state.currentResistance ?? state.nextWorkResistance ?? startingWorkResistance(context.phaseDurationSeconds);
+    ? state.nextWorkResistance ?? start.resistance
+    : state.currentResistance ?? state.nextWorkResistance ?? start.resistance;
   let action = actionForResistance(state.currentResistance, resistance, phaseChanged);
-  let reason = "Conservative work-phase starting recommendation";
+  let reason = usingLearnedStart
+    ? "Learned starting resistance from prior workouts"
+    : "Conservative work-phase starting recommendation";
   const nextState: MachineGuidanceState = {
     ...state,
     currentResistance: resistance,
@@ -218,10 +229,14 @@ function workGuidance(
         else if (adapted.resistance < resistance) reason = "Hold this repetition; reduce the next repetition after the final heart-rate response";
         else reason = "Hold this repetition; final heart-rate response supports the current resistance";
       } else {
-        reason = "Short interval resistance is held for the full repetition";
+        reason = usingLearnedStart
+          ? "Learned starting resistance from prior workouts"
+          : "Short interval resistance is held for the full repetition";
       }
     } else {
-      reason = "Short interval resistance is held for the full repetition";
+      reason = usingLearnedStart
+        ? "Learned starting resistance from prior workouts"
+        : "Short interval resistance is held for the full repetition";
     }
   } else if (context.phaseDurationSeconds <= 150) {
     if (!nextState.mediumIntervalEvaluated && context.phaseElapsedSeconds >= 60) {
@@ -236,10 +251,14 @@ function workGuidance(
           ? "Heart-rate response supports the current resistance"
           : `Adjusted after ${Math.round(adapted.median as number)} bpm rolling heart rate`;
       } else {
-        reason = "Waiting 60 seconds for heart-rate response";
+        reason = usingLearnedStart
+          ? "Learned starting resistance from prior workouts"
+          : "Waiting 60 seconds for heart-rate response";
       }
     } else if (!nextState.mediumIntervalEvaluated) {
-      reason = "Waiting 60 seconds for heart-rate response";
+      reason = usingLearnedStart
+        ? "Learned starting resistance from prior workouts"
+        : "Waiting 60 seconds for heart-rate response";
     } else {
       reason = "Medium interval adjustment limit reached";
     }
@@ -259,10 +278,14 @@ function workGuidance(
           ? "Rolling heart rate is within the target range"
           : `Adjusted after ${Math.round(adapted.median as number)} bpm rolling heart rate`;
       } else {
-        reason = "Waiting 90 seconds for heart-rate stabilization";
+        reason = usingLearnedStart
+          ? "Learned starting resistance from prior workouts"
+          : "Waiting 90 seconds for heart-rate stabilization";
       }
     } else if (context.phaseElapsedSeconds < 90) {
-      reason = "Waiting 90 seconds for heart-rate stabilization";
+      reason = usingLearnedStart
+        ? "Learned starting resistance from prior workouts"
+        : "Waiting 90 seconds for heart-rate stabilization";
     } else {
       reason = "Holding during the 60-second adjustment cooldown";
     }

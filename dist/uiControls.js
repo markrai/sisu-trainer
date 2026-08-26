@@ -9,6 +9,7 @@ import { startDownregulationView, stopDownregulationView } from "./downregulatio
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
 import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.js";
 import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./machines/runtime.js";
+import { formatLearnedGuidanceLabel, listLearnedStarts, resetLearnedGuidanceForMachine, } from "./machines/learning/index.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 let selectedDay = null;
 let liveBpm = null;
@@ -425,7 +426,7 @@ function renderMachineGuidance(update) {
     }
 }
 function renderWorkout(state) {
-    var _a, _b;
+    var _a, _b, _c;
     const downregEl = document.getElementById("downregulationContainer");
     const workoutMainContent = document.getElementById("workoutMainContent");
     const workoutBlocksEl = document.getElementById("workoutBlocks");
@@ -631,11 +632,12 @@ function renderWorkout(state) {
             heartRateBpm: (_a = active.liveBpm) !== null && _a !== void 0 ? _a : undefined,
             targetHeartRateMin: targetRange === null || targetRange === void 0 ? void 0 : targetRange.min,
             targetHeartRateMax: targetRange === null || targetRange === void 0 ? void 0 : targetRange.max,
+            intent: (_b = active.workoutMetadata[active.day]) === null || _b === void 0 ? void 0 : _b.intent,
         })
         : null;
     renderMachineGuidance(machineUpdate);
     if (typeof window.announceWorkoutGuidance === "function") {
-        window.announceWorkoutGuidance(active.phaseDisplayName, (_b = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _b !== void 0 ? _b : null);
+        window.announceWorkoutGuidance(active.phaseDisplayName, (_c = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _c !== void 0 ? _c : null);
     }
     else if (typeof window.announcePhaseIfChanged === "function") {
         window.announcePhaseIfChanged(active.phaseDisplayName);
@@ -751,11 +753,50 @@ function loadEquipmentSettings() {
         select.appendChild(option);
     }
     select.value = (_a = getEquipmentSelection().bike) !== null && _a !== void 0 ? _a : "";
+    renderLearnedGuidancePanel();
+}
+function renderLearnedGuidancePanel() {
+    const section = document.getElementById("learnedGuidanceSection");
+    const list = document.getElementById("learnedGuidanceList");
+    if (!section || !list)
+        return;
+    const machineId = getEquipmentSelection().bike;
+    const entries = machineId ? listLearnedStarts(machineId) : [];
+    if (!machineId || entries.length === 0) {
+        section.hidden = true;
+        list.innerHTML = "";
+        return;
+    }
+    section.hidden = false;
+    list.innerHTML = entries
+        .map((entry) => `<div class="learned-guidance-row"><span>${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</span><span>R${entry.resistance}</span></div>`)
+        .join("");
+}
+function promptResetLearnedGuidance() {
+    const machineId = getEquipmentSelection().bike;
+    if (!machineId)
+        return;
+    const bg = document.getElementById("resetLearnedModalBg");
+    if (bg)
+        bg.style.display = "flex";
+}
+function closeResetLearnedModal() {
+    const bg = document.getElementById("resetLearnedModalBg");
+    if (bg)
+        bg.style.display = "none";
+}
+function confirmResetLearnedGuidance() {
+    const machineId = getEquipmentSelection().bike;
+    if (machineId)
+        resetLearnedGuidanceForMachine(machineId);
+    closeResetLearnedModal();
+    renderLearnedGuidancePanel();
 }
 function saveBikeEquipmentSelection(value) {
     if (value && !isMachineId(value))
         return;
     setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
+    renderLearnedGuidancePanel();
     updateDisplay();
 }
 async function loadWorkoutSummaries() {
@@ -1173,6 +1214,9 @@ function registerUiGlobals(phaseBoxEl) {
     window.savePreferenceVoicePrompts = savePreferenceVoicePrompts;
     window.loadEquipmentSettings = loadEquipmentSettings;
     window.saveBikeEquipmentSelection = saveBikeEquipmentSelection;
+    window.promptResetLearnedGuidance = promptResetLearnedGuidance;
+    window.closeResetLearnedModal = closeResetLearnedModal;
+    window.confirmResetLearnedGuidance = confirmResetLearnedGuidance;
     window.loadWorkoutSummaries = loadWorkoutSummaries;
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;

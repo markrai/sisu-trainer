@@ -5,6 +5,7 @@ import { getMachineUsageSnapshot } from "./machines/runtime.js";
 import { getSession } from "./sessionStore.js";
 import { getWorkoutMetadata } from "./workoutData.js";
 import { getActiveWorkoutActivity } from "./workoutActivity.js";
+import { learnFromCompletedWorkout } from "./machines/learning/index.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -146,6 +147,7 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
 }
 async function emitWorkoutSummary(summary) {
     await storeWorkoutSummary(summary);
+    await learnFromCompletedWorkout(summary);
 }
 export function registerSummaryGlobals() {
     window.generateUUID = generateUUID;

@@ -1,5 +1,6 @@
 import type { Activity, WorkoutPhaseKind } from "../types.js";
 import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommendation } from "./guidance.js";
+import { lookupLearnedWorkStart } from "./learning/index.js";
 import { getMachineDefinition } from "./registry.js";
 import { getSelectedMachineId, type EquipmentStorage } from "./selection.js";
 import type {
@@ -48,6 +49,7 @@ export interface MachineGuidanceRuntimeInput {
   heartRateBpm?: number;
   targetHeartRateMin?: number;
   targetHeartRateMax?: number;
+  intent?: string;
 }
 
 export interface MachineGuidanceRuntimeUpdate {
@@ -97,7 +99,16 @@ export function appendMachineGuidanceTrace(
   trace: readonly MachineGuidanceTraceEntry[],
   elapsedSeconds: number,
   guidance: MachineGuidance,
-  previous?: MachineGuidance
+  previous: MachineGuidance | undefined,
+  phase: {
+    phaseKind: WorkoutPhaseKind;
+    phaseId: string;
+    intervalIndex?: number;
+    phaseDurationSeconds: number;
+    phaseElapsedSeconds: number;
+    targetHeartRateMin?: number;
+    targetHeartRateMax?: number;
+  }
 ): MachineGuidanceTraceEntry[] {
   if (isSameMachineRecommendation(previous, guidance)) return [...trace];
   if (guidance.resistance === undefined || guidance.cadenceRpm === undefined) return [...trace];
@@ -106,8 +117,15 @@ export function appendMachineGuidanceTrace(
     resistance: guidance.resistance,
     cadenceRpm: guidance.cadenceRpm,
     reason: guidance.reason,
+    phaseKind: phase.phaseKind,
+    phaseId: phase.phaseId,
+    phaseDurationSeconds: phase.phaseDurationSeconds,
+    phaseElapsedSeconds: phase.phaseElapsedSeconds,
   };
   if (guidance.estimatedWatts !== undefined) entry.estimatedWatts = guidance.estimatedWatts;
+  if (phase.intervalIndex !== undefined) entry.intervalIndex = phase.intervalIndex;
+  if (phase.targetHeartRateMin !== undefined) entry.targetHeartRateMin = phase.targetHeartRateMin;
+  if (phase.targetHeartRateMax !== undefined) entry.targetHeartRateMax = phase.targetHeartRateMax;
   return [...trace, entry];
 }
 
@@ -173,6 +191,18 @@ export function updateMachineGuidanceRuntime(
     : undefined;
   if (leavingShortWork) runtime.pendingShortWork = undefined;
   const phaseChanged = runtime.lastPhaseId !== input.phaseId;
+  const learnedStartingResistance = input.phaseKind === "work" && input.intent
+    ? lookupLearnedWorkStart(
+        {
+          machineId,
+          machineProfileVersion: machine.profileVersion,
+          activity: input.activity,
+          intent: input.intent,
+          durationSeconds: input.phaseDurationSeconds,
+        },
+        storage
+      )
+    : undefined;
   const result = getMachineGuidance(
     {
       machineId,
@@ -189,13 +219,28 @@ export function updateMachineGuidanceRuntime(
       recentHeartRates: runtime.recentHeartRates,
       previousGuidance: runtime.previousGuidance,
       completedShortWork,
+      learnedStartingResistance,
     },
     runtime.guidanceState
   );
   if (!result) return null;
   const previous = runtime.previousGuidance;
   const recommendationChanged = !isSameMachineRecommendation(previous, result.guidance);
-  runtime.trace = appendMachineGuidanceTrace(runtime.trace, input.workoutElapsedSeconds, result.guidance, previous);
+  runtime.trace = appendMachineGuidanceTrace(
+    runtime.trace,
+    input.workoutElapsedSeconds,
+    result.guidance,
+    previous,
+    {
+      phaseKind: input.phaseKind,
+      phaseId: input.phaseId,
+      intervalIndex: input.intervalIndex,
+      phaseDurationSeconds: input.phaseDurationSeconds,
+      phaseElapsedSeconds: input.phaseElapsedSeconds,
+      targetHeartRateMin: input.targetHeartRateMin,
+      targetHeartRateMax: input.targetHeartRateMax,
+    }
+  );
   runtime.guidanceState = result.state;
   runtime.previousGuidance = result.guidance;
   runtime.lastPhaseId = input.phaseId;

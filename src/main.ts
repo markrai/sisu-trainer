@@ -35,6 +35,7 @@ function setupModalBackgroundHandlers() {
   const cancelModalBg = document.getElementById("cancelModalBg");
   const activitySelectModalBg = document.getElementById("activitySelectModalBg");
   const workoutSummaryModalBg = document.getElementById("workoutSummaryModalBg");
+  const resetLearnedModalBg = document.getElementById("resetLearnedModalBg");
   if (modalBg) {
     modalBg.addEventListener("click", (e) => {
       if (e.target === modalBg && typeof (window as any).closeModal === "function") (window as any).closeModal();
@@ -57,6 +58,13 @@ function setupModalBackgroundHandlers() {
     workoutSummaryModalBg.addEventListener("click", (e) => {
       if (e.target === workoutSummaryModalBg && typeof (window as any).closeWorkoutSummaryModal === "function")
         (window as any).closeWorkoutSummaryModal();
+    });
+  }
+  if (resetLearnedModalBg) {
+    resetLearnedModalBg.addEventListener("click", (e) => {
+      if (e.target === resetLearnedModalBg && typeof (window as any).closeResetLearnedModal === "function") {
+        (window as any).closeResetLearnedModal();
+      }
     });
   }
 }

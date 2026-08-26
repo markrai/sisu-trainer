@@ -9,7 +9,7 @@
     "prebuild:native": "node scripts/sync-version.cjs",
     "build:native": "node scripts/build-native.mjs",
     "check": "tsc --noEmit",
-    "test": "npm run build && node --test tests/machineGuidance.test.mjs",
+    "test": "npm run build && node --test tests/machineGuidance.test.mjs tests/machineLearning.test.mjs",
     "cap:sync": "npm run build:native && npx cap sync && node scripts/normalize-ios-spm.mjs",
     "cap:sync:android": "npm run build:native && npx cap sync android",
     "cap:sync:ios": "npm run build:native && npx cap sync ios && node scripts/normalize-ios-spm.mjs",

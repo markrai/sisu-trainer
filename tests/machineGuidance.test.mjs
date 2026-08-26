@@ -487,6 +487,9 @@ test("runtime emits one voice event and trace entry per changed recommendation",
   assert.equal(snapshot?.machineId, "proform-smart-power-10");
   assert.equal(snapshot?.profileVersion, 1);
   assert.equal(snapshot?.guidanceTrace.length, 1);
+  assert.equal(snapshot?.guidanceTrace[0].phaseKind, "work");
+  assert.equal(snapshot?.guidanceTrace[0].phaseId, "work:1");
+  assert.equal(snapshot?.guidanceTrace[0].intervalIndex, 1);
   const warmup = updateMachineGuidanceRuntime({
     ...input,
     phaseKind: "warmup",

@@ -44,6 +44,7 @@ export interface MachineGuidanceContext {
   recentHeartRates: readonly MachineHeartRateSample[];
   previousGuidance?: MachineGuidance;
   completedShortWork?: CompletedShortWorkPhase;
+  learnedStartingResistance?: number;
 }
 
 export interface MachineGuidance {
