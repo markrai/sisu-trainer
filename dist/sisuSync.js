@@ -245,6 +245,15 @@ function adjustedBlockLengthsFromSISU(base, todayHRV, baselineHRV) {
         return base;
     return base;
 }
+function buildSisuWorkoutPayload(summary) {
+    const payload = { ...summary };
+    delete payload.machine_id;
+    delete payload.machine_profile_version;
+    delete payload.machine_guidance_trace;
+    if (typeof payload.day !== "string" || payload.day.trim() === "")
+        delete payload.day;
+    return payload;
+}
 async function syncWithSISU() {
     if (!sisuConnectionState.connected)
         return;
@@ -278,10 +287,7 @@ async function sendWorkoutToSisu(sessionId) {
         if (!workoutData || !workoutData.summary) {
             return { success: false, message: "Workout not found" };
         }
-        const payload = { ...workoutData.summary };
-        if (typeof payload.day !== "string" || payload.day.trim() === "") {
-            delete payload.day;
-        }
+        const payload = buildSisuWorkoutPayload(workoutData.summary);
         const response = await requestSisu({
             url: `${formatEndpoint(endpoint)}/workout/ingest`,
             method: "POST",
@@ -320,4 +326,4 @@ export function registerSisuGlobals() {
     hostInput === null || hostInput === void 0 ? void 0 : hostInput.addEventListener("change", normalizePastedSisuUrl);
     hostInput === null || hostInput === void 0 ? void 0 : hostInput.addEventListener("blur", normalizePastedSisuUrl);
 }
-export { loadSisuSettings, connectSISU, disconnectSISU, updateSISUStatus, syncWithSISU, getTodayHRVFromSISU, adjustedBlockLengthsFromSISU, sendWorkoutToSisu, };
+export { loadSisuSettings, connectSISU, disconnectSISU, updateSISUStatus, syncWithSISU, getTodayHRVFromSISU, adjustedBlockLengthsFromSISU, buildSisuWorkoutPayload, sendWorkoutToSisu, };

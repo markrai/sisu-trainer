@@ -1,4 +1,4 @@
-import { HrTargetsByDay, MetadataByDay, Plan, DayName } from "./types.js";
+import { Activity, DayName, HrTargetsByDay, MetadataByDay, Plan, WorkoutPhaseKind } from "./types.js";
 import { todayName } from "./utils/dateTime.js";
 
 let plan: Plan = {};
@@ -12,6 +12,19 @@ function parseDuration(duration: any): number {
     if (match) return parseInt(match[1]);
   }
   return 0;
+}
+
+function isActivity(value: unknown): value is Activity {
+  return value === "bike" || value === "elliptical" || value === "strength";
+}
+
+function isWorkoutPhaseKind(value: unknown): value is WorkoutPhaseKind {
+  return value === "warmup" || value === "work" || value === "recovery" || value === "cooldown";
+}
+
+function parseActivities(activities: unknown): Activity[] {
+  if (!Array.isArray(activities)) return [];
+  return activities.filter(isActivity);
 }
 
 function getSelectedVariant(day: string, variants: any[]) {
@@ -35,6 +48,7 @@ function processWorkout(workout: any, transformed: Plan) {
     warmup_subsections: workout.warmup?.subsections || null,
     cooldown: workout.cooldown?.target_hr_bpm || "",
     main_set: workout.main_set?.target_hr_bpm || "",
+    main_set_kind: isWorkoutPhaseKind(workout.main_set?.phase_kind) ? workout.main_set.phase_kind : "work",
     intervals: null,
   };
 
@@ -51,7 +65,12 @@ function processWorkout(workout: any, transformed: Plan) {
         let intervalDuration = 0;
         if (interval.duration_min) intervalDuration = parseDuration(interval.duration_min);
         totalDuration += intervalDuration;
-        intervalPhases.push({ phase: interval.phase, duration: intervalDuration, target_hr_bpm: interval.target_hr_bpm || "" });
+        intervalPhases.push({
+          phase: interval.phase,
+          kind: isWorkoutPhaseKind(interval.kind) ? interval.kind : "work",
+          duration: intervalDuration,
+          target_hr_bpm: interval.target_hr_bpm || "",
+        });
       });
       if (isSequence) {
         sustain = totalDuration;
@@ -69,7 +88,7 @@ function processWorkout(workout: any, transformed: Plan) {
     workoutMetadata[workout.day] = {
       type: workout.type || "",
       intent: workout.intent || "",
-      machine: workout.machine || "",
+      activities: parseActivities(workout.activities),
     };
   } else {
     transformed[workout.day] = null;

@@ -269,6 +269,15 @@ function adjustedBlockLengthsFromSISU(base: any, todayHRV: any, baselineHRV: any
   return base;
 }
 
+function buildSisuWorkoutPayload(summary: any) {
+  const payload = { ...summary };
+  delete payload.machine_id;
+  delete payload.machine_profile_version;
+  delete payload.machine_guidance_trace;
+  if (typeof payload.day !== "string" || payload.day.trim() === "") delete payload.day;
+  return payload;
+}
+
 async function syncWithSISU() {
   if (!sisuConnectionState.connected) return;
   try {
@@ -301,10 +310,7 @@ async function sendWorkoutToSisu(sessionId: string) {
     if (!workoutData || !workoutData.summary) {
       return { success: false, message: "Workout not found" };
     }
-    const payload = { ...workoutData.summary };
-    if (typeof payload.day !== "string" || payload.day.trim() === "") {
-      delete payload.day;
-    }
+    const payload = buildSisuWorkoutPayload(workoutData.summary);
     const response = await requestSisu({
       url: `${formatEndpoint(endpoint)}/workout/ingest`,
       method: "POST",
@@ -352,5 +358,6 @@ export {
   syncWithSISU,
   getTodayHRVFromSISU,
   adjustedBlockLengthsFromSISU,
+  buildSisuWorkoutPayload,
   sendWorkoutToSisu,
 };

@@ -4,7 +4,7 @@
       "day": "Monday",
       "type": "VO2 Intervals (10×1)",
       "intent": "vo2_primer",
-      "machine": "Bike",
+      "activities": ["bike"],
       "warmup": {
         "duration_min": 12,
         "target_hr_bpm": "130–140"
@@ -14,11 +14,13 @@
         "intervals": [
           {
             "phase": "hard",
+            "kind": "work",
             "duration_min": 1,
             "target_hr_bpm": "≥160 (cap 170)"
           },
           {
             "phase": "easy",
+            "kind": "recovery",
             "duration_min": 1,
             "target_hr_bpm": "120–135"
           }
@@ -33,12 +35,13 @@
       "day": "Tuesday",
       "type": "Zone 2",
       "intent": "aerobic_base",
-      "machine": "Elliptical",
+      "activities": ["elliptical"],
       "warmup": {
         "duration_min": 8,
         "target_hr_bpm": "110–120"
       },
       "main_set": {
+        "phase_kind": "work",
         "duration_min": "60–75",
         "target_hr_bpm": "115–130"
       },
@@ -51,12 +54,13 @@
       "day": "Wednesday",
       "type": "Strength",
       "intent": "support_strength",
-      "machine": "Combo Machine",
+      "activities": ["strength"],
       "warmup": {
         "duration_min": 5,
         "target_hr_bpm": "100–115"
       },
       "main_set": {
+        "phase_kind": "work",
         "duration_min": "20–30",
         "target_hr_bpm": "100–160"
       },
@@ -69,12 +73,13 @@
       "day": "Thursday",
       "type": "Threshold",
       "intent": "threshold",
-      "machine": "Bike",
+      "activities": ["bike"],
       "warmup": {
         "duration_min": 10,
         "target_hr_bpm": "135–145"
       },
       "main_set": {
+        "phase_kind": "work",
         "duration_min": "20–25",
         "target_hr_bpm": "155–162"
       },
@@ -90,7 +95,7 @@
           "id": "A",
           "type": "4×4 Intervals (Long)",
           "intent": "vo2_priority",
-          "machine": "Bike",
+          "activities": ["bike"],
           "warmup": {
             "duration_min": 12,
             "target_hr_bpm": "105 → 150",
@@ -130,36 +135,43 @@
             "intervals": [
               {
                 "phase": "Interval 1",
+                "kind": "work",
                 "duration_min": 4,
                 "target_hr_bpm": "158–162"
               },
               {
                 "phase": "Recovery 1",
+                "kind": "recovery",
                 "duration_min": 3,
                 "target_hr_bpm": "120–135"
               },
               {
                 "phase": "Interval 2",
+                "kind": "work",
                 "duration_min": 4,
                 "target_hr_bpm": "160–165"
               },
               {
                 "phase": "Recovery 2",
+                "kind": "recovery",
                 "duration_min": 3,
                 "target_hr_bpm": "120–135"
               },
               {
                 "phase": "Interval 3",
+                "kind": "work",
                 "duration_min": 4,
                 "target_hr_bpm": "165–170"
               },
               {
                 "phase": "Recovery 3",
+                "kind": "recovery",
                 "duration_min": 3,
                 "target_hr_bpm": "120–135"
               },
               {
                 "phase": "Interval 4",
+                "kind": "work",
                 "duration_min": 4,
                 "target_hr_bpm": "168–172"
               }
@@ -174,7 +186,7 @@
           "id": "B",
           "type": "8×2 Intervals (Short)",
           "intent": "vo2_primer",
-          "machine": "Bike",
+          "activities": ["bike"],
           "warmup": {
             "duration_min": 10,
             "target_hr_bpm": "110 → 145",
@@ -200,11 +212,13 @@
             "intervals": [
               {
                 "phase": "hard",
+                "kind": "work",
                 "duration_min": 2,
                 "target_hr_bpm": "160–170"
               },
               {
                 "phase": "easy",
+                "kind": "recovery",
                 "duration_min": 1,
                 "target_hr_bpm": "120–135"
               }
@@ -221,12 +235,13 @@
       "day": "Saturday",
       "type": "Long Zone 2",
       "intent": "aerobic_volume",
-      "machine": "Elliptical",
+      "activities": ["elliptical"],
       "warmup": {
         "duration_min": 10,
         "target_hr_bpm": "110–120"
       },
       "main_set": {
+        "phase_kind": "work",
         "duration_min": "90–120",
         "target_hr_bpm": "115–130"
       },
@@ -239,12 +254,13 @@
       "day": "Sunday",
       "type": "Recovery Session",
       "intent": "recovery",
-      "machine": "Bike or Elliptical",
+      "activities": ["bike", "elliptical"],
       "warmup": {
         "duration_min": 3,
         "target_hr_bpm": "<110"
       },
       "main_set": {
+        "phase_kind": "recovery",
         "duration_min": "30–40",
         "target_hr_bpm": "<115"
       },

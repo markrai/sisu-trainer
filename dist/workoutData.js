@@ -12,6 +12,17 @@ function parseDuration(duration) {
     }
     return 0;
 }
+function isActivity(value) {
+    return value === "bike" || value === "elliptical" || value === "strength";
+}
+function isWorkoutPhaseKind(value) {
+    return value === "warmup" || value === "work" || value === "recovery" || value === "cooldown";
+}
+function parseActivities(activities) {
+    if (!Array.isArray(activities))
+        return [];
+    return activities.filter(isActivity);
+}
 function getSelectedVariant(day, variants) {
     if (!variants || !Array.isArray(variants) || variants.length === 0)
         return null;
@@ -23,7 +34,7 @@ function getSelectedVariant(day, variants) {
     return variants[variantIndex];
 }
 function processWorkout(workout, transformed) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     if (!workout || !workout.day)
         return;
     const warm = parseDuration(((_a = workout.warmup) === null || _a === void 0 ? void 0 : _a.duration_min) || 0);
@@ -33,6 +44,7 @@ function processWorkout(workout, transformed) {
         warmup_subsections: ((_d = workout.warmup) === null || _d === void 0 ? void 0 : _d.subsections) || null,
         cooldown: ((_e = workout.cooldown) === null || _e === void 0 ? void 0 : _e.target_hr_bpm) || "",
         main_set: ((_f = workout.main_set) === null || _f === void 0 ? void 0 : _f.target_hr_bpm) || "",
+        main_set_kind: isWorkoutPhaseKind((_g = workout.main_set) === null || _g === void 0 ? void 0 : _g.phase_kind) ? workout.main_set.phase_kind : "work",
         intervals: null,
     };
     let sustain = 0;
@@ -50,7 +62,12 @@ function processWorkout(workout, transformed) {
                 if (interval.duration_min)
                     intervalDuration = parseDuration(interval.duration_min);
                 totalDuration += intervalDuration;
-                intervalPhases.push({ phase: interval.phase, duration: intervalDuration, target_hr_bpm: interval.target_hr_bpm || "" });
+                intervalPhases.push({
+                    phase: interval.phase,
+                    kind: isWorkoutPhaseKind(interval.kind) ? interval.kind : "work",
+                    duration: intervalDuration,
+                    target_hr_bpm: interval.target_hr_bpm || "",
+                });
             });
             if (isSequence) {
                 sustain = totalDuration;
@@ -68,7 +85,7 @@ function processWorkout(workout, transformed) {
         workoutMetadata[workout.day] = {
             type: workout.type || "",
             intent: workout.intent || "",
-            machine: workout.machine || "",
+            activities: parseActivities(workout.activities),
         };
     }
     else {

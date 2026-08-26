@@ -1,6 +1,7 @@
 import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js";
 import { getHrSamples, storeWorkoutSummary } from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
+import { getMachineUsageSnapshot } from "./machines/runtime.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -38,6 +39,14 @@ export function determineStressProfile(primaryZone) {
     if (primaryZone === 3)
         return "moderate";
     return "high";
+}
+export function applyMachineUsageToSummary(summary, machineUsage) {
+    if (!machineUsage)
+        return summary;
+    summary.machine_id = machineUsage.machineId;
+    summary.machine_profile_version = machineUsage.profileVersion;
+    summary.machine_guidance_trace = machineUsage.guidanceTrace;
+    return summary;
 }
 function validateSummary(summary) {
     const errors = [];
@@ -109,6 +118,7 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         day,
         cancelled: options === null || options === void 0 ? void 0 : options.cancelled,
     };
+    applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
     validateSummary(summary);
     const zoneSum = summary.zone_minutes.z1 +
         summary.zone_minutes.z2 +

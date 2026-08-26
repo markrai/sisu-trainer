@@ -126,20 +126,18 @@ function updateDisplay() {
 
     ensureWorkoutDayDropdown();
   
-  // Update activity icon based on machine type
+  // Update activity icon based on activity
   const activityIcon = document.getElementById('activityIcon');
   if (activityIcon && base && workoutMetadata[day]) {
-    const machine = workoutMetadata[day].machine || "";
-    let iconSrc = "";
-    const machineLower = machine.toLowerCase();
-    // Check for combo/strength first, then bike, then elliptical
-    if (machineLower.includes("combo") || machineLower.includes("strength")) {
-      iconSrc = "dumbbell.png";
-    } else if (machineLower.includes("bike")) {
-      iconSrc = "bike.png";
-    } else if (machineLower.includes("elliptical")) {
-      iconSrc = "elliptical.png";
-    }
+    const activities = Array.isArray(workoutMetadata[day].activities) ? workoutMetadata[day].activities : [];
+    const activity = activities.length === 1 ? activities[0] : null;
+    const iconSrc = activity === "strength"
+      ? "dumbbell.png"
+      : activity === "bike"
+        ? "bike.png"
+        : activity === "elliptical"
+          ? "elliptical.png"
+          : "";
     if (iconSrc) {
       activityIcon.src = iconSrc;
       activityIcon.style.display = "block";

@@ -1,4 +1,5 @@
-// Shared domain types for Sisu Trainer
+import type { MachineGuidanceTraceEntry, MachineId } from "./machines/types.js";
+
 export type DayName =
   | "Monday"
   | "Tuesday"
@@ -14,15 +15,32 @@ export interface PlanBlock {
   cool: number;
 }
 
+export type Activity = "bike" | "elliptical" | "strength";
+
+export type WorkoutPhaseKind = "warmup" | "work" | "recovery" | "cooldown";
+
+export interface WorkoutPhaseState {
+  phase: "Warm-Up" | "Sustain" | "Cool-Down" | "Completed";
+  kind: WorkoutPhaseKind | "completed";
+  phaseId: string;
+  phaseElapsedSeconds: number;
+  phaseDurationSeconds: number;
+  timeLeft: number;
+  done: boolean;
+  detailName?: string;
+  intervalIndex?: number;
+}
+
 export interface WorkoutMetadata {
   type: string;
   intent: string;
-  machine: string;
+  activities: Activity[];
 }
 
 export interface HrIntervalPhase {
   phase: string;
-  duration: number; // minutes
+  kind: WorkoutPhaseKind;
+  duration: number;
   target_hr_bpm?: string | number;
 }
 
@@ -42,6 +60,7 @@ export interface HrTargetsForDay {
   }>;
   cooldown?: string | number;
   main_set?: string | number;
+  main_set_kind?: WorkoutPhaseKind;
   intervals: HrIntervalTargets | null;
 }
 
@@ -88,6 +107,9 @@ export interface WorkoutSummary {
   day?: DayName | string;
   /** True when the user ended the workout early (cancel). Still saved in history. */
   cancelled?: boolean;
+  machine_id?: MachineId;
+  machine_profile_version?: number;
+  machine_guidance_trace?: MachineGuidanceTraceEntry[];
 }
 
 export interface SisuSettings {

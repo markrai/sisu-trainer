@@ -24,6 +24,13 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .phase-box { display: flex; justify-content: space-between; align-items: center; font-size: 1.5rem; padding: 14px; background: #232323; border-radius: 12px; margin-top: 18px; }
 .phase-box .phase-name { flex: 1; text-align: left; }
 .phase-box .phase-time { flex: 0 0 auto; text-align: right; font-weight: 600; }
+.machine-guidance { margin-top: 14px; padding: 14px; border: 1px solid rgba(61,124,255,0.55); border-radius: 12px; background: rgba(61,124,255,0.1); text-align: center; }
+.machine-guidance-name { font-size: 0.8rem; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.9; }
+.machine-guidance-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.machine-guidance-value { min-width: 0; }
+.machine-guidance-label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.68; }
+.machine-guidance-number { margin-top: 3px; font-size: 1.65rem; font-weight: 750; font-variant-numeric: tabular-nums; }
+.machine-guidance-watts { margin-top: 9px; font-size: 0.82rem; opacity: 0.72; }
 .time-left { text-align: center; font-size: 1.1rem; margin-top: 10px; opacity: .9; }
 .work-blocks { text-align: center; margin-top: 8px; font-size: 0.55rem; opacity: .8; }
 .hr-target { text-align: center; font-size: 0.7rem; opacity: .9; }
@@ -57,8 +64,8 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .modal-section-title { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6; margin-bottom: 10px; font-weight: 600; }
 
 /* Tab styles */
-.tab-buttons { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #333; }
-.tab-button { flex: 1; padding: 12px; background: transparent; border: none; color: #888; font-size: 1rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s; }
+.tab-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #333; }
+.tab-button { flex: 1 1 70px; padding: 12px; background: transparent; border: none; color: #888; font-size: 1rem; font-weight: 500; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all 0.2s; }
 .tab-button:hover { color: #fff; }
 .tab-button.active { color: #3d7cff; border-bottom-color: #3d7cff; }
 .tab-content { display: none; min-height: 400px; }

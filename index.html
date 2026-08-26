@@ -52,6 +52,7 @@
     <div class="tab-buttons">
       <button class="tab-button active" onclick="switchTab('personal')">Profile</button>
       <button class="tab-button" onclick="switchTab('preferences')"><span class="tab-label-long">Preferences</span><span class="tab-label-short">Prefs</span></button>
+      <button class="tab-button" onclick="switchTab('equipment')"><span class="tab-label-long">Equipment</span><span class="tab-label-short">Equip</span></button>
       <button class="tab-button" onclick="switchTab('workouts')">Workouts</button>
       <button class="tab-button" onclick="switchTab('sisu')">Sync</button>
       <button class="tab-button" id="installTabButton" onclick="switchTab('install')">Install</button>
@@ -130,6 +131,18 @@
         <div class="modal-field modal-field-toggle">
           <label class="modal-label" for="voicePromptsEnabled">Voice prompts</label>
           <input type="checkbox" id="voicePromptsEnabled" class="preference-toggle" onchange="savePreferenceVoicePrompts(this.checked)">
+        </div>
+      </div>
+    </div>
+
+    <div id="equipmentTab" class="tab-content">
+      <div class="modal-section">
+        <div class="modal-section-title">Bike</div>
+        <div class="modal-field">
+          <label class="modal-label" for="bikeMachineSelect">Machine</label>
+          <select id="bikeMachineSelect" class="modal-input" onchange="saveBikeEquipmentSelection(this.value)">
+            <option value="">No machine</option>
+          </select>
         </div>
       </div>
     </div>
@@ -248,6 +261,21 @@
   </div>
 
   <div id="phaseDisplay" class="phase-box"></div>
+
+  <section id="machineGuidance" class="machine-guidance" aria-live="polite" hidden>
+    <div id="machineGuidanceName" class="machine-guidance-name"></div>
+    <div class="machine-guidance-values">
+      <div class="machine-guidance-value">
+        <div class="machine-guidance-label">Resistance</div>
+        <div id="machineGuidanceResistance" class="machine-guidance-number"></div>
+      </div>
+      <div class="machine-guidance-value">
+        <div class="machine-guidance-label">Cadence</div>
+        <div id="machineGuidanceCadence" class="machine-guidance-number"></div>
+      </div>
+    </div>
+    <div id="machineGuidanceWatts" class="machine-guidance-watts" hidden></div>
+  </section>
 
   <div class="ring-wrapper" style="position: relative;">
     <div class="ring-container">

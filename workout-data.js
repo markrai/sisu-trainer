@@ -3,7 +3,7 @@
 
 // Shared state
 let plan = {};
-let workoutMetadata = {}; // Store type and machine for each day
+let workoutMetadata = {}; // Store type and activities for each day
 let hrTargets = {}; // Store HR targets for each day's phases
 
 // Helper function to parse duration_min (handles strings like "60–75" or numbers)
@@ -117,11 +117,11 @@ function processWorkout(workout, transformed) {
   // Only add to transformed if we have valid workout data
   if (warm > 0 || sustain > 0 || cool > 0) {
     transformed[workout.day] = { warm, sustain, cool };
-    // Store metadata (type, intent, and machine) for display
+    // Store metadata (type, intent, and activities) for display
     workoutMetadata[workout.day] = {
       type: workout.type || "",
       intent: workout.intent || "",
-      machine: workout.machine || ""
+      activities: Array.isArray(workout.activities) ? workout.activities : []
     };
   } else {
     transformed[workout.day] = null;

@@ -1,4 +1,4 @@
-import { adjustedBlockLengths, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, startWorkout, todayName, hrTargetText, updateRing, } from "./workoutLogic.js";
+import { adjustedBlockLengths, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
@@ -6,6 +6,9 @@ import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
 import { getSession } from "./sessionStore.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
+import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
+import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.js";
+import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./machines/runtime.js";
 let selectedDay = null;
 let liveBpm = null;
 let lastBpmUpdateTime = null;
@@ -219,32 +222,6 @@ function promptCancelWorkout() {
     if (phaseDisplayEl.dataset.phaseState === "active")
         openCancelModal();
 }
-function parseHrTargetRange(hrTargetText) {
-    if (!hrTargetText || hrTargetText === "")
-        return null;
-    const greaterThanCapMatch = hrTargetText.match(/≥(\d+)\s*\(cap\s*(\d+)\)/);
-    if (greaterThanCapMatch)
-        return { min: parseInt(greaterThanCapMatch[1]), max: parseInt(greaterThanCapMatch[2]) };
-    const greaterThanMatch = hrTargetText.match(/≥(\d+)/);
-    if (greaterThanMatch) {
-        const value = parseInt(greaterThanMatch[1]);
-        return { min: value, max: 200 };
-    }
-    const rangeMatch = hrTargetText.match(/(\d+)[–-](\d+)/);
-    if (rangeMatch)
-        return { min: parseInt(rangeMatch[1]), max: parseInt(rangeMatch[2]) };
-    const lessThanMatch = hrTargetText.match(/<(\d+)/);
-    if (lessThanMatch) {
-        const value = parseInt(lessThanMatch[1]);
-        return { min: 0, max: value - 1 };
-    }
-    const singleMatch = hrTargetText.match(/(\d+)/);
-    if (singleMatch) {
-        const value = parseInt(singleMatch[1]);
-        return { min: value - 5, max: value + 5 };
-    }
-    return null;
-}
 function updateHeartColor(liveBpm, hrTargetText) {
     const heartIcon = document.getElementById("heartIcon");
     const hrNowEl = document.getElementById("hrNow");
@@ -331,32 +308,9 @@ function getWarmupSubsectionName(day, elapsedSec) {
     }
     return null;
 }
-function getCurrentIntervalName(day, elapsedSec, blocks) {
-    const hrTargets = typeof window.getHrTargets === "function" ? window.getHrTargets() : {};
-    const dayHrTargets = hrTargets[day];
-    if (!dayHrTargets || !dayHrTargets.intervals || !dayHrTargets.intervals.phases)
-        return null;
-    const warmSec = blocks.warm * 60;
-    const sustainElapsed = Math.max(0, elapsedSec - warmSec);
-    const phases = dayHrTargets.intervals.phases;
-    const isSequence = dayHrTargets.intervals.isSequence;
-    let elapsedInPhases = sustainElapsed;
-    if (isSequence) {
-        const totalDuration = phases.reduce((sum, p) => sum + p.duration * 60, 0);
-        elapsedInPhases = Math.min(sustainElapsed, totalDuration);
-    }
-    else {
-        const cycleDuration = phases.reduce((sum, p) => sum + p.duration * 60, 0);
-        elapsedInPhases = sustainElapsed % cycleDuration;
-    }
-    let accumulated = 0;
-    for (let i = 0; i < phases.length; i++) {
-        const phaseDuration = phases[i].duration * 60;
-        if (elapsedInPhases < accumulated + phaseDuration)
-            return phases[i].phase;
-        accumulated += phaseDuration;
-    }
-    return null;
+function getUnambiguousActivity(metadata) {
+    const activities = Array.isArray(metadata === null || metadata === void 0 ? void 0 : metadata.activities) ? metadata.activities : [];
+    return activities.length === 1 ? activities[0] : null;
 }
 function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime) {
     if (day === "Downregulation") {
@@ -376,16 +330,16 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
     }
     let phaseDisplayName = phase.phase;
-    if (phase.phase === "Warm-Up") {
+    if (phase.kind === "warmup") {
         const subsectionName = getWarmupSubsectionName(day, elapsedSec);
         if (subsectionName)
             phaseDisplayName = "Warm-Up (" + subsectionName + ")";
     }
-    else if (phase.phase === "Sustain") {
+    else if (phase.detailName) {
+        phaseDisplayName = phase.detailName;
+    }
+    else if (phase.kind === "work" || phase.kind === "recovery") {
         phaseDisplayName = "Workout";
-        const intervalName = getCurrentIntervalName(day, elapsedSec, blocks);
-        if (intervalName)
-            phaseDisplayName = intervalName;
     }
     const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks);
     const nowTime = Date.now();
@@ -401,13 +355,45 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         elapsedSec,
         phase,
         phaseDisplayName,
+        activity: getUnambiguousActivity(workoutMetadata[day]),
         paused,
         hrTargetTextValue,
         liveBpm: liveBpm !== null && liveBpm !== void 0 ? liveBpm : null,
         liveBpmStale,
     };
 }
+function renderMachineGuidance(update) {
+    const panel = document.getElementById("machineGuidance");
+    if (!panel)
+        return;
+    if (!update || update.guidance.resistance === undefined || update.guidance.cadenceRpm === undefined) {
+        panel.hidden = true;
+        return;
+    }
+    panel.hidden = false;
+    const name = document.getElementById("machineGuidanceName");
+    const resistance = document.getElementById("machineGuidanceResistance");
+    const cadence = document.getElementById("machineGuidanceCadence");
+    const watts = document.getElementById("machineGuidanceWatts");
+    if (name)
+        name.textContent = update.machine.name;
+    if (resistance)
+        resistance.textContent = String(update.guidance.resistance);
+    if (cadence)
+        cadence.textContent = `${update.guidance.cadenceRpm} RPM`;
+    if (watts) {
+        if (update.guidance.estimatedWatts !== undefined) {
+            watts.textContent = `~${update.guidance.estimatedWatts} W @ 70 RPM`;
+            watts.hidden = false;
+        }
+        else {
+            watts.textContent = "";
+            watts.hidden = true;
+        }
+    }
+}
 function renderWorkout(state) {
+    var _a, _b;
     const downregEl = document.getElementById("downregulationContainer");
     const workoutMainContent = document.getElementById("workoutMainContent");
     const workoutBlocksEl = document.getElementById("workoutBlocks");
@@ -446,15 +432,13 @@ function renderWorkout(state) {
     const hasBase = state.screen !== "rest" && state.base;
     if (activityIcon) {
         if (hasBase && dayMeta) {
-            const machine = dayMeta.machine || "";
-            let iconSrc = "";
-            const machineLower = machine.toLowerCase();
-            if (machineLower.includes("combo") || machineLower.includes("strength"))
-                iconSrc = "dumbbell.png";
-            else if (machineLower.includes("bike"))
-                iconSrc = "bike.png";
-            else if (machineLower.includes("elliptical"))
-                iconSrc = "elliptical.png";
+            const activity = getUnambiguousActivity(dayMeta);
+            const iconByActivity = {
+                bike: "bike.png",
+                elliptical: "elliptical.png",
+                strength: "dumbbell.png",
+            };
+            const iconSrc = activity ? iconByActivity[activity] || "" : "";
             if (iconSrc) {
                 activityIcon.src = iconSrc;
                 activityIcon.style.display = "block";
@@ -472,6 +456,7 @@ function renderWorkout(state) {
     const cancelBtnEl = document.getElementById("cancelWorkoutButton");
     const startButtonRowEl = document.getElementById("startButtonRow");
     if (state.screen === "rest") {
+        renderMachineGuidance(null);
         if (workoutBlocksEl)
             workoutBlocksEl.textContent = "Rest Day";
         if (phaseDisplayEl) {
@@ -493,6 +478,7 @@ function renderWorkout(state) {
     if (workoutBlocksEl)
         workoutBlocksEl.textContent = state.workoutBlocksText;
     if (state.screen === "idle") {
+        renderMachineGuidance(null);
         if (phaseDisplayEl) {
             phaseDisplayEl.innerHTML = '<span class="phase-name">Not Started</span>';
             phaseDisplayEl.dataset.phaseState = "idle";
@@ -517,6 +503,7 @@ function renderWorkout(state) {
         return;
     }
     if (state.screen === "completed") {
+        renderMachineGuidance(null);
         updateRing(state.elapsedSec, state.blocks);
         if (typeof window.releaseWakeLock === "function")
             window.releaseWakeLock();
@@ -581,8 +568,6 @@ function renderWorkout(state) {
                 "</span>";
         phaseDisplayEl.dataset.phaseState = "active";
     }
-    if (typeof window.announcePhaseIfChanged === "function")
-        window.announcePhaseIfChanged(active.phaseDisplayName);
     if (hrTargetEl)
         hrTargetEl.textContent = active.hrTargetTextValue;
     updateHeartPulse();
@@ -594,6 +579,31 @@ function renderWorkout(state) {
     }
     else {
         updateHeartColor(null, active.hrTargetTextValue);
+    }
+    const session = getSession(active.day);
+    const targetRange = parseHrTargetRange(active.hrTargetTextValue);
+    const machineUpdate = session.sessionId && active.activity
+        ? updateMachineGuidanceRuntime({
+            sessionId: session.sessionId,
+            activity: active.activity,
+            phaseKind: active.phase.kind,
+            phaseId: active.phase.phaseId,
+            phaseDisplayName: active.phaseDisplayName,
+            phaseElapsedSeconds: active.phase.phaseElapsedSeconds,
+            phaseDurationSeconds: active.phase.phaseDurationSeconds,
+            workoutElapsedSeconds: active.elapsedSec,
+            intervalIndex: active.phase.intervalIndex,
+            heartRateBpm: (_a = active.liveBpm) !== null && _a !== void 0 ? _a : undefined,
+            targetHeartRateMin: targetRange === null || targetRange === void 0 ? void 0 : targetRange.min,
+            targetHeartRateMax: targetRange === null || targetRange === void 0 ? void 0 : targetRange.max,
+        })
+        : null;
+    renderMachineGuidance(machineUpdate);
+    if (typeof window.announceWorkoutGuidance === "function") {
+        window.announceWorkoutGuidance(active.phaseDisplayName, (_b = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _b !== void 0 ? _b : null);
+    }
+    else if (typeof window.announcePhaseIfChanged === "function") {
+        window.announcePhaseIfChanged(active.phaseDisplayName);
     }
     applyPhaseStyle(active.phase.phase);
 }
@@ -626,8 +636,8 @@ function updateDisplay() {
     }
 }
 function switchTab(tabName) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
-    const tabs = ["personal", "preferences", "workouts", "sisu", "install"];
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+    const tabs = ["personal", "preferences", "equipment", "workouts", "sisu", "install"];
     tabs.forEach((name) => {
         const tabEl = document.getElementById(name + "Tab");
         if (tabEl)
@@ -635,7 +645,7 @@ function switchTab(tabName) {
     });
     const buttons = document.querySelectorAll(".tab-button");
     buttons.forEach((btn) => btn.classList.remove("active"));
-    const tabIndex = { personal: 0, preferences: 1, workouts: 2, sisu: 3, install: 4 };
+    const tabIndex = { personal: 0, preferences: 1, equipment: 2, workouts: 3, sisu: 4, install: 5 };
     if (tabName === "personal") {
         (_a = document.getElementById("personalTab")) === null || _a === void 0 ? void 0 : _a.classList.add("active");
         (_b = buttons[tabIndex.personal]) === null || _b === void 0 ? void 0 : _b.classList.add("active");
@@ -645,21 +655,26 @@ function switchTab(tabName) {
         (_d = buttons[tabIndex.preferences]) === null || _d === void 0 ? void 0 : _d.classList.add("active");
         loadPreferences();
     }
+    else if (tabName === "equipment") {
+        (_e = document.getElementById("equipmentTab")) === null || _e === void 0 ? void 0 : _e.classList.add("active");
+        (_f = buttons[tabIndex.equipment]) === null || _f === void 0 ? void 0 : _f.classList.add("active");
+        loadEquipmentSettings();
+    }
     else if (tabName === "workouts") {
-        (_e = document.getElementById("workoutsTab")) === null || _e === void 0 ? void 0 : _e.classList.add("active");
-        (_f = buttons[tabIndex.workouts]) === null || _f === void 0 ? void 0 : _f.classList.add("active");
+        (_g = document.getElementById("workoutsTab")) === null || _g === void 0 ? void 0 : _g.classList.add("active");
+        (_h = buttons[tabIndex.workouts]) === null || _h === void 0 ? void 0 : _h.classList.add("active");
         loadWorkoutSummaries();
     }
     else if (tabName === "sisu") {
-        (_g = document.getElementById("sisuTab")) === null || _g === void 0 ? void 0 : _g.classList.add("active");
-        (_h = buttons[tabIndex.sisu]) === null || _h === void 0 ? void 0 : _h.classList.add("active");
+        (_j = document.getElementById("sisuTab")) === null || _j === void 0 ? void 0 : _j.classList.add("active");
+        (_k = buttons[tabIndex.sisu]) === null || _k === void 0 ? void 0 : _k.classList.add("active");
         if (typeof window.loadSisuSettings === "function")
             window.loadSisuSettings();
         updateHrMonitorLabel();
     }
     else if (tabName === "install") {
-        (_j = document.getElementById("installTab")) === null || _j === void 0 ? void 0 : _j.classList.add("active");
-        (_k = buttons[tabIndex.install]) === null || _k === void 0 ? void 0 : _k.classList.add("active");
+        (_l = document.getElementById("installTab")) === null || _l === void 0 ? void 0 : _l.classList.add("active");
+        (_m = buttons[tabIndex.install]) === null || _m === void 0 ? void 0 : _m.classList.add("active");
         if (typeof window.refreshInstallTabContent === "function")
             window.refreshInstallTabContent();
     }
@@ -683,6 +698,30 @@ function savePreferenceShowSeconds(checked) {
 }
 function savePreferenceVoicePrompts(checked) {
     localStorage.setItem("voicePromptsEnabled", checked ? "true" : "false");
+}
+function loadEquipmentSettings() {
+    var _a;
+    const select = document.getElementById("bikeMachineSelect");
+    if (!select)
+        return;
+    select.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "No machine";
+    select.appendChild(none);
+    for (const machine of listMachinesForActivity("bike")) {
+        const option = document.createElement("option");
+        option.value = machine.id;
+        option.textContent = machine.name;
+        select.appendChild(option);
+    }
+    select.value = (_a = getEquipmentSelection().bike) !== null && _a !== void 0 ? _a : "";
+}
+function saveBikeEquipmentSelection(value) {
+    if (value && !isMachineId(value))
+        return;
+    setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
+    updateDisplay();
 }
 async function loadWorkoutSummaries() {
     const listContainer = document.getElementById("workoutSummaryList");
@@ -1057,10 +1096,14 @@ function registerUiGlobals(phaseBoxEl) {
         const day = getSelectedDay();
         const session = getSession(day);
         const startTime = getStartTime(day);
-        if (startTime && session.sessionId && typeof window.storeHrSample === "function") {
+        if (startTime && session.sessionId) {
             const start = typeof startTime === "number" ? startTime : parseInt(String(startTime), 10);
             const elapsedSec = Math.floor((Date.now() - start) / 1000);
-            window.storeHrSample(session.sessionId, elapsedSec, bpm).catch((err) => console.error("Error storing HR sample:", err));
+            if (!session.paused)
+                recordMachineHeartRateSample(session.sessionId, elapsedSec, bpm);
+            if (typeof window.storeHrSample === "function") {
+                window.storeHrSample(session.sessionId, elapsedSec, bpm).catch((err) => console.error("Error storing HR sample:", err));
+            }
         }
     });
     if (phaseDisplayEl) {
@@ -1091,6 +1134,8 @@ function registerUiGlobals(phaseBoxEl) {
     window.getVoicePromptsEnabled = getVoicePromptsEnabled;
     window.savePreferenceShowSeconds = savePreferenceShowSeconds;
     window.savePreferenceVoicePrompts = savePreferenceVoicePrompts;
+    window.loadEquipmentSettings = loadEquipmentSettings;
+    window.saveBikeEquipmentSelection = saveBikeEquipmentSelection;
     window.loadWorkoutSummaries = loadWorkoutSummaries;
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;
@@ -1106,4 +1151,4 @@ function registerUiGlobals(phaseBoxEl) {
     window.updateHeartColor = updateHeartColor;
     window.updateDisplay = updateDisplay;
 }
-export { getSelectedDay, setSelectedDay, connectHr, updateHrDisplay, updateHeartPulse, updateHeartColor, updateDisplay, switchTab, savePreferenceShowSeconds, savePreferenceVoicePrompts, loadWorkoutSummaries, registerUiGlobals, };
+export { getSelectedDay, setSelectedDay, connectHr, updateHrDisplay, updateHeartPulse, updateHeartColor, updateDisplay, switchTab, savePreferenceShowSeconds, savePreferenceVoicePrompts, loadEquipmentSettings, saveBikeEquipmentSelection, loadWorkoutSummaries, registerUiGlobals, };
