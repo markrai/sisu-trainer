@@ -7,6 +7,7 @@ import { getSession } from "./sessionStore.js";
 import { getWorkoutMetadata } from "./workoutData.js";
 import { getActiveWorkoutActivity } from "./workoutActivity.js";
 import { learnFromCompletedWorkout } from "./machines/learning/index.js";
+import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
 
 // Generate stable UUID (v4-ish)
 function generateUUID(): string {
@@ -176,6 +177,7 @@ async function generateWorkoutSummary(
 async function emitWorkoutSummary(summary: WorkoutSummary) {
   await storeWorkoutSummary(summary);
   await learnFromCompletedWorkout(summary);
+  await learnHrDynamicsFromCompletedWorkout(summary);
 }
 
 export function registerSummaryGlobals() {

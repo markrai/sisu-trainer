@@ -151,6 +151,12 @@
         <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Based on completed workouts</div>
         <button type="button" class="button secondary" onclick="promptResetLearnedGuidance()">Reset learned guidance</button>
       </div>
+      <div id="hrDynamicsSection" class="modal-section" hidden>
+        <div class="modal-section-title">HR response</div>
+        <div id="hrDynamicsList" class="learned-guidance-list"></div>
+        <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Observed from recorded workouts. These values do not change live guidance yet.</div>
+        <button type="button" class="button secondary" onclick="promptResetHrDynamics()">Reset HR response data</button>
+      </div>
     </div>
     
     <!-- Workouts Tab -->
@@ -269,6 +275,18 @@
     <div class="modal-actions">
       <button class="button" onclick="confirmResetLearnedGuidance()">Reset</button>
       <button class="button secondary" onclick="closeResetLearnedModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="resetHrDynamicsModalBg" style="z-index: 16;">
+  <div class="modal">
+    <div class="close-btn" onclick="closeResetHrDynamicsModal()">×</div>
+    <div class="modal-title">Reset HR response data?</div>
+    <div class="label" style="text-align:center;">This removes observed heart-rate response data for ProForm SMART Power 10.0. Learned starting resistance, workout history, equipment selection, and calibration are not changed.</div>
+    <div class="modal-actions">
+      <button class="button" onclick="confirmResetHrDynamics()">Reset</button>
+      <button class="button secondary" onclick="closeResetHrDynamicsModal()">Cancel</button>
     </div>
   </div>
 </div>

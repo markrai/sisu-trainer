@@ -1,0 +1,99 @@
+import { getHrSamples } from "../../workoutStorage.js";
+import { learningKey } from "../learning/types.js";
+import { deriveHrDynamicsObservations, observationHasAggregatableMetric, observationPassesSanity, } from "./derive.js";
+import { appendBoundedSample, cloneEntry, emptyDynamicsEntry, entryHasDynamicsSamples, loadDynamicsStore, putDynamicsEntry, toPublicDynamics, } from "./storage.js";
+export { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, MAX_RESISTANCE_STEP, RESPONSE_SEARCH_SECONDS, } from "./types.js";
+export { deriveHrDynamicsObservations, observationHasAggregatableMetric, observationPassesSanity, workoutEligibleForHrDynamics, } from "./derive.js";
+export { appendBoundedSample, emptyDynamicsStore, listHrDynamics, loadDynamicsStore, putDynamicsEntry, resetHrDynamicsForMachine, saveDynamicsStore, sanitizeDynamicsStore, } from "./storage.js";
+function perLevelDelta(observation) {
+    if (observation.hrDelta === undefined || observation.resistanceDelta === undefined)
+        return undefined;
+    if (observation.resistanceDelta === 0)
+        return undefined;
+    return Math.round(observation.hrDelta / Math.abs(observation.resistanceDelta));
+}
+export function mergeObservationIntoEntry(previous, observation, updatedAt) {
+    const next = previous ? cloneEntry({ ...previous, updatedAt }) : emptyDynamicsEntry(updatedAt);
+    if (!observationPassesSanity(observation) || !observationHasAggregatableMetric(observation))
+        return next;
+    if (observation.kind === "work_start") {
+        if (observation.responseDelaySeconds !== undefined) {
+            next.workStartDelays = appendBoundedSample(next.workStartDelays, observation.responseDelaySeconds);
+        }
+        if (observation.hrDelta !== undefined) {
+            next.workStartHrDeltas = appendBoundedSample(next.workStartHrDeltas, observation.hrDelta);
+        }
+        return next;
+    }
+    const perLevel = perLevelDelta(observation);
+    if (observation.kind === "resistance_increase") {
+        if (observation.responseDelaySeconds !== undefined) {
+            next.increaseDelays = appendBoundedSample(next.increaseDelays, observation.responseDelaySeconds);
+        }
+        if (perLevel !== undefined)
+            next.increaseHrPerLevel = appendBoundedSample(next.increaseHrPerLevel, perLevel);
+        return next;
+    }
+    if (observation.responseDelaySeconds !== undefined) {
+        next.decreaseDelays = appendBoundedSample(next.decreaseDelays, observation.responseDelaySeconds);
+    }
+    if (perLevel !== undefined)
+        next.decreaseHrPerLevel = appendBoundedSample(next.decreaseHrPerLevel, perLevel);
+    return next;
+}
+export function applyCompletedWorkoutDynamics(summary, hrSamples, storage, updatedAt = new Date().toISOString()) {
+    var _a, _b;
+    const observations = deriveHrDynamicsObservations(summary, hrSamples).filter((observation) => observationPassesSanity(observation) && observationHasAggregatableMetric(observation));
+    if (observations.length === 0)
+        return [];
+    const store = loadDynamicsStore(storage);
+    const grouped = new Map();
+    for (const observation of observations) {
+        const parts = {
+            machineId: observation.machineId,
+            machineProfileVersion: observation.machineProfileVersion,
+            activity: observation.activity,
+            intent: observation.intent,
+            durationClass: observation.durationClass,
+        };
+        const key = learningKey(parts);
+        const current = (_b = (_a = grouped.get(key)) === null || _a === void 0 ? void 0 : _a.merged) !== null && _b !== void 0 ? _b : store.entries[key];
+        grouped.set(key, { parts, merged: mergeObservationIntoEntry(current, observation, updatedAt) });
+    }
+    const saved = [];
+    for (const { parts, merged } of grouped.values()) {
+        if (!entryHasDynamicsSamples(merged))
+            continue;
+        const result = putDynamicsEntry(parts, merged, storage);
+        if (result)
+            saved.push(result);
+    }
+    return saved;
+}
+export function learnHrDynamicsFromSamples(summary, hrSamples, storage, updatedAt = new Date().toISOString()) {
+    try {
+        return applyCompletedWorkoutDynamics(summary, hrSamples, storage, updatedAt);
+    }
+    catch (error) {
+        console.error("Machine HR-dynamics learning failed:", error);
+        return [];
+    }
+}
+export async function learnHrDynamicsFromCompletedWorkout(summary, storage) {
+    if (summary.cancelled)
+        return [];
+    try {
+        const samples = await getHrSamples(summary.external_session_id);
+        return learnHrDynamicsFromSamples(summary, samples.map((sample) => ({ elapsedSeconds: sample.timestamp_sec, bpm: sample.hr })), storage);
+    }
+    catch (error) {
+        console.error("Machine HR-dynamics learning failed:", error);
+        return [];
+    }
+}
+export function getPublicDynamics(parts, storage) {
+    const entry = loadDynamicsStore(storage).entries[learningKey(parts)];
+    if (!entry)
+        return undefined;
+    return toPublicDynamics(parts, entry);
+}

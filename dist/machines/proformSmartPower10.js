@@ -1,3 +1,4 @@
+import { qualifiedHrMedian } from "./hrQuality.js";
 export const estimatedWattsAt70Rpm = Object.freeze({
     1: 66,
     2: 69,
@@ -21,27 +22,8 @@ export function getEstimatedWattsAt70Rpm(resistance) {
 export function clampAutomaticResistance(resistance) {
     return Math.max(1, Math.min(15, Math.round(resistance)));
 }
-function validDistinctSamples(recentHeartRates) {
-    const byElapsed = new Map();
-    for (const sample of recentHeartRates) {
-        if (!Number.isFinite(sample.bpm) || sample.bpm <= 0)
-            continue;
-        byElapsed.set(sample.elapsedSeconds, sample.bpm);
-    }
-    return [...byElapsed.entries()]
-        .sort((a, b) => a[0] - b[0])
-        .map(([elapsedSeconds, bpm]) => ({ elapsedSeconds, bpm }));
-}
 function rollingMedian(context) {
-    const samples = validDistinctSamples(context.recentHeartRates);
-    if (samples.length < 5)
-        return undefined;
-    const span = samples[samples.length - 1].elapsedSeconds - samples[0].elapsedSeconds;
-    if (span < 4)
-        return undefined;
-    const values = samples.map((sample) => sample.bpm).sort((a, b) => a - b);
-    const middle = Math.floor(values.length / 2);
-    return values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+    return qualifiedHrMedian(context.recentHeartRates);
 }
 function startingWorkResistance(durationSeconds) {
     if (durationSeconds <= 75)

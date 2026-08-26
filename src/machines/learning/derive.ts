@@ -1,5 +1,6 @@
 import type { WorkoutSummary } from "../../types.js";
 import type { MachineGuidanceTraceEntry } from "../trace.js";
+import { integerMedian, qualifiedHrMedian } from "../hrQuality.js";
 import { clampAutomaticResistance } from "../proformSmartPower10.js";
 import { getMachineDefinition } from "../registry.js";
 import {
@@ -9,6 +10,8 @@ import {
   type LearningKeyParts,
   type WorkDurationClass,
 } from "./types.js";
+
+export { integerMedian };
 
 interface WorkPhase {
   phaseId: string;
@@ -22,32 +25,8 @@ interface WorkPhase {
   targetHeartRateMax?: number;
 }
 
-export function integerMedian(values: number[]): number | undefined {
-  if (values.length === 0) return undefined;
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor((sorted.length - 1) / 2)];
-}
-
-function validDistinctHr(samples: readonly LearningHrSample[]) {
-  const byElapsed = new Map<number, number>();
-  for (const sample of samples) {
-    if (!Number.isFinite(sample.bpm) || sample.bpm <= 0) continue;
-    if (!Number.isFinite(sample.elapsedSeconds)) continue;
-    byElapsed.set(sample.elapsedSeconds, sample.bpm);
-  }
-  return [...byElapsed.entries()]
-    .sort((a, b) => a[0] - b[0])
-    .map(([elapsedSeconds, bpm]) => ({ elapsedSeconds, bpm }));
-}
-
 export function rollingHrMedian(samples: readonly LearningHrSample[]): number | undefined {
-  const distinct = validDistinctHr(samples);
-  if (distinct.length < 5) return undefined;
-  const span = distinct[distinct.length - 1].elapsedSeconds - distinct[0].elapsedSeconds;
-  if (span < 4) return undefined;
-  const values = distinct.map((sample) => sample.bpm).sort((a, b) => a - b);
-  const middle = Math.floor(values.length / 2);
-  return values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+  return qualifiedHrMedian(samples);
 }
 
 function collectWorkPhases(trace: readonly MachineGuidanceTraceEntry[]): WorkPhase[] {

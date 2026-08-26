@@ -10,6 +10,7 @@ import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
 import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.js";
 import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./machines/runtime.js";
 import { formatLearnedGuidanceLabel, listLearnedStarts, resetLearnedGuidanceForMachine, } from "./machines/learning/index.js";
+import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/index.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 let selectedDay = null;
 let liveBpm = null;
@@ -754,6 +755,7 @@ function loadEquipmentSettings() {
     }
     select.value = (_a = getEquipmentSelection().bike) !== null && _a !== void 0 ? _a : "";
     renderLearnedGuidancePanel();
+    renderHrDynamicsPanel();
 }
 function renderLearnedGuidancePanel() {
     const section = document.getElementById("learnedGuidanceSection");
@@ -771,6 +773,90 @@ function renderLearnedGuidancePanel() {
     list.innerHTML = entries
         .map((entry) => `<div class="learned-guidance-row"><span>${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</span><span>R${entry.resistance}</span></div>`)
         .join("");
+}
+function metricRow(label, value) {
+    return `<div class="learned-guidance-row"><span>${label}</span><span>${value}</span></div>`;
+}
+function sampleCountLabel(count) {
+    return count === 1 ? "1 sample" : `${count} samples`;
+}
+function signedBpm(value) {
+    return `${value > 0 ? "+" : ""}${value} bpm`;
+}
+function renderHrDynamicsGroup(entry) {
+    const blocks = [];
+    if (entry.workStartSampleCount > 0) {
+        const rows = ['<div class="hr-dynamics-subhead">Work start</div>'];
+        if (entry.medianWorkStartDelaySeconds !== undefined) {
+            rows.push(metricRow("Typical rise delay", `${entry.medianWorkStartDelaySeconds} s`));
+        }
+        if (entry.medianWorkStartHrDelta !== undefined) {
+            rows.push(metricRow("Observed HR rise", signedBpm(entry.medianWorkStartHrDelta)));
+        }
+        rows.push(metricRow("Based on", sampleCountLabel(entry.workStartSampleCount)));
+        blocks.push(rows.join(""));
+    }
+    if (entry.increaseSampleCount > 0) {
+        const rows = ['<div class="hr-dynamics-subhead">+1 resistance</div>'];
+        if (entry.medianIncreaseDelaySeconds !== undefined) {
+            rows.push(metricRow("Typical response delay", `${entry.medianIncreaseDelaySeconds} s`));
+        }
+        if (entry.medianIncreaseHrDeltaPerStep !== undefined) {
+            rows.push(metricRow("Observed HR change", signedBpm(entry.medianIncreaseHrDeltaPerStep)));
+        }
+        rows.push(metricRow("Samples", sampleCountLabel(entry.increaseSampleCount)));
+        blocks.push(rows.join(""));
+    }
+    if (entry.decreaseSampleCount > 0) {
+        const rows = ['<div class="hr-dynamics-subhead">-1 resistance</div>'];
+        if (entry.medianDecreaseDelaySeconds !== undefined) {
+            rows.push(metricRow("Typical response delay", `${entry.medianDecreaseDelaySeconds} s`));
+        }
+        if (entry.medianDecreaseHrDeltaPerStep !== undefined) {
+            rows.push(metricRow("Observed HR change", signedBpm(entry.medianDecreaseHrDeltaPerStep)));
+        }
+        rows.push(metricRow("Samples", sampleCountLabel(entry.decreaseSampleCount)));
+        blocks.push(rows.join(""));
+    }
+    if (blocks.length === 0)
+        return "";
+    return `<div class="hr-dynamics-block"><div class="hr-dynamics-heading">${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</div>${blocks.join("")}</div>`;
+}
+function renderHrDynamicsPanel() {
+    const section = document.getElementById("hrDynamicsSection");
+    const list = document.getElementById("hrDynamicsList");
+    if (!section || !list)
+        return;
+    const machineId = getEquipmentSelection().bike;
+    const entries = machineId ? listHrDynamics(machineId).filter((entry) => entry.workStartSampleCount > 0 || entry.increaseSampleCount > 0 || entry.decreaseSampleCount > 0) : [];
+    if (!machineId || entries.length === 0) {
+        section.hidden = true;
+        list.innerHTML = "";
+        return;
+    }
+    section.hidden = false;
+    list.innerHTML = entries.map(renderHrDynamicsGroup).join("");
+}
+function promptResetHrDynamics() {
+    const machineId = getEquipmentSelection().bike;
+    if (!machineId)
+        return;
+    const bg = document.getElementById("resetHrDynamicsModalBg");
+    if (bg)
+        bg.style.display = "flex";
+}
+function closeResetHrDynamicsModal() {
+    const bg = document.getElementById("resetHrDynamicsModalBg");
+    if (bg)
+        bg.style.display = "none";
+}
+function confirmResetHrDynamics() {
+    const machineId = getEquipmentSelection().bike;
+    if (machineId)
+        resetHrDynamicsForMachine(machineId);
+    closeResetHrDynamicsModal();
+    renderHrDynamicsPanel();
+    renderLearnedGuidancePanel();
 }
 function promptResetLearnedGuidance() {
     const machineId = getEquipmentSelection().bike;
@@ -791,12 +877,14 @@ function confirmResetLearnedGuidance() {
         resetLearnedGuidanceForMachine(machineId);
     closeResetLearnedModal();
     renderLearnedGuidancePanel();
+    renderHrDynamicsPanel();
 }
 function saveBikeEquipmentSelection(value) {
     if (value && !isMachineId(value))
         return;
     setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
     renderLearnedGuidancePanel();
+    renderHrDynamicsPanel();
     updateDisplay();
 }
 async function loadWorkoutSummaries() {
@@ -1217,6 +1305,9 @@ function registerUiGlobals(phaseBoxEl) {
     window.promptResetLearnedGuidance = promptResetLearnedGuidance;
     window.closeResetLearnedModal = closeResetLearnedModal;
     window.confirmResetLearnedGuidance = confirmResetLearnedGuidance;
+    window.promptResetHrDynamics = promptResetHrDynamics;
+    window.closeResetHrDynamicsModal = closeResetHrDynamicsModal;
+    window.confirmResetHrDynamics = confirmResetHrDynamics;
     window.loadWorkoutSummaries = loadWorkoutSummaries;
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;

@@ -58,6 +58,9 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .learned-guidance-list { display: flex; flex-direction: column; gap: 8px; }
 .learned-guidance-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.95rem; }
 .learned-guidance-row span:last-child { font-variant-numeric: tabular-nums; opacity: 0.9; }
+.hr-dynamics-block { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.hr-dynamics-heading { font-size: 0.95rem; }
+.hr-dynamics-subhead { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.4px; opacity: 0.55; margin-top: 4px; }
 .modal-actions .button.secondary { background: #444; }
 .modal-actions .button.secondary:hover { background: #555; }
 .modal-field { margin-bottom: 14px; display: flex; align-items: center; gap: 12px; }

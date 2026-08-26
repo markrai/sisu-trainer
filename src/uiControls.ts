@@ -35,6 +35,11 @@ import {
   listLearnedStarts,
   resetLearnedGuidanceForMachine,
 } from "./machines/learning/index.js";
+import {
+  listHrDynamics,
+  resetHrDynamicsForMachine,
+  type LearnedHrDynamics,
+} from "./machines/dynamics/index.js";
 import type { Activity, WorkoutPhaseState } from "./types.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 
@@ -812,6 +817,7 @@ function loadEquipmentSettings() {
   }
   select.value = getEquipmentSelection().bike ?? "";
   renderLearnedGuidancePanel();
+  renderHrDynamicsPanel();
 }
 
 function renderLearnedGuidancePanel() {
@@ -834,6 +840,94 @@ function renderLearnedGuidancePanel() {
     .join("");
 }
 
+function metricRow(label: string, value: string): string {
+  return `<div class="learned-guidance-row"><span>${label}</span><span>${value}</span></div>`;
+}
+
+function sampleCountLabel(count: number): string {
+  return count === 1 ? "1 sample" : `${count} samples`;
+}
+
+function signedBpm(value: number): string {
+  return `${value > 0 ? "+" : ""}${value} bpm`;
+}
+
+function renderHrDynamicsGroup(entry: LearnedHrDynamics): string {
+  const blocks: string[] = [];
+  if (entry.workStartSampleCount > 0) {
+    const rows: string[] = ['<div class="hr-dynamics-subhead">Work start</div>'];
+    if (entry.medianWorkStartDelaySeconds !== undefined) {
+      rows.push(metricRow("Typical rise delay", `${entry.medianWorkStartDelaySeconds} s`));
+    }
+    if (entry.medianWorkStartHrDelta !== undefined) {
+      rows.push(metricRow("Observed HR rise", signedBpm(entry.medianWorkStartHrDelta)));
+    }
+    rows.push(metricRow("Based on", sampleCountLabel(entry.workStartSampleCount)));
+    blocks.push(rows.join(""));
+  }
+  if (entry.increaseSampleCount > 0) {
+    const rows: string[] = ['<div class="hr-dynamics-subhead">+1 resistance</div>'];
+    if (entry.medianIncreaseDelaySeconds !== undefined) {
+      rows.push(metricRow("Typical response delay", `${entry.medianIncreaseDelaySeconds} s`));
+    }
+    if (entry.medianIncreaseHrDeltaPerStep !== undefined) {
+      rows.push(metricRow("Observed HR change", signedBpm(entry.medianIncreaseHrDeltaPerStep)));
+    }
+    rows.push(metricRow("Samples", sampleCountLabel(entry.increaseSampleCount)));
+    blocks.push(rows.join(""));
+  }
+  if (entry.decreaseSampleCount > 0) {
+    const rows: string[] = ['<div class="hr-dynamics-subhead">-1 resistance</div>'];
+    if (entry.medianDecreaseDelaySeconds !== undefined) {
+      rows.push(metricRow("Typical response delay", `${entry.medianDecreaseDelaySeconds} s`));
+    }
+    if (entry.medianDecreaseHrDeltaPerStep !== undefined) {
+      rows.push(metricRow("Observed HR change", signedBpm(entry.medianDecreaseHrDeltaPerStep)));
+    }
+    rows.push(metricRow("Samples", sampleCountLabel(entry.decreaseSampleCount)));
+    blocks.push(rows.join(""));
+  }
+  if (blocks.length === 0) return "";
+  return `<div class="hr-dynamics-block"><div class="hr-dynamics-heading">${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</div>${blocks.join("")}</div>`;
+}
+
+function renderHrDynamicsPanel() {
+  const section = document.getElementById("hrDynamicsSection");
+  const list = document.getElementById("hrDynamicsList");
+  if (!section || !list) return;
+  const machineId = getEquipmentSelection().bike;
+  const entries = machineId ? listHrDynamics(machineId).filter((entry) =>
+    entry.workStartSampleCount > 0 || entry.increaseSampleCount > 0 || entry.decreaseSampleCount > 0
+  ) : [];
+  if (!machineId || entries.length === 0) {
+    section.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+  list.innerHTML = entries.map(renderHrDynamicsGroup).join("");
+}
+
+function promptResetHrDynamics() {
+  const machineId = getEquipmentSelection().bike;
+  if (!machineId) return;
+  const bg = document.getElementById("resetHrDynamicsModalBg");
+  if (bg) bg.style.display = "flex";
+}
+
+function closeResetHrDynamicsModal() {
+  const bg = document.getElementById("resetHrDynamicsModalBg");
+  if (bg) bg.style.display = "none";
+}
+
+function confirmResetHrDynamics() {
+  const machineId = getEquipmentSelection().bike;
+  if (machineId) resetHrDynamicsForMachine(machineId);
+  closeResetHrDynamicsModal();
+  renderHrDynamicsPanel();
+  renderLearnedGuidancePanel();
+}
+
 function promptResetLearnedGuidance() {
   const machineId = getEquipmentSelection().bike;
   if (!machineId) return;
@@ -851,12 +945,14 @@ function confirmResetLearnedGuidance() {
   if (machineId) resetLearnedGuidanceForMachine(machineId);
   closeResetLearnedModal();
   renderLearnedGuidancePanel();
+  renderHrDynamicsPanel();
 }
 
 function saveBikeEquipmentSelection(value: string) {
   if (value && !isMachineId(value)) return;
   setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
   renderLearnedGuidancePanel();
+  renderHrDynamicsPanel();
   updateDisplay();
 }
 async function loadWorkoutSummaries() {
@@ -1258,6 +1354,9 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).promptResetLearnedGuidance = promptResetLearnedGuidance;
   (window as any).closeResetLearnedModal = closeResetLearnedModal;
   (window as any).confirmResetLearnedGuidance = confirmResetLearnedGuidance;
+  (window as any).promptResetHrDynamics = promptResetHrDynamics;
+  (window as any).closeResetHrDynamicsModal = closeResetHrDynamicsModal;
+  (window as any).confirmResetHrDynamics = confirmResetHrDynamics;
   (window as any).loadWorkoutSummaries = loadWorkoutSummaries;
   (window as any).viewWorkoutSummary = viewWorkoutSummary;
   (window as any).showWorkoutSummaryModal = showWorkoutSummaryModal;
