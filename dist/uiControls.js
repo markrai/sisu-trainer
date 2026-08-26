@@ -11,6 +11,7 @@ import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.
 import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./machines/runtime.js";
 import { formatLearnedGuidanceLabel, listLearnedStarts, resetLearnedGuidanceForMachine, } from "./machines/learning/index.js";
 import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/index.js";
+import { listShadowPredictions, resetShadowPredictionsForMachine, } from "./machines/prediction/index.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 let selectedDay = null;
 let liveBpm = null;
@@ -756,6 +757,7 @@ function loadEquipmentSettings() {
     select.value = (_a = getEquipmentSelection().bike) !== null && _a !== void 0 ? _a : "";
     renderLearnedGuidancePanel();
     renderHrDynamicsPanel();
+    renderShadowPredictionPanel();
 }
 function renderLearnedGuidancePanel() {
     const section = document.getElementById("learnedGuidanceSection");
@@ -866,6 +868,70 @@ function renderHrDynamicsPanel() {
     section.hidden = false;
     list.innerHTML = entries.map(renderHrDynamicsGroup).join("");
 }
+function signedBpmPerLevel(value) {
+    return `${value > 0 ? "+" : ""}${value} bpm / level`;
+}
+function renderShadowDirectionBlock(label, diagnostics) {
+    const rows = [`<div class="hr-dynamics-subhead">${label}</div>`];
+    rows.push(metricRow("Model", signedBpmPerLevel(diagnostics.modelMedianHrPerLevel)));
+    rows.push(metricRow("Predictions", String(diagnostics.predictionCount)));
+    if (diagnostics.medianAbsolutePredictionErrorBpm !== undefined) {
+        rows.push(metricRow("Median error", `${diagnostics.medianAbsolutePredictionErrorBpm} bpm`));
+    }
+    if (diagnostics.directionEvaluatedCount > 0) {
+        rows.push(metricRow("Direction matched", `${diagnostics.directionMatchCount} of ${diagnostics.directionEvaluatedCount}`));
+    }
+    return rows.join("");
+}
+function renderShadowPredictionGroup(entry) {
+    const blocks = [];
+    if (entry.increase)
+        blocks.push(renderShadowDirectionBlock("+1 resistance", entry.increase));
+    if (entry.decrease)
+        blocks.push(renderShadowDirectionBlock("-1 resistance", entry.decrease));
+    if (blocks.length === 0)
+        return "";
+    return `<div class="hr-dynamics-block"><div class="hr-dynamics-heading">${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</div>${blocks.join("")}</div>`;
+}
+function renderShadowPredictionPanel() {
+    const section = document.getElementById("shadowPredictionSection");
+    const list = document.getElementById("shadowPredictionList");
+    if (!section || !list)
+        return;
+    const machineId = getEquipmentSelection().bike;
+    const entries = machineId
+        ? listShadowPredictions(machineId).filter((entry) => entry.increase || entry.decrease)
+        : [];
+    if (!machineId || entries.length === 0) {
+        section.hidden = true;
+        list.innerHTML = "";
+        return;
+    }
+    section.hidden = false;
+    list.innerHTML = entries.map(renderShadowPredictionGroup).join("");
+}
+function promptResetShadowPredictions() {
+    const machineId = getEquipmentSelection().bike;
+    if (!machineId)
+        return;
+    const bg = document.getElementById("resetShadowPredictionsModalBg");
+    if (bg)
+        bg.style.display = "flex";
+}
+function closeResetShadowPredictionsModal() {
+    const bg = document.getElementById("resetShadowPredictionsModalBg");
+    if (bg)
+        bg.style.display = "none";
+}
+function confirmResetShadowPredictions() {
+    const machineId = getEquipmentSelection().bike;
+    if (machineId)
+        resetShadowPredictionsForMachine(machineId);
+    closeResetShadowPredictionsModal();
+    renderShadowPredictionPanel();
+    renderHrDynamicsPanel();
+    renderLearnedGuidancePanel();
+}
 function promptResetHrDynamics() {
     const machineId = getEquipmentSelection().bike;
     if (!machineId)
@@ -886,6 +952,7 @@ function confirmResetHrDynamics() {
     closeResetHrDynamicsModal();
     renderHrDynamicsPanel();
     renderLearnedGuidancePanel();
+    renderShadowPredictionPanel();
 }
 function promptResetLearnedGuidance() {
     const machineId = getEquipmentSelection().bike;
@@ -907,6 +974,7 @@ function confirmResetLearnedGuidance() {
     closeResetLearnedModal();
     renderLearnedGuidancePanel();
     renderHrDynamicsPanel();
+    renderShadowPredictionPanel();
 }
 function saveBikeEquipmentSelection(value) {
     if (value && !isMachineId(value))
@@ -914,6 +982,7 @@ function saveBikeEquipmentSelection(value) {
     setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
     renderLearnedGuidancePanel();
     renderHrDynamicsPanel();
+    renderShadowPredictionPanel();
     updateDisplay();
 }
 async function loadWorkoutSummaries() {
@@ -1337,6 +1406,9 @@ function registerUiGlobals(phaseBoxEl) {
     window.promptResetHrDynamics = promptResetHrDynamics;
     window.closeResetHrDynamicsModal = closeResetHrDynamicsModal;
     window.confirmResetHrDynamics = confirmResetHrDynamics;
+    window.promptResetShadowPredictions = promptResetShadowPredictions;
+    window.closeResetShadowPredictionsModal = closeResetShadowPredictionsModal;
+    window.confirmResetShadowPredictions = confirmResetShadowPredictions;
     window.loadWorkoutSummaries = loadWorkoutSummaries;
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;

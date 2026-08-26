@@ -1,4 +1,4 @@
-import { integerMedian } from "../hrQuality.js";
+import { integerMedian, integerMedianAbsoluteDeviation } from "../hrQuality.js";
 import { delayConcentrationNearMedian, recentDetectedCount, recentDetectedDelays, recentDetectionRate, recentObservationCount, } from "./recent.js";
 export const MIN_TRUSTED_DELAY_SAMPLES = 5;
 export const MAX_DELAY_MAD_SECONDS = 10;
@@ -20,19 +20,11 @@ export const MIN_EARLY_TIMING_DETECTION_RATE = 0.8;
 export const MAX_EARLY_TIMING_MAD_SECONDS = 5;
 export const EARLY_TIMING_CONCENTRATION_WINDOW_SECONDS = 10;
 export const MIN_EARLY_TIMING_CONCENTRATION = 0.7;
-function finiteDelaySamples(samples) {
-    return samples.filter((value) => Number.isInteger(value) && Number.isFinite(value));
-}
 export function delayMedianAbsoluteDeviation(samples) {
-    const values = finiteDelaySamples(samples);
-    const median = integerMedian(values);
-    if (median === undefined)
-        return undefined;
-    const deviations = values.map((value) => Math.abs(value - median));
-    return integerMedian(deviations);
+    return integerMedianAbsoluteDeviation(samples);
 }
 export function trustedDelayMedian(samples) {
-    const values = finiteDelaySamples(samples);
+    const values = samples.filter((value) => Number.isInteger(value) && Number.isFinite(value));
     if (values.length < MIN_TRUSTED_DELAY_SAMPLES)
         return undefined;
     const median = integerMedian(values);

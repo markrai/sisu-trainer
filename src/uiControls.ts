@@ -40,6 +40,11 @@ import {
   resetHrDynamicsForMachine,
   type LearnedHrDynamics,
 } from "./machines/dynamics/index.js";
+import {
+  listShadowPredictions,
+  resetShadowPredictionsForMachine,
+  type ShadowResistanceDiagnostics,
+} from "./machines/prediction/index.js";
 import type { Activity, WorkoutPhaseState } from "./types.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 
@@ -818,6 +823,7 @@ function loadEquipmentSettings() {
   select.value = getEquipmentSelection().bike ?? "";
   renderLearnedGuidancePanel();
   renderHrDynamicsPanel();
+  renderShadowPredictionPanel();
 }
 
 function renderLearnedGuidancePanel() {
@@ -974,6 +980,71 @@ function renderHrDynamicsPanel() {
   list.innerHTML = entries.map(renderHrDynamicsGroup).join("");
 }
 
+function signedBpmPerLevel(value: number): string {
+  return `${value > 0 ? "+" : ""}${value} bpm / level`;
+}
+
+function renderShadowDirectionBlock(label: string, diagnostics: NonNullable<ShadowResistanceDiagnostics["increase"]>): string {
+  const rows = [`<div class="hr-dynamics-subhead">${label}</div>`];
+  rows.push(metricRow("Model", signedBpmPerLevel(diagnostics.modelMedianHrPerLevel)));
+  rows.push(metricRow("Predictions", String(diagnostics.predictionCount)));
+  if (diagnostics.medianAbsolutePredictionErrorBpm !== undefined) {
+    rows.push(metricRow("Median error", `${diagnostics.medianAbsolutePredictionErrorBpm} bpm`));
+  }
+  if (diagnostics.directionEvaluatedCount > 0) {
+    rows.push(
+      metricRow("Direction matched", `${diagnostics.directionMatchCount} of ${diagnostics.directionEvaluatedCount}`)
+    );
+  }
+  return rows.join("");
+}
+
+function renderShadowPredictionGroup(entry: ShadowResistanceDiagnostics): string {
+  const blocks: string[] = [];
+  if (entry.increase) blocks.push(renderShadowDirectionBlock("+1 resistance", entry.increase));
+  if (entry.decrease) blocks.push(renderShadowDirectionBlock("-1 resistance", entry.decrease));
+  if (blocks.length === 0) return "";
+  return `<div class="hr-dynamics-block"><div class="hr-dynamics-heading">${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</div>${blocks.join("")}</div>`;
+}
+
+function renderShadowPredictionPanel() {
+  const section = document.getElementById("shadowPredictionSection");
+  const list = document.getElementById("shadowPredictionList");
+  if (!section || !list) return;
+  const machineId = getEquipmentSelection().bike;
+  const entries = machineId
+    ? listShadowPredictions(machineId).filter((entry) => entry.increase || entry.decrease)
+    : [];
+  if (!machineId || entries.length === 0) {
+    section.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+  list.innerHTML = entries.map(renderShadowPredictionGroup).join("");
+}
+
+function promptResetShadowPredictions() {
+  const machineId = getEquipmentSelection().bike;
+  if (!machineId) return;
+  const bg = document.getElementById("resetShadowPredictionsModalBg");
+  if (bg) bg.style.display = "flex";
+}
+
+function closeResetShadowPredictionsModal() {
+  const bg = document.getElementById("resetShadowPredictionsModalBg");
+  if (bg) bg.style.display = "none";
+}
+
+function confirmResetShadowPredictions() {
+  const machineId = getEquipmentSelection().bike;
+  if (machineId) resetShadowPredictionsForMachine(machineId);
+  closeResetShadowPredictionsModal();
+  renderShadowPredictionPanel();
+  renderHrDynamicsPanel();
+  renderLearnedGuidancePanel();
+}
+
 function promptResetHrDynamics() {
   const machineId = getEquipmentSelection().bike;
   if (!machineId) return;
@@ -992,6 +1063,7 @@ function confirmResetHrDynamics() {
   closeResetHrDynamicsModal();
   renderHrDynamicsPanel();
   renderLearnedGuidancePanel();
+  renderShadowPredictionPanel();
 }
 
 function promptResetLearnedGuidance() {
@@ -1012,6 +1084,7 @@ function confirmResetLearnedGuidance() {
   closeResetLearnedModal();
   renderLearnedGuidancePanel();
   renderHrDynamicsPanel();
+  renderShadowPredictionPanel();
 }
 
 function saveBikeEquipmentSelection(value: string) {
@@ -1019,6 +1092,7 @@ function saveBikeEquipmentSelection(value: string) {
   setSelectedMachine("bike", value && isMachineId(value) ? value : undefined);
   renderLearnedGuidancePanel();
   renderHrDynamicsPanel();
+  renderShadowPredictionPanel();
   updateDisplay();
 }
 async function loadWorkoutSummaries() {
@@ -1423,6 +1497,9 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).promptResetHrDynamics = promptResetHrDynamics;
   (window as any).closeResetHrDynamicsModal = closeResetHrDynamicsModal;
   (window as any).confirmResetHrDynamics = confirmResetHrDynamics;
+  (window as any).promptResetShadowPredictions = promptResetShadowPredictions;
+  (window as any).closeResetShadowPredictionsModal = closeResetShadowPredictionsModal;
+  (window as any).confirmResetShadowPredictions = confirmResetShadowPredictions;
   (window as any).loadWorkoutSummaries = loadWorkoutSummaries;
   (window as any).viewWorkoutSummary = viewWorkoutSummary;
   (window as any).showWorkoutSummaryModal = showWorkoutSummaryModal;

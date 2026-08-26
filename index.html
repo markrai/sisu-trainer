@@ -157,6 +157,12 @@
         <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Observed from recorded workouts. These values do not change live guidance yet.</div>
         <button type="button" class="button secondary" onclick="promptResetHrDynamics()">Reset HR response data</button>
       </div>
+      <div id="shadowPredictionSection" class="modal-section" hidden>
+        <div class="modal-section-title">Shadow resistance prediction</div>
+        <div id="shadowPredictionList" class="learned-guidance-list"></div>
+        <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Diagnostic only. These predictions never change live resistance.</div>
+        <button type="button" class="button secondary" onclick="promptResetShadowPredictions()">Reset shadow prediction data</button>
+      </div>
     </div>
     
     <!-- Workouts Tab -->
@@ -283,10 +289,22 @@
   <div class="modal">
     <div class="close-btn" onclick="closeResetHrDynamicsModal()">×</div>
     <div class="modal-title">Reset HR response data?</div>
-    <div class="label" style="text-align:center;">This removes observed heart-rate response data for ProForm SMART Power 10.0. Learned starting resistance, workout history, equipment selection, and calibration are not changed.</div>
+    <div class="label" style="text-align:center;">This removes observed heart-rate response data for ProForm SMART Power 10.0. Learned starting resistance, shadow predictions, workout history, equipment selection, and calibration are not changed.</div>
     <div class="modal-actions">
       <button class="button" onclick="confirmResetHrDynamics()">Reset</button>
       <button class="button secondary" onclick="closeResetHrDynamicsModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="resetShadowPredictionsModalBg" style="z-index: 16;">
+  <div class="modal">
+    <div class="close-btn" onclick="closeResetShadowPredictionsModal()">×</div>
+    <div class="modal-title">Reset shadow prediction data?</div>
+    <div class="label" style="text-align:center;">This removes shadow resistance-prediction diagnostics for ProForm SMART Power 10.0. Learned starting resistance, HR response data, workout history, equipment selection, and calibration are not changed.</div>
+    <div class="modal-actions">
+      <button class="button" onclick="confirmResetShadowPredictions()">Reset</button>
+      <button class="button secondary" onclick="closeResetShadowPredictionsModal()">Cancel</button>
     </div>
   </div>
 </div>

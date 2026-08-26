@@ -30,6 +30,13 @@ export function integerMedian(values) {
     const sorted = [...values].sort((a, b) => a - b);
     return sorted[Math.floor((sorted.length - 1) / 2)];
 }
+export function integerMedianAbsoluteDeviation(values) {
+    const samples = values.filter((value) => Number.isInteger(value) && Number.isFinite(value));
+    const median = integerMedian(samples);
+    if (median === undefined)
+        return undefined;
+    return integerMedian(samples.map((value) => Math.abs(value - median)));
+}
 export function samplesInRange(samples, start, end, options) {
     const startExclusive = (options === null || options === void 0 ? void 0 : options.startExclusive) === true;
     const endInclusive = (options === null || options === void 0 ? void 0 : options.endInclusive) === true;

@@ -34,6 +34,13 @@ export function integerMedian(values: number[]): number | undefined {
   return sorted[Math.floor((sorted.length - 1) / 2)];
 }
 
+export function integerMedianAbsoluteDeviation(values: readonly number[]): number | undefined {
+  const samples = values.filter((value) => Number.isInteger(value) && Number.isFinite(value));
+  const median = integerMedian(samples);
+  if (median === undefined) return undefined;
+  return integerMedian(samples.map((value) => Math.abs(value - median)));
+}
+
 export function samplesInRange(
   samples: readonly HrQualitySample[],
   start: number,

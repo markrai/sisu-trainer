@@ -198,6 +198,8 @@ function observeEvent(params) {
         observationWindowSeconds: Math.max(0, Math.round(params.windowEnd - params.changeElapsed)),
         windowObservable,
         responseDetected,
+        targetHeartRateMin: params.targetHeartRateMin,
+        targetHeartRateMax: params.targetHeartRateMax,
         kind: params.kind,
     };
 }
@@ -243,6 +245,8 @@ export function deriveHrDynamicsObservations(summary, hrSamples) {
             baseline: baselineHr(hrSamples, startAt, WORK_START_BASELINE_SECONDS, WORK_START_BASELINE_FALLBACK_SECONDS),
             samples: hrSamples,
             direction: "up",
+            targetHeartRateMin: startEntry.targetHeartRateMin,
+            targetHeartRateMax: startEntry.targetHeartRateMax,
         }));
         for (let index = 1; index < phase.entries.length; index++) {
             const previous = phase.entries[index - 1];
@@ -267,6 +271,8 @@ export function deriveHrDynamicsObservations(summary, hrSamples) {
                 baseline: baselineHr(hrSamples, changeElapsed, IN_WORK_BASELINE_SECONDS),
                 samples: hrSamples,
                 direction: resistanceDelta > 0 ? "up" : "down",
+                targetHeartRateMin: current.targetHeartRateMin,
+                targetHeartRateMax: current.targetHeartRateMax,
             }));
         }
     }

@@ -1,4 +1,4 @@
-import { integerMedian } from "../hrQuality.js";
+import { integerMedian, integerMedianAbsoluteDeviation } from "../hrQuality.js";
 import type { WorkDurationClass } from "../learning/types.js";
 import type { PersonalizedWorkTiming } from "../types.js";
 import {
@@ -46,20 +46,12 @@ export interface HighConfidenceRecentDelayEstimate {
 type TimingEntry = Pick<StoredDynamicsEntry, "workStartDelays" | "increaseDelays" | "decreaseDelays"> &
   Partial<Pick<StoredDynamicsEntry, "workStartRecentResponses" | "increaseRecentResponses" | "decreaseRecentResponses">>;
 
-function finiteDelaySamples(samples: readonly number[]): number[] {
-  return samples.filter((value) => Number.isInteger(value) && Number.isFinite(value));
-}
-
 export function delayMedianAbsoluteDeviation(samples: readonly number[]): number | undefined {
-  const values = finiteDelaySamples(samples);
-  const median = integerMedian(values);
-  if (median === undefined) return undefined;
-  const deviations = values.map((value) => Math.abs(value - median));
-  return integerMedian(deviations);
+  return integerMedianAbsoluteDeviation(samples);
 }
 
 export function trustedDelayMedian(samples: readonly number[]): number | undefined {
-  const values = finiteDelaySamples(samples);
+  const values = samples.filter((value) => Number.isInteger(value) && Number.isFinite(value));
   if (values.length < MIN_TRUSTED_DELAY_SAMPLES) return undefined;
   const median = integerMedian(values);
   if (median === undefined) return undefined;

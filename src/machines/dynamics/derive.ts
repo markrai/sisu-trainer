@@ -248,6 +248,8 @@ function observeEvent(params: {
   baseline: number | undefined;
   samples: readonly LearningHrSample[];
   direction: "up" | "down";
+  targetHeartRateMin?: number;
+  targetHeartRateMax?: number;
 }): MachineHrResponseObservation {
   const delay =
     params.baseline === undefined
@@ -280,6 +282,8 @@ function observeEvent(params: {
     observationWindowSeconds: Math.max(0, Math.round(params.windowEnd - params.changeElapsed)),
     windowObservable,
     responseDetected,
+    targetHeartRateMin: params.targetHeartRateMin,
+    targetHeartRateMax: params.targetHeartRateMax,
     kind: params.kind,
   };
 }
@@ -337,6 +341,8 @@ export function deriveHrDynamicsObservations(
         ),
         samples: hrSamples,
         direction: "up",
+        targetHeartRateMin: startEntry.targetHeartRateMin,
+        targetHeartRateMax: startEntry.targetHeartRateMax,
       })
     );
 
@@ -362,6 +368,8 @@ export function deriveHrDynamicsObservations(
           baseline: baselineHr(hrSamples, changeElapsed, IN_WORK_BASELINE_SECONDS),
           samples: hrSamples,
           direction: resistanceDelta > 0 ? "up" : "down",
+          targetHeartRateMin: current.targetHeartRateMin,
+          targetHeartRateMax: current.targetHeartRateMax,
         })
       );
     }

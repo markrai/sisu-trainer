@@ -43,6 +43,8 @@ export interface MachineHrResponseObservation {
   observationWindowSeconds: number;
   windowObservable: boolean;
   responseDetected: boolean;
+  targetHeartRateMin?: number;
+  targetHeartRateMax?: number;
   kind: HrResponseKind;
 }
 
