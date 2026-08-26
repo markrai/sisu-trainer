@@ -10,6 +10,8 @@ const urlsToCache = [
   '/dist/workoutLogic.js',
   '/dist/workoutStorage.js',
   '/dist/workoutSummary.js',
+  '/dist/workoutActivity.js',
+  '/dist/sessionStore.js',
   '/dist/zoneCalculator.js',
   '/dist/profile.js',
   '/dist/voice.js',

@@ -2,6 +2,9 @@ import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js"
 import { getHrSamples, storeWorkoutSummary } from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
 import { getMachineUsageSnapshot } from "./machines/runtime.js";
+import { getSession } from "./sessionStore.js";
+import { getWorkoutMetadata } from "./workoutData.js";
+import { getActiveWorkoutActivity } from "./workoutActivity.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -48,6 +51,12 @@ export function applyMachineUsageToSummary(summary, machineUsage) {
     summary.machine_guidance_trace = machineUsage.guidanceTrace;
     return summary;
 }
+export function applyWorkoutActivityToSummary(summary, activity) {
+    if (!activity)
+        return summary;
+    summary.activity = activity;
+    return summary;
+}
 function validateSummary(summary) {
     const errors = [];
     const totalSeconds = Math.floor((new Date(summary.endedAt).getTime() - new Date(summary.startedAt).getTime()) / 1000);
@@ -84,6 +93,7 @@ function validateSummary(summary) {
         console.error("Workout summary validation errors:", errors);
 }
 async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, options) {
+    var _a, _b;
     const durationMs = endedAt - startedAt;
     const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
     const MAX_DURATION_MINUTES = 1440;
@@ -119,6 +129,8 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         cancelled: options === null || options === void 0 ? void 0 : options.cancelled,
     };
     applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
+    const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
+    applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, getSession(day).activity));
     validateSummary(summary);
     const zoneSum = summary.zone_minutes.z1 +
         summary.zone_minutes.z2 +

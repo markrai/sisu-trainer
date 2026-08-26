@@ -1,4 +1,5 @@
 import { todayName } from "./utils/dateTime.js";
+import { isActivity } from "./workoutActivity.js";
 let plan = {};
 let workoutMetadata = {};
 let hrTargets = {};
@@ -11,9 +12,6 @@ function parseDuration(duration) {
             return parseInt(match[1]);
     }
     return 0;
-}
-function isActivity(value) {
-    return value === "bike" || value === "elliptical" || value === "strength";
 }
 function isWorkoutPhaseKind(value) {
     return value === "warmup" || value === "work" || value === "recovery" || value === "cooldown";

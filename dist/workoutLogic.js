@@ -1,8 +1,9 @@
-import { getHrTargets } from "./workoutData.js";
+import { getHrTargets, getWorkoutMetadata } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
 import { getSession, startSession, pauseSession, resumeSession, clearSession } from "./sessionStore.js";
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
+import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
 function getRingCircumference() {
@@ -33,18 +34,42 @@ function resumeWorkout(day) {
         window.updateDisplay();
 }
 function startWorkout() {
+    var _a, _b;
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
+    const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
+    const automatic = getActiveWorkoutActivity(allowed);
+    if (automatic) {
+        beginWorkout(automatic);
+        return;
+    }
+    if (allowed.length > 1) {
+        if (typeof window.promptWorkoutActivitySelection === "function") {
+            window.promptWorkoutActivitySelection(allowed);
+        }
+        return;
+    }
+    beginWorkout();
+}
+function beginWorkout(activity) {
+    var _a, _b;
+    const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
+    const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
+    const resolved = activity !== undefined
+        ? requireAllowedActivity(allowed, activity)
+        : getActiveWorkoutActivity(allowed);
+    if (allowed.length > 1 && resolved === undefined)
+        return;
     const startTime = Date.now();
     let sessionId = null;
     if (typeof window.generateUUID === "function") {
         sessionId = window.generateUUID();
-        startSession(day, startTime, sessionId);
+        startSession(day, startTime, sessionId, resolved);
         if (typeof window.initDB === "function") {
             window.initDB().catch((err) => console.error("Failed to init DB:", err));
         }
     }
     else {
-        startSession(day, startTime, null);
+        startSession(day, startTime, null, resolved);
     }
     resetMachineGuidanceRuntime(sessionId);
     if (typeof window.requestWakeLock === "function") {
@@ -284,6 +309,7 @@ export function registerWorkoutLogicGlobals() {
     window.pauseWorkout = pauseWorkout;
     window.resumeWorkout = resumeWorkout;
     window.startWorkout = startWorkout;
+    window.beginWorkout = beginWorkout;
     window.restartWorkout = restartWorkout;
     window.getPhase = getPhase;
     window.formatTime = formatTime;
@@ -293,4 +319,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, restartWorkout, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };

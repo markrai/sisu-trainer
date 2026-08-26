@@ -1,4 +1,4 @@
-import { adjustedBlockLengths, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, } from "./workoutLogic.js";
+import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
@@ -9,6 +9,7 @@ import { startDownregulationView, stopDownregulationView } from "./downregulatio
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
 import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.js";
 import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./machines/runtime.js";
+import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 let selectedDay = null;
 let liveBpm = null;
 let lastBpmUpdateTime = null;
@@ -212,6 +213,40 @@ function closeCancelModal() {
     if (bg)
         bg.style.display = "none";
 }
+let activitySelectEscHandler = null;
+function closeActivitySelectModal() {
+    const bg = document.getElementById("activitySelectModalBg");
+    if (bg)
+        bg.style.display = "none";
+    if (activitySelectEscHandler) {
+        document.removeEventListener("keydown", activitySelectEscHandler);
+        activitySelectEscHandler = null;
+    }
+}
+function promptWorkoutActivitySelection(activities) {
+    const bg = document.getElementById("activitySelectModalBg");
+    const options = document.getElementById("activitySelectOptions");
+    if (!bg || !options)
+        return;
+    options.innerHTML = "";
+    for (const activity of activities) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "button";
+        button.textContent = ACTIVITY_LABELS[activity];
+        button.addEventListener("click", () => {
+            closeActivitySelectModal();
+            beginWorkout(activity);
+        });
+        options.appendChild(button);
+    }
+    bg.style.display = "flex";
+    activitySelectEscHandler = (e) => {
+        if (e.key === "Escape" || e.keyCode === 27)
+            closeActivitySelectModal();
+    };
+    document.addEventListener("keydown", activitySelectEscHandler);
+}
 function confirmCancelWorkout() {
     restartWorkout();
     closeCancelModal();
@@ -308,11 +343,8 @@ function getWarmupSubsectionName(day, elapsedSec) {
     }
     return null;
 }
-function getUnambiguousActivity(metadata) {
-    const activities = Array.isArray(metadata === null || metadata === void 0 ? void 0 : metadata.activities) ? metadata.activities : [];
-    return activities.length === 1 ? activities[0] : null;
-}
 function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime) {
+    var _a, _b;
     if (day === "Downregulation") {
         return { screen: "downregulation", day: "Downregulation", plan, workoutMetadata };
     }
@@ -355,7 +387,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         elapsedSec,
         phase,
         phaseDisplayName,
-        activity: getUnambiguousActivity(workoutMetadata[day]),
+        activity: (_b = getActiveWorkoutActivity((_a = workoutMetadata[day]) === null || _a === void 0 ? void 0 : _a.activities, getSession(day).activity)) !== null && _b !== void 0 ? _b : null,
         paused,
         hrTargetTextValue,
         liveBpm: liveBpm !== null && liveBpm !== void 0 ? liveBpm : null,
@@ -432,7 +464,10 @@ function renderWorkout(state) {
     const hasBase = state.screen !== "rest" && state.base;
     if (activityIcon) {
         if (hasBase && dayMeta) {
-            const activity = getUnambiguousActivity(dayMeta);
+            const selectedActivity = state.screen === "active" || state.screen === "completed"
+                ? getSession(state.day).activity
+                : undefined;
+            const activity = getActiveWorkoutActivity(dayMeta.activities, selectedActivity);
             const iconByActivity = {
                 bike: "bike.png",
                 elliptical: "elliptical.png",
@@ -1127,6 +1162,8 @@ function registerUiGlobals(phaseBoxEl) {
     window.closeModal = closeModal;
     window.openCancelModal = openCancelModal;
     window.closeCancelModal = closeCancelModal;
+    window.closeActivitySelectModal = closeActivitySelectModal;
+    window.promptWorkoutActivitySelection = promptWorkoutActivitySelection;
     window.confirmCancelWorkout = confirmCancelWorkout;
     window.promptCancelWorkout = promptCancelWorkout;
     window.switchTab = switchTab;

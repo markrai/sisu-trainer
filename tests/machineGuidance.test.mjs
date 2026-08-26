@@ -22,7 +22,12 @@ import {
 } from "../dist/machines/runtime.js";
 import { formatMachineGuidanceSpeech, getMachineGuidanceVoiceKey } from "../dist/voice.js";
 import { buildSisuWorkoutPayload } from "../dist/sisuSync.js";
-import { applyMachineUsageToSummary } from "../dist/workoutSummary.js";
+import { applyMachineUsageToSummary, applyWorkoutActivityToSummary } from "../dist/workoutSummary.js";
+import {
+  getActiveWorkoutActivity,
+  requireAllowedActivity,
+} from "../dist/workoutActivity.js";
+import { clearSession, getSession, startSession } from "../dist/sessionStore.js";
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -32,6 +37,9 @@ function memoryStorage(initial = {}) {
     },
     setItem(key, value) {
       values.set(key, value);
+    },
+    removeItem(key) {
+      values.delete(key);
     },
   };
 }
@@ -816,4 +824,182 @@ test("workout definitions use activities and structured interval kinds", async (
   assert.equal(data.weekly_plan[0].main_set.intervals[1].kind, "recovery");
   const sunday = data.weekly_plan.find((day) => day.day === "Sunday");
   assert.deepEqual(sunday?.activities, ["bike", "elliptical"]);
+});
+
+test("single-activity workouts resolve automatically without an explicit selection", () => {
+  assert.equal(getActiveWorkoutActivity(["bike"]), "bike");
+  assert.equal(getActiveWorkoutActivity(["elliptical"]), "elliptical");
+  assert.equal(getActiveWorkoutActivity(["strength"]), "strength");
+  assert.equal(getActiveWorkoutActivity(["bike"], "elliptical"), "bike");
+});
+
+test("multi-activity workouts have no active activity before an explicit selection", () => {
+  const allowed = ["bike", "elliptical"];
+  assert.equal(getActiveWorkoutActivity(allowed), undefined);
+  assert.equal(getActiveWorkoutActivity(allowed, undefined), undefined);
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  resetMachineGuidanceRuntime("session-unselected");
+  const activity = getActiveWorkoutActivity(allowed);
+  assert.equal(activity, undefined);
+  assert.equal(
+    activity
+      ? updateMachineGuidanceRuntime({
+          sessionId: "session-unselected",
+          activity,
+          phaseKind: "warmup",
+          phaseId: "warmup",
+          phaseDisplayName: "Warm-Up",
+          phaseElapsedSeconds: 0,
+          phaseDurationSeconds: 180,
+          workoutElapsedSeconds: 0,
+        }, storage)
+      : null,
+    null
+  );
+});
+
+test("selecting bike on a multi-activity workout enables ProForm guidance", () => {
+  const allowed = ["bike", "elliptical"];
+  const activity = requireAllowedActivity(allowed, "bike");
+  assert.equal(getActiveWorkoutActivity(allowed, activity), "bike");
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  resetMachineGuidanceRuntime("session-sunday-bike");
+  const update = updateMachineGuidanceRuntime({
+    sessionId: "session-sunday-bike",
+    activity,
+    phaseKind: "warmup",
+    phaseId: "warmup",
+    phaseDisplayName: "Warm-Up",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 180,
+    workoutElapsedSeconds: 0,
+  }, storage);
+  assert.equal(update?.machine.id, "proform-smart-power-10");
+  assert.equal(update?.guidance.resistance, 3);
+  assert.equal(update?.guidance.cadenceRpm, 60);
+});
+
+test("selecting elliptical on a multi-activity workout does not enable ProForm guidance", () => {
+  const allowed = ["bike", "elliptical"];
+  const activity = requireAllowedActivity(allowed, "elliptical");
+  assert.equal(getActiveWorkoutActivity(allowed, activity), "elliptical");
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  resetMachineGuidanceRuntime("session-sunday-elliptical");
+  const update = updateMachineGuidanceRuntime({
+    sessionId: "session-sunday-elliptical",
+    activity,
+    phaseKind: "warmup",
+    phaseId: "warmup",
+    phaseDisplayName: "Warm-Up",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 180,
+    workoutElapsedSeconds: 0,
+  }, storage);
+  assert.equal(update, null);
+});
+
+test("invalid activities cannot be selected for a workout", () => {
+  assert.throws(
+    () => requireAllowedActivity(["bike", "elliptical"], "strength"),
+    /not allowed for this workout/
+  );
+  assert.throws(
+    () => requireAllowedActivity(["bike", "elliptical"], "treadmill"),
+    /not allowed for this workout/
+  );
+  assert.equal(getActiveWorkoutActivity(["bike", "elliptical"], "strength"), undefined);
+});
+
+test("session activity choice does not leak into another session", () => {
+  const storage = memoryStorage();
+  startSession("Sunday", 1, "session-sunday", "bike", storage);
+  startSession("Monday", 1, "session-monday", "bike", storage);
+  assert.equal(getSession("Sunday", storage).activity, "bike");
+  assert.equal(getSession("Monday", storage).activity, "bike");
+  clearSession("Sunday", storage);
+  assert.equal(getSession("Sunday", storage).activity, undefined);
+  assert.equal(getSession("Sunday", storage).sessionId, null);
+  assert.equal(getSession("Monday", storage).activity, "bike");
+  assert.equal(getSession("Monday", storage).sessionId, "session-monday");
+  startSession("Sunday", 2, "session-sunday-2", "elliptical", storage);
+  assert.equal(getSession("Sunday", storage).activity, "elliptical");
+  assert.equal(getSession("Monday", storage).activity, "bike");
+});
+
+test("completed summaries record the actual session activity", () => {
+  const sundayBike = applyWorkoutActivityToSummary(
+    { external_session_id: "sunday-bike" },
+    getActiveWorkoutActivity(["bike", "elliptical"], "bike")
+  );
+  assert.equal(sundayBike.activity, "bike");
+  const sundayElliptical = applyWorkoutActivityToSummary(
+    { external_session_id: "sunday-elliptical" },
+    getActiveWorkoutActivity(["bike", "elliptical"], "elliptical")
+  );
+  assert.equal(sundayElliptical.activity, "elliptical");
+  const monday = applyWorkoutActivityToSummary(
+    { external_session_id: "monday" },
+    getActiveWorkoutActivity(["bike"])
+  );
+  assert.equal(monday.activity, "bike");
+});
+
+test("Sunday bike summaries can include ProForm usage while elliptical summaries do not", () => {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  resetMachineGuidanceRuntime("session-history-bike");
+  updateMachineGuidanceRuntime({
+    sessionId: "session-history-bike",
+    activity: "bike",
+    phaseKind: "warmup",
+    phaseId: "warmup",
+    phaseDisplayName: "Warm-Up",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 180,
+    workoutElapsedSeconds: 0,
+  }, storage);
+  const bikeSummary = applyWorkoutActivityToSummary({ external_session_id: "session-history-bike" }, "bike");
+  applyMachineUsageToSummary(bikeSummary, getMachineUsageSnapshot("session-history-bike"));
+  assert.equal(bikeSummary.activity, "bike");
+  assert.equal(bikeSummary.machine_id, "proform-smart-power-10");
+  assert.equal(bikeSummary.machine_profile_version, 1);
+
+  resetMachineGuidanceRuntime("session-history-elliptical");
+  updateMachineGuidanceRuntime({
+    sessionId: "session-history-elliptical",
+    activity: "elliptical",
+    phaseKind: "warmup",
+    phaseId: "warmup",
+    phaseDisplayName: "Warm-Up",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 180,
+    workoutElapsedSeconds: 0,
+  }, storage);
+  const ellipticalSummary = applyWorkoutActivityToSummary({ external_session_id: "session-history-elliptical" }, "elliptical");
+  applyMachineUsageToSummary(ellipticalSummary, getMachineUsageSnapshot("session-history-elliptical"));
+  assert.equal(ellipticalSummary.activity, "elliptical");
+  assert.equal(ellipticalSummary.machine_id, undefined);
+  assert.equal(ellipticalSummary.machine_profile_version, undefined);
+  assert.equal(ellipticalSummary.machine_guidance_trace, undefined);
+});
+
+test("SISU payload omits local-only activity field", () => {
+  const payload = buildSisuWorkoutPayload({
+    external_session_id: "session-activity",
+    day: "Sunday",
+    intent: "recovery",
+    activity: "bike",
+    machine_id: "proform-smart-power-10",
+    machine_profile_version: 1,
+    machine_guidance_trace: [{ elapsedSeconds: 0, resistance: 3, cadenceRpm: 60, reason: "warmup" }],
+  });
+  assert.deepEqual(payload, {
+    external_session_id: "session-activity",
+    day: "Sunday",
+    intent: "recovery",
+  });
+  assert.equal("activity" in payload, false);
 });

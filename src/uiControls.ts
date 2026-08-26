@@ -1,6 +1,7 @@
 
 import {
   adjustedBlockLengths,
+  beginWorkout,
   formatTime,
   getPhase,
   getPausedElapsed,
@@ -30,6 +31,7 @@ import {
   type MachineGuidanceRuntimeUpdate,
 } from "./machines/runtime.js";
 import type { Activity, WorkoutPhaseState } from "./types.js";
+import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 
 let selectedDay: string | null = null;
 let liveBpm: number | null = null;
@@ -238,6 +240,40 @@ function closeCancelModal() {
   if (bg) bg.style.display = "none";
 }
 
+let activitySelectEscHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function closeActivitySelectModal() {
+  const bg = document.getElementById("activitySelectModalBg");
+  if (bg) bg.style.display = "none";
+  if (activitySelectEscHandler) {
+    document.removeEventListener("keydown", activitySelectEscHandler);
+    activitySelectEscHandler = null;
+  }
+}
+
+function promptWorkoutActivitySelection(activities: Activity[]) {
+  const bg = document.getElementById("activitySelectModalBg");
+  const options = document.getElementById("activitySelectOptions");
+  if (!bg || !options) return;
+  options.innerHTML = "";
+  for (const activity of activities) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "button";
+    button.textContent = ACTIVITY_LABELS[activity];
+    button.addEventListener("click", () => {
+      closeActivitySelectModal();
+      beginWorkout(activity);
+    });
+    options.appendChild(button);
+  }
+  bg.style.display = "flex";
+  activitySelectEscHandler = (e) => {
+    if (e.key === "Escape" || e.keyCode === 27) closeActivitySelectModal();
+  };
+  document.addEventListener("keydown", activitySelectEscHandler);
+}
+
 function confirmCancelWorkout() {
   restartWorkout();
   closeCancelModal();
@@ -322,11 +358,6 @@ function getWarmupSubsectionName(day: string, elapsedSec: number) {
     if (elapsedSec >= startSec && elapsedSec < endSec) return subsection.name;
   }
   return null;
-}
-
-function getUnambiguousActivity(metadata: any): Activity | null {
-  const activities = Array.isArray(metadata?.activities) ? metadata.activities : [];
-  return activities.length === 1 ? activities[0] : null;
 }
 
 type WorkoutDisplayState =
@@ -428,7 +459,7 @@ function deriveWorkoutState(
     elapsedSec,
     phase,
     phaseDisplayName,
-    activity: getUnambiguousActivity(workoutMetadata[day]),
+    activity: getActiveWorkoutActivity(workoutMetadata[day]?.activities, getSession(day).activity) ?? null,
     paused,
     hrTargetTextValue,
     liveBpm: liveBpm ?? null,
@@ -500,7 +531,10 @@ function renderWorkout(state: WorkoutDisplayState) {
   const hasBase = state.screen !== "rest" && (state as any).base;
   if (activityIcon) {
     if (hasBase && dayMeta) {
-      const activity = getUnambiguousActivity(dayMeta);
+      const selectedActivity = state.screen === "active" || state.screen === "completed"
+        ? getSession(state.day).activity
+        : undefined;
+      const activity = getActiveWorkoutActivity(dayMeta.activities, selectedActivity);
       const iconByActivity: Partial<Record<Activity, string>> = {
         bike: "bike.png",
         elliptical: "elliptical.png",
@@ -1163,6 +1197,8 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).closeModal = closeModal;
   (window as any).openCancelModal = openCancelModal;
   (window as any).closeCancelModal = closeCancelModal;
+  (window as any).closeActivitySelectModal = closeActivitySelectModal;
+  (window as any).promptWorkoutActivitySelection = promptWorkoutActivitySelection;
   (window as any).confirmCancelWorkout = confirmCancelWorkout;
   (window as any).promptCancelWorkout = promptCancelWorkout;
   (window as any).switchTab = switchTab;

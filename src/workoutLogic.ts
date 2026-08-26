@@ -1,9 +1,10 @@
-import { getHrTargets } from "./workoutData.js";
+import { getHrTargets, getWorkoutMetadata } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
-import { PlanBlock, WorkoutPhaseState } from "./types.js";
+import { Activity, PlanBlock, WorkoutPhaseState } from "./types.js";
 import { getSession, startSession, pauseSession, resumeSession, clearSession } from "./sessionStore.js";
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
+import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
 
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
@@ -41,16 +42,38 @@ function resumeWorkout(day?: string) {
 
 function startWorkout() {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
+  const allowed = getWorkoutMetadata()[day]?.activities ?? [];
+  const automatic = getActiveWorkoutActivity(allowed);
+  if (automatic) {
+    beginWorkout(automatic);
+    return;
+  }
+  if (allowed.length > 1) {
+    if (typeof (window as any).promptWorkoutActivitySelection === "function") {
+      (window as any).promptWorkoutActivitySelection(allowed);
+    }
+    return;
+  }
+  beginWorkout();
+}
+
+function beginWorkout(activity?: Activity) {
+  const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
+  const allowed = getWorkoutMetadata()[day]?.activities ?? [];
+  const resolved = activity !== undefined
+    ? requireAllowedActivity(allowed, activity)
+    : getActiveWorkoutActivity(allowed);
+  if (allowed.length > 1 && resolved === undefined) return;
   const startTime = Date.now();
   let sessionId: string | null = null;
   if (typeof (window as any).generateUUID === "function") {
     sessionId = (window as any).generateUUID();
-    startSession(day, startTime, sessionId);
+    startSession(day, startTime, sessionId, resolved);
     if (typeof (window as any).initDB === "function") {
       (window as any).initDB().catch((err: any) => console.error("Failed to init DB:", err));
     }
   } else {
-    startSession(day, startTime, null);
+    startSession(day, startTime, null, resolved);
   }
   resetMachineGuidanceRuntime(sessionId);
 
@@ -284,6 +307,7 @@ export function registerWorkoutLogicGlobals() {
   (window as any).pauseWorkout = pauseWorkout;
   (window as any).resumeWorkout = resumeWorkout;
   (window as any).startWorkout = startWorkout;
+  (window as any).beginWorkout = beginWorkout;
   (window as any).restartWorkout = restartWorkout;
   (window as any).getPhase = getPhase;
   (window as any).formatTime = formatTime;
@@ -302,6 +326,7 @@ export {
   pauseWorkout,
   resumeWorkout,
   startWorkout,
+  beginWorkout,
   restartWorkout,
   getPhase,
   formatTime,

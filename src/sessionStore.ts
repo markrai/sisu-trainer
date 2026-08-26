@@ -1,4 +1,13 @@
+import type { Activity } from "./types.js";
+import { isActivity } from "./workoutActivity.js";
+
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
+
+export interface SessionStorage {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
 
 export interface SessionData {
   startTime: string | null;
@@ -7,26 +16,46 @@ export interface SessionData {
   summaryEmitted: string | null;
   paused: boolean;
   pausedElapsed: number;
+  activity?: Activity;
 }
 
-export function getSession(day: string): SessionData {
+function storageOrBrowser(storage?: SessionStorage): SessionStorage {
+  return storage ?? localStorage;
+}
+
+function parseStoredActivity(raw: string | null): Activity | undefined {
+  return isActivity(raw) ? raw : undefined;
+}
+
+export function getSession(day: string, storage?: SessionStorage): SessionData {
+  const store = storageOrBrowser(storage);
   return {
-    startTime: localStorage.getItem("start_" + day),
-    sessionId: localStorage.getItem("session_id_" + day),
-    sessionStart: localStorage.getItem("session_start_" + day),
-    summaryEmitted: localStorage.getItem("summary_emitted_" + day),
-    paused: localStorage.getItem("paused_" + day) === "true",
-    pausedElapsed: parseInt(localStorage.getItem("paused_elapsed_" + day) || "0", 10),
+    startTime: store.getItem("start_" + day),
+    sessionId: store.getItem("session_id_" + day),
+    sessionStart: store.getItem("session_start_" + day),
+    summaryEmitted: store.getItem("summary_emitted_" + day),
+    paused: store.getItem("paused_" + day) === "true",
+    pausedElapsed: parseInt(store.getItem("paused_elapsed_" + day) || "0", 10),
+    activity: parseStoredActivity(store.getItem("activity_" + day)),
   };
 }
 
-export function startSession(day: string, startTime: number, sessionId?: string | null): void {
-  localStorage.setItem("start_" + day, String(startTime));
+export function startSession(
+  day: string,
+  startTime: number,
+  sessionId?: string | null,
+  activity?: Activity,
+  storage?: SessionStorage
+): void {
+  const store = storageOrBrowser(storage);
+  store.setItem("start_" + day, String(startTime));
   if (sessionId != null) {
-    localStorage.setItem("session_id_" + day, sessionId);
-    localStorage.setItem("session_start_" + day, String(startTime));
-    localStorage.setItem("summary_emitted_" + day, "false");
+    store.setItem("session_id_" + day, sessionId);
+    store.setItem("session_start_" + day, String(startTime));
+    store.setItem("summary_emitted_" + day, "false");
   }
+  if (activity) store.setItem("activity_" + day, activity);
+  else store.removeItem("activity_" + day);
 }
 
 export function pauseSession(day: string, elapsedSec: number): void {
@@ -42,13 +71,15 @@ export function resumeSession(day: string): void {
   localStorage.removeItem("paused_elapsed_" + day);
 }
 
-export function clearSession(day: string): void {
-  localStorage.removeItem("start_" + day);
-  localStorage.removeItem("session_id_" + day);
-  localStorage.removeItem("session_start_" + day);
-  localStorage.removeItem("summary_emitted_" + day);
-  localStorage.removeItem("paused_" + day);
-  localStorage.removeItem("paused_elapsed_" + day);
+export function clearSession(day: string, storage?: SessionStorage): void {
+  const store = storageOrBrowser(storage);
+  store.removeItem("start_" + day);
+  store.removeItem("session_id_" + day);
+  store.removeItem("session_start_" + day);
+  store.removeItem("summary_emitted_" + day);
+  store.removeItem("paused_" + day);
+  store.removeItem("paused_elapsed_" + day);
+  store.removeItem("activity_" + day);
 }
 
 export function markSummaryEmitted(day: string): void {

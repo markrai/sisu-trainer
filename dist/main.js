@@ -28,6 +28,7 @@ function cleanupStaleWorkoutSessions() {
 function setupModalBackgroundHandlers() {
     const modalBg = document.getElementById("modalBg");
     const cancelModalBg = document.getElementById("cancelModalBg");
+    const activitySelectModalBg = document.getElementById("activitySelectModalBg");
     const workoutSummaryModalBg = document.getElementById("workoutSummaryModalBg");
     if (modalBg) {
         modalBg.addEventListener("click", (e) => {
@@ -39,6 +40,13 @@ function setupModalBackgroundHandlers() {
         cancelModalBg.addEventListener("click", (e) => {
             if (e.target === cancelModalBg && typeof window.closeCancelModal === "function")
                 window.closeCancelModal();
+        });
+    }
+    if (activitySelectModalBg) {
+        activitySelectModalBg.addEventListener("click", (e) => {
+            if (e.target === activitySelectModalBg && typeof window.closeActivitySelectModal === "function") {
+                window.closeActivitySelectModal();
+            }
         });
     }
     if (workoutSummaryModalBg) {

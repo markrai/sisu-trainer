@@ -1,8 +1,11 @@
 import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js";
 import { getHrSamples, storeWorkoutSummary } from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
-import { WorkoutSummary } from "./types.js";
+import { Activity, WorkoutSummary } from "./types.js";
 import { getMachineUsageSnapshot, type MachineUsageSnapshot } from "./machines/runtime.js";
+import { getSession } from "./sessionStore.js";
+import { getWorkoutMetadata } from "./workoutData.js";
+import { getActiveWorkoutActivity } from "./workoutActivity.js";
 
 // Generate stable UUID (v4-ish)
 function generateUUID(): string {
@@ -52,6 +55,15 @@ export function applyMachineUsageToSummary(
   summary.machine_id = machineUsage.machineId;
   summary.machine_profile_version = machineUsage.profileVersion;
   summary.machine_guidance_trace = machineUsage.guidanceTrace;
+  return summary;
+}
+
+export function applyWorkoutActivityToSummary(
+  summary: WorkoutSummary,
+  activity: Activity | undefined
+): WorkoutSummary {
+  if (!activity) return summary;
+  summary.activity = activity;
   return summary;
 }
 
@@ -141,6 +153,8 @@ async function generateWorkoutSummary(
   };
 
   applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
+  const allowed = getWorkoutMetadata()[day]?.activities ?? [];
+  applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, getSession(day).activity));
 
   validateSummary(summary);
   const zoneSum =

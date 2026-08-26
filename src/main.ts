@@ -33,6 +33,7 @@ function cleanupStaleWorkoutSessions() {
 function setupModalBackgroundHandlers() {
   const modalBg = document.getElementById("modalBg");
   const cancelModalBg = document.getElementById("cancelModalBg");
+  const activitySelectModalBg = document.getElementById("activitySelectModalBg");
   const workoutSummaryModalBg = document.getElementById("workoutSummaryModalBg");
   if (modalBg) {
     modalBg.addEventListener("click", (e) => {
@@ -43,6 +44,13 @@ function setupModalBackgroundHandlers() {
     cancelModalBg.addEventListener("click", (e) => {
       if (e.target === cancelModalBg && typeof (window as any).closeCancelModal === "function")
         (window as any).closeCancelModal();
+    });
+  }
+  if (activitySelectModalBg) {
+    activitySelectModalBg.addEventListener("click", (e) => {
+      if (e.target === activitySelectModalBg && typeof (window as any).closeActivitySelectModal === "function") {
+        (window as any).closeActivitySelectModal();
+      }
     });
   }
   if (workoutSummaryModalBg) {

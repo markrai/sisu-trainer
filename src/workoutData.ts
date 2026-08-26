@@ -1,5 +1,6 @@
 import { Activity, DayName, HrTargetsByDay, MetadataByDay, Plan, WorkoutPhaseKind } from "./types.js";
 import { todayName } from "./utils/dateTime.js";
+import { isActivity } from "./workoutActivity.js";
 
 let plan: Plan = {};
 let workoutMetadata: MetadataByDay = {};
@@ -12,10 +13,6 @@ function parseDuration(duration: any): number {
     if (match) return parseInt(match[1]);
   }
   return 0;
-}
-
-function isActivity(value: unknown): value is Activity {
-  return value === "bike" || value === "elliptical" || value === "strength";
 }
 
 function isWorkoutPhaseKind(value: unknown): value is WorkoutPhaseKind {

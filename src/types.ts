@@ -107,6 +107,7 @@ export interface WorkoutSummary {
   day?: DayName | string;
   /** True when the user ended the workout early (cancel). Still saved in history. */
   cancelled?: boolean;
+  activity?: Activity;
   machine_id?: MachineId;
   machine_profile_version?: number;
   machine_guidance_trace?: MachineGuidanceTraceEntry[];
