@@ -1,6 +1,6 @@
 import { getHrSamples } from "../../workoutStorage.js";
 import type { WorkoutSummary } from "../../types.js";
-import { learningKey, type LearningKeyParts } from "../learning/types.js";
+import { learningKey, workDurationClass, type LearningKeyParts } from "../learning/types.js";
 import {
   deriveHrDynamicsObservations,
   observationHasAggregatableMetric,
@@ -11,12 +11,15 @@ import {
   cloneEntry,
   emptyDynamicsEntry,
   entryHasDynamicsSamples,
+  getDynamicsEntry,
   loadDynamicsStore,
   putDynamicsEntry,
   toPublicDynamics,
   type DynamicsStorage,
 } from "./storage.js";
+import { derivePersonalizedMachineTiming } from "./timing.js";
 import type { LearnedHrDynamics, MachineHrResponseObservation, StoredDynamicsEntry } from "./types.js";
+import type { PersonalizedWorkTiming } from "../types.js";
 
 export {
   DYNAMICS_SAMPLE_LIMIT,
@@ -40,6 +43,7 @@ export {
 export {
   appendBoundedSample,
   emptyDynamicsStore,
+  getDynamicsEntry,
   listHrDynamics,
   loadDynamicsStore,
   putDynamicsEntry,
@@ -47,6 +51,21 @@ export {
   saveDynamicsStore,
   sanitizeDynamicsStore,
 } from "./storage.js";
+export {
+  DEFAULT_LONG_COOLDOWN_SECONDS,
+  DEFAULT_LONG_INITIAL_SECONDS,
+  DEFAULT_MEDIUM_INITIAL_SECONDS,
+  delayMedianAbsoluteDeviation,
+  deriveLongCooldownSeconds,
+  deriveLongInitialEvaluationSeconds,
+  deriveMediumInitialEvaluationSeconds,
+  derivePersonalizedMachineTiming,
+  hasActiveTimingPersonalization,
+  MAX_DELAY_MAD_SECONDS,
+  MIN_TRUSTED_DELAY_SAMPLES,
+  trustedDelayMedian,
+} from "./timing.js";
+export type { PersonalizedWorkTiming } from "../types.js";
 
 function perLevelDelta(observation: MachineHrResponseObservation): number | undefined {
   if (observation.hrDelta === undefined || observation.resistanceDelta === undefined) return undefined;
@@ -157,4 +176,22 @@ export function getPublicDynamics(
   const entry = loadDynamicsStore(storage).entries[learningKey(parts)];
   if (!entry) return undefined;
   return toPublicDynamics(parts, entry);
+}
+
+export function lookupPersonalizedTiming(
+  parts: Omit<LearningKeyParts, "durationClass"> & { durationSeconds: number },
+  storage?: DynamicsStorage
+): PersonalizedWorkTiming | undefined {
+  if (parts.durationSeconds <= 75) return undefined;
+  const entry = getDynamicsEntry(
+    {
+      machineId: parts.machineId,
+      machineProfileVersion: parts.machineProfileVersion,
+      activity: parts.activity,
+      intent: parts.intent,
+      durationClass: workDurationClass(parts.durationSeconds),
+    },
+    storage
+  );
+  return derivePersonalizedMachineTiming(entry, parts.durationSeconds);
 }

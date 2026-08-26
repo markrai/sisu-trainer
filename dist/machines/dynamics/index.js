@@ -1,10 +1,12 @@
 import { getHrSamples } from "../../workoutStorage.js";
-import { learningKey } from "../learning/types.js";
+import { learningKey, workDurationClass } from "../learning/types.js";
 import { deriveHrDynamicsObservations, observationHasAggregatableMetric, observationPassesSanity, } from "./derive.js";
-import { appendBoundedSample, cloneEntry, emptyDynamicsEntry, entryHasDynamicsSamples, loadDynamicsStore, putDynamicsEntry, toPublicDynamics, } from "./storage.js";
+import { appendBoundedSample, cloneEntry, emptyDynamicsEntry, entryHasDynamicsSamples, getDynamicsEntry, loadDynamicsStore, putDynamicsEntry, toPublicDynamics, } from "./storage.js";
+import { derivePersonalizedMachineTiming } from "./timing.js";
 export { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, MAX_RESISTANCE_STEP, RESPONSE_SEARCH_SECONDS, } from "./types.js";
 export { deriveHrDynamicsObservations, observationHasAggregatableMetric, observationPassesSanity, workoutEligibleForHrDynamics, } from "./derive.js";
-export { appendBoundedSample, emptyDynamicsStore, listHrDynamics, loadDynamicsStore, putDynamicsEntry, resetHrDynamicsForMachine, saveDynamicsStore, sanitizeDynamicsStore, } from "./storage.js";
+export { appendBoundedSample, emptyDynamicsStore, getDynamicsEntry, listHrDynamics, loadDynamicsStore, putDynamicsEntry, resetHrDynamicsForMachine, saveDynamicsStore, sanitizeDynamicsStore, } from "./storage.js";
+export { DEFAULT_LONG_COOLDOWN_SECONDS, DEFAULT_LONG_INITIAL_SECONDS, DEFAULT_MEDIUM_INITIAL_SECONDS, delayMedianAbsoluteDeviation, deriveLongCooldownSeconds, deriveLongInitialEvaluationSeconds, deriveMediumInitialEvaluationSeconds, derivePersonalizedMachineTiming, hasActiveTimingPersonalization, MAX_DELAY_MAD_SECONDS, MIN_TRUSTED_DELAY_SAMPLES, trustedDelayMedian, } from "./timing.js";
 function perLevelDelta(observation) {
     if (observation.hrDelta === undefined || observation.resistanceDelta === undefined)
         return undefined;
@@ -96,4 +98,16 @@ export function getPublicDynamics(parts, storage) {
     if (!entry)
         return undefined;
     return toPublicDynamics(parts, entry);
+}
+export function lookupPersonalizedTiming(parts, storage) {
+    if (parts.durationSeconds <= 75)
+        return undefined;
+    const entry = getDynamicsEntry({
+        machineId: parts.machineId,
+        machineProfileVersion: parts.machineProfileVersion,
+        activity: parts.activity,
+        intent: parts.intent,
+        durationClass: workDurationClass(parts.durationSeconds),
+    }, storage);
+    return derivePersonalizedMachineTiming(entry, parts.durationSeconds);
 }

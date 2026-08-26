@@ -36,6 +36,7 @@ const urlsToCache = [
   '/dist/machines/dynamics/storage.js',
   '/dist/machines/dynamics/derive.js',
   '/dist/machines/dynamics/types.js',
+  '/dist/machines/dynamics/timing.js',
   '/dist/version.js',
   '/data.json',
   '/manifest.json',

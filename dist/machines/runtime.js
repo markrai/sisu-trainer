@@ -1,5 +1,6 @@
 import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommendation } from "./guidance.js";
 import { lookupLearnedWorkStart } from "./learning/index.js";
+import { lookupPersonalizedTiming } from "./dynamics/index.js";
 import { getMachineDefinition } from "./registry.js";
 import { getSelectedMachineId } from "./selection.js";
 function newRuntimeState(sessionId) {
@@ -114,6 +115,15 @@ export function updateMachineGuidanceRuntime(input, storage) {
             durationSeconds: input.phaseDurationSeconds,
         }, storage)
         : undefined;
+    const personalizedTiming = input.phaseKind === "work" && input.intent && input.phaseDurationSeconds > 75
+        ? lookupPersonalizedTiming({
+            machineId,
+            machineProfileVersion: machine.profileVersion,
+            activity: input.activity,
+            intent: input.intent,
+            durationSeconds: input.phaseDurationSeconds,
+        }, storage)
+        : undefined;
     const result = getMachineGuidance({
         machineId,
         activity: input.activity,
@@ -130,6 +140,7 @@ export function updateMachineGuidanceRuntime(input, storage) {
         previousGuidance: runtime.previousGuidance,
         completedShortWork,
         learnedStartingResistance,
+        personalizedTiming,
     }, runtime.guidanceState);
     if (!result)
         return null;

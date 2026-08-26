@@ -1,6 +1,7 @@
 import type { Activity, WorkoutPhaseKind } from "../types.js";
 import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommendation } from "./guidance.js";
 import { lookupLearnedWorkStart } from "./learning/index.js";
+import { lookupPersonalizedTiming } from "./dynamics/index.js";
 import { getMachineDefinition } from "./registry.js";
 import { getSelectedMachineId, type EquipmentStorage } from "./selection.js";
 import type {
@@ -203,6 +204,18 @@ export function updateMachineGuidanceRuntime(
         storage
       )
     : undefined;
+  const personalizedTiming = input.phaseKind === "work" && input.intent && input.phaseDurationSeconds > 75
+    ? lookupPersonalizedTiming(
+        {
+          machineId,
+          machineProfileVersion: machine.profileVersion,
+          activity: input.activity,
+          intent: input.intent,
+          durationSeconds: input.phaseDurationSeconds,
+        },
+        storage
+      )
+    : undefined;
   const result = getMachineGuidance(
     {
       machineId,
@@ -220,6 +233,7 @@ export function updateMachineGuidanceRuntime(
       previousGuidance: runtime.previousGuidance,
       completedShortWork,
       learnedStartingResistance,
+      personalizedTiming,
     },
     runtime.guidanceState
   );

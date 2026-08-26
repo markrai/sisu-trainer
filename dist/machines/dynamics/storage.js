@@ -1,6 +1,7 @@
 import { integerMedian } from "../hrQuality.js";
 import { getMachineDefinition, isMachineId } from "../registry.js";
 import { learningKey, parseLearningKey } from "../learning/types.js";
+import { hasActiveTimingPersonalization } from "./timing.js";
 import { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, RESPONSE_SEARCH_SECONDS, } from "./types.js";
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
@@ -99,19 +100,28 @@ export function appendBoundedSample(values, value) {
     return next.length > DYNAMICS_SAMPLE_LIMIT ? next.slice(-DYNAMICS_SAMPLE_LIMIT) : next;
 }
 export function toPublicDynamics(parts, entry) {
-    return {
+    const listed = {
         ...parts,
         workStartSampleCount: Math.max(entry.workStartDelays.length, entry.workStartHrDeltas.length),
+        workStartDelaySampleCount: entry.workStartDelays.length,
         medianWorkStartDelaySeconds: integerMedian(entry.workStartDelays),
         medianWorkStartHrDelta: integerMedian(entry.workStartHrDeltas),
         increaseSampleCount: Math.max(entry.increaseDelays.length, entry.increaseHrPerLevel.length),
+        increaseDelaySampleCount: entry.increaseDelays.length,
         medianIncreaseDelaySeconds: integerMedian(entry.increaseDelays),
         medianIncreaseHrDeltaPerStep: integerMedian(entry.increaseHrPerLevel),
         decreaseSampleCount: Math.max(entry.decreaseDelays.length, entry.decreaseHrPerLevel.length),
+        decreaseDelaySampleCount: entry.decreaseDelays.length,
         medianDecreaseDelaySeconds: integerMedian(entry.decreaseDelays),
         medianDecreaseHrDeltaPerStep: integerMedian(entry.decreaseHrPerLevel),
         updatedAt: entry.updatedAt,
     };
+    if (hasActiveTimingPersonalization(entry, parts.durationClass))
+        listed.timingPersonalized = true;
+    return listed;
+}
+export function getDynamicsEntry(parts, storage) {
+    return loadDynamicsStore(storage).entries[learningKey(parts)];
 }
 export function listHrDynamics(machineId, storage) {
     const store = loadDynamicsStore(storage);

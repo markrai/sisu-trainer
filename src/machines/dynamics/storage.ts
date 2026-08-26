@@ -2,6 +2,7 @@ import { integerMedian } from "../hrQuality.js";
 import { getMachineDefinition, isMachineId } from "../registry.js";
 import type { EquipmentStorage } from "../selection.js";
 import { learningKey, parseLearningKey, type LearningKeyParts } from "../learning/types.js";
+import { hasActiveTimingPersonalization } from "./timing.js";
 import {
   DYNAMICS_SAMPLE_LIMIT,
   DYNAMICS_STORAGE_KEY,
@@ -120,19 +121,31 @@ export function appendBoundedSample(values: readonly number[], value: number): n
 }
 
 export function toPublicDynamics(parts: LearningKeyParts, entry: StoredDynamicsEntry): LearnedHrDynamics {
-  return {
+  const listed: LearnedHrDynamics = {
     ...parts,
     workStartSampleCount: Math.max(entry.workStartDelays.length, entry.workStartHrDeltas.length),
+    workStartDelaySampleCount: entry.workStartDelays.length,
     medianWorkStartDelaySeconds: integerMedian(entry.workStartDelays),
     medianWorkStartHrDelta: integerMedian(entry.workStartHrDeltas),
     increaseSampleCount: Math.max(entry.increaseDelays.length, entry.increaseHrPerLevel.length),
+    increaseDelaySampleCount: entry.increaseDelays.length,
     medianIncreaseDelaySeconds: integerMedian(entry.increaseDelays),
     medianIncreaseHrDeltaPerStep: integerMedian(entry.increaseHrPerLevel),
     decreaseSampleCount: Math.max(entry.decreaseDelays.length, entry.decreaseHrPerLevel.length),
+    decreaseDelaySampleCount: entry.decreaseDelays.length,
     medianDecreaseDelaySeconds: integerMedian(entry.decreaseDelays),
     medianDecreaseHrDeltaPerStep: integerMedian(entry.decreaseHrPerLevel),
     updatedAt: entry.updatedAt,
   };
+  if (hasActiveTimingPersonalization(entry, parts.durationClass)) listed.timingPersonalized = true;
+  return listed;
+}
+
+export function getDynamicsEntry(
+  parts: LearningKeyParts,
+  storage?: DynamicsStorage
+): StoredDynamicsEntry | undefined {
+  return loadDynamicsStore(storage).entries[learningKey(parts)];
 }
 
 export function listHrDynamics(machineId: string, storage?: DynamicsStorage): LearnedHrDynamics[] {

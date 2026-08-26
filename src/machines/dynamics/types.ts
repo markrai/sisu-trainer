@@ -63,13 +63,17 @@ export interface LearnedHrDynamics {
   intent: string;
   durationClass: WorkDurationClass;
   workStartSampleCount: number;
+  workStartDelaySampleCount: number;
   medianWorkStartDelaySeconds?: number;
   medianWorkStartHrDelta?: number;
   increaseSampleCount: number;
+  increaseDelaySampleCount: number;
   medianIncreaseDelaySeconds?: number;
   medianIncreaseHrDeltaPerStep?: number;
   decreaseSampleCount: number;
+  decreaseDelaySampleCount: number;
   medianDecreaseDelaySeconds?: number;
   medianDecreaseHrDeltaPerStep?: number;
+  timingPersonalized?: boolean;
   updatedAt: string;
 }

@@ -820,6 +820,9 @@ function renderHrDynamicsGroup(entry) {
     }
     if (blocks.length === 0)
         return "";
+    if (entry.timingPersonalized) {
+        blocks.push(`<div class="hr-dynamics-subhead">Controller timing</div>${metricRow("Status", "Personalized")}`);
+    }
     return `<div class="hr-dynamics-block"><div class="hr-dynamics-heading">${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</div>${blocks.join("")}</div>`;
 }
 function renderHrDynamicsPanel() {

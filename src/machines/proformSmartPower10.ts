@@ -180,6 +180,71 @@ function recoveryGuidance(
   };
 }
 
+function waitingForObservedResponse(): string {
+  return "Waiting for your observed heart-rate response";
+}
+
+function freezeWorkTiming(
+  context: MachineGuidanceContext,
+  state: MachineGuidanceState,
+  phaseChanged: boolean
+): MachineGuidanceState {
+  if (!phaseChanged) return state;
+  return {
+    ...state,
+    initialEvaluationSeconds: context.personalizedTiming?.initialEvaluationSeconds,
+    increaseCooldownSeconds: context.personalizedTiming?.increaseCooldownSeconds,
+    decreaseCooldownSeconds: context.personalizedTiming?.decreaseCooldownSeconds,
+    currentEvaluationCooldownSeconds: undefined,
+    lastWorkAdjustmentDirection: undefined,
+  };
+}
+
+function recordWorkEvaluation(
+  state: MachineGuidanceState,
+  elapsedSeconds: number,
+  action: MachineGuidance["action"]
+): void {
+  state.lastEvaluationPhaseElapsedSeconds = elapsedSeconds;
+  if (action === "increase") {
+    state.lastWorkAdjustmentDirection = "increase";
+    state.currentEvaluationCooldownSeconds = state.increaseCooldownSeconds ?? 60;
+    return;
+  }
+  if (action === "decrease") {
+    state.lastWorkAdjustmentDirection = "decrease";
+    state.currentEvaluationCooldownSeconds = state.decreaseCooldownSeconds ?? 60;
+    return;
+  }
+  state.currentEvaluationCooldownSeconds = 60;
+}
+
+function mediumWaitReason(
+  elapsedSeconds: number,
+  initialWait: number,
+  usingLearnedStart: boolean
+): string {
+  if (usingLearnedStart) return "Learned starting resistance from prior workouts";
+  if (initialWait > 60 && elapsedSeconds >= 60) return waitingForObservedResponse();
+  return "Waiting 60 seconds for heart-rate response";
+}
+
+function longInitialWaitReason(
+  elapsedSeconds: number,
+  initialWait: number,
+  usingLearnedStart: boolean
+): string {
+  if (usingLearnedStart) return "Learned starting resistance from prior workouts";
+  if (initialWait > 90 && elapsedSeconds >= 90) return waitingForObservedResponse();
+  return "Waiting 90 seconds for heart-rate stabilization";
+}
+
+function longCooldownWaitReason(elapsedSeconds: number, lastEvaluation: number | undefined, cooldown: number): string {
+  const since = lastEvaluation === undefined ? elapsedSeconds : elapsedSeconds - lastEvaluation;
+  if (cooldown > 60 && since >= 60) return waitingForObservedResponse();
+  return "Holding during the 60-second adjustment cooldown";
+}
+
 function workGuidance(
   context: MachineGuidanceContext,
   state: MachineGuidanceState,
@@ -194,14 +259,14 @@ function workGuidance(
   let reason = usingLearnedStart
     ? "Learned starting resistance from prior workouts"
     : "Conservative work-phase starting recommendation";
-  const nextState: MachineGuidanceState = {
+  const nextState: MachineGuidanceState = freezeWorkTiming(context, {
     ...state,
     currentResistance: resistance,
     currentCadenceRpm: 70,
     nextWorkResistance: context.phaseDurationSeconds <= 75 && state.shortIntervalEvaluated
       ? state.nextWorkResistance ?? resistance
       : resistance,
-  };
+  }, phaseChanged);
 
   if (context.phaseDurationSeconds <= 75) {
     if (!nextState.shortIntervalEvaluated && context.phaseElapsedSeconds >= Math.max(0, context.phaseDurationSeconds - 1)) {
@@ -223,7 +288,8 @@ function workGuidance(
         : "Short interval resistance is held for the full repetition";
     }
   } else if (context.phaseDurationSeconds <= 150) {
-    if (!nextState.mediumIntervalEvaluated && context.phaseElapsedSeconds >= 60) {
+    const initialWait = nextState.initialEvaluationSeconds ?? 60;
+    if (!nextState.mediumIntervalEvaluated && context.phaseElapsedSeconds >= initialWait) {
       const adapted = adaptWorkResistance(context, resistance);
       if (adapted.evaluated) {
         nextState.mediumIntervalEvaluated = true;
@@ -235,43 +301,39 @@ function workGuidance(
           ? "Heart-rate response supports the current resistance"
           : `Adjusted after ${Math.round(adapted.median as number)} bpm rolling heart rate`;
       } else {
-        reason = usingLearnedStart
-          ? "Learned starting resistance from prior workouts"
-          : "Waiting 60 seconds for heart-rate response";
+        reason = mediumWaitReason(context.phaseElapsedSeconds, initialWait, usingLearnedStart);
       }
     } else if (!nextState.mediumIntervalEvaluated) {
-      reason = usingLearnedStart
-        ? "Learned starting resistance from prior workouts"
-        : "Waiting 60 seconds for heart-rate response";
+      reason = mediumWaitReason(context.phaseElapsedSeconds, initialWait, usingLearnedStart);
     } else {
       reason = "Medium interval adjustment limit reached";
     }
   } else {
+    const initialWait = nextState.initialEvaluationSeconds ?? 90;
+    const cooldown = nextState.currentEvaluationCooldownSeconds ?? 60;
     const lastEvaluation = nextState.lastEvaluationPhaseElapsedSeconds;
-    const canEvaluate = context.phaseElapsedSeconds >= 90 &&
-      (lastEvaluation === undefined || context.phaseElapsedSeconds - lastEvaluation >= 60);
+    const canEvaluate = context.phaseElapsedSeconds >= initialWait &&
+      (lastEvaluation === undefined || context.phaseElapsedSeconds - lastEvaluation >= cooldown);
     if (canEvaluate) {
       const adapted = adaptWorkResistance(context, resistance);
       if (adapted.evaluated) {
-        nextState.lastEvaluationPhaseElapsedSeconds = context.phaseElapsedSeconds;
         resistance = adapted.resistance;
         action = actionForResistance(nextState.currentResistance, resistance, false);
         nextState.currentResistance = resistance;
         nextState.nextWorkResistance = resistance;
+        recordWorkEvaluation(nextState, context.phaseElapsedSeconds, action);
         reason = action === "hold"
           ? "Rolling heart rate is within the target range"
           : `Adjusted after ${Math.round(adapted.median as number)} bpm rolling heart rate`;
       } else {
-        reason = usingLearnedStart
-          ? "Learned starting resistance from prior workouts"
-          : "Waiting 90 seconds for heart-rate stabilization";
+        reason = lastEvaluation === undefined
+          ? longInitialWaitReason(context.phaseElapsedSeconds, initialWait, usingLearnedStart)
+          : longCooldownWaitReason(context.phaseElapsedSeconds, lastEvaluation, cooldown);
       }
-    } else if (context.phaseElapsedSeconds < 90) {
-      reason = usingLearnedStart
-        ? "Learned starting resistance from prior workouts"
-        : "Waiting 90 seconds for heart-rate stabilization";
+    } else if (context.phaseElapsedSeconds < initialWait) {
+      reason = longInitialWaitReason(context.phaseElapsedSeconds, initialWait, usingLearnedStart);
     } else {
-      reason = "Holding during the 60-second adjustment cooldown";
+      reason = longCooldownWaitReason(context.phaseElapsedSeconds, lastEvaluation, cooldown);
     }
   }
 
@@ -297,6 +359,11 @@ export function getProFormSmartPower10Guidance(
         lastEvaluationPhaseElapsedSeconds: undefined,
         shortIntervalEvaluated: false,
         mediumIntervalEvaluated: false,
+        initialEvaluationSeconds: undefined,
+        increaseCooldownSeconds: undefined,
+        decreaseCooldownSeconds: undefined,
+        currentEvaluationCooldownSeconds: undefined,
+        lastWorkAdjustmentDirection: undefined,
       }
     : finalizedState;
   if (context.phaseKind === "warmup") return warmupGuidance(context, phaseState, phaseChanged);

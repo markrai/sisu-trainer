@@ -45,6 +45,13 @@ export interface MachineGuidanceContext {
   previousGuidance?: MachineGuidance;
   completedShortWork?: CompletedShortWorkPhase;
   learnedStartingResistance?: number;
+  personalizedTiming?: PersonalizedWorkTiming;
+}
+
+export interface PersonalizedWorkTiming {
+  initialEvaluationSeconds?: number;
+  increaseCooldownSeconds?: number;
+  decreaseCooldownSeconds?: number;
 }
 
 export interface MachineGuidance {
@@ -65,6 +72,11 @@ export interface MachineGuidanceState {
   lastEvaluationPhaseElapsedSeconds?: number;
   shortIntervalEvaluated: boolean;
   mediumIntervalEvaluated: boolean;
+  initialEvaluationSeconds?: number;
+  increaseCooldownSeconds?: number;
+  decreaseCooldownSeconds?: number;
+  currentEvaluationCooldownSeconds?: number;
+  lastWorkAdjustmentDirection?: "increase" | "decrease";
 }
 
 export interface MachineGuidanceResult {
