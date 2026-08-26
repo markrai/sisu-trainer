@@ -1,6 +1,7 @@
 import type { Activity, WorkoutPhaseKind } from "../types.js";
+import type { MachineId } from "./trace.js";
 
-export type MachineId = "proform-smart-power-10";
+export type { MachineId, MachineGuidanceTraceEntry } from "./trace.js";
 
 export interface MachineDefinition {
   id: MachineId;
@@ -63,14 +64,6 @@ export interface MachineGuidanceResult {
 export interface MachineAdapter {
   definition: MachineDefinition;
   getGuidance(context: MachineGuidanceContext, state: MachineGuidanceState): MachineGuidanceResult;
-}
-
-export interface MachineGuidanceTraceEntry {
-  elapsedSeconds: number;
-  resistance: number;
-  cadenceRpm: number;
-  estimatedWatts?: number;
-  reason: string;
 }
 
 export interface MachineGuidanceVoiceEvent {

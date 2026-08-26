@@ -65,16 +65,16 @@ function adaptWorkResistance(context, currentResistance) {
     const min = context.targetHeartRateMin;
     const max = context.targetHeartRateMax;
     if (median === undefined || min === undefined || max === undefined) {
-        return { resistance: currentResistance, median };
+        return { resistance: currentResistance, median, evaluated: false };
     }
     if (median >= max + 3) {
-        return { resistance: clampAutomaticResistance(currentResistance - 1), median };
+        return { resistance: clampAutomaticResistance(currentResistance - 1), median, evaluated: true };
     }
     const requiredDeficit = currentResistance >= 13 ? 5 : 3;
     if (median <= min - requiredDeficit && currentResistance < 15) {
-        return { resistance: clampAutomaticResistance(currentResistance + 1), median };
+        return { resistance: clampAutomaticResistance(currentResistance + 1), median, evaluated: true };
     }
-    return { resistance: currentResistance, median };
+    return { resistance: currentResistance, median, evaluated: true };
 }
 function warmupGuidance(context, state, phaseChanged) {
     const fraction = context.phaseDurationSeconds > 0
@@ -131,16 +131,21 @@ function workGuidance(context, state, phaseChanged) {
         nextWorkResistance: resistance,
     };
     if (context.phaseDurationSeconds <= 75) {
-        if (!nextState.shortIntervalEvaluated && context.phaseElapsedSeconds >= Math.max(0, context.phaseDurationSeconds - 15)) {
+        if (!nextState.shortIntervalEvaluated && context.phaseElapsedSeconds >= Math.max(0, context.phaseDurationSeconds - 1)) {
             const adapted = adaptWorkResistance(context, resistance);
-            nextState.shortIntervalEvaluated = true;
-            nextState.nextWorkResistance = adapted.resistance;
-            if (adapted.resistance > resistance)
-                reason = "Hold this repetition; increase the next repetition after the final heart-rate response";
-            else if (adapted.resistance < resistance)
-                reason = "Hold this repetition; reduce the next repetition after the final heart-rate response";
-            else
-                reason = "Hold this repetition; final heart-rate response supports the current resistance";
+            if (adapted.evaluated) {
+                nextState.shortIntervalEvaluated = true;
+                nextState.nextWorkResistance = adapted.resistance;
+                if (adapted.resistance > resistance)
+                    reason = "Hold this repetition; increase the next repetition after the final heart-rate response";
+                else if (adapted.resistance < resistance)
+                    reason = "Hold this repetition; reduce the next repetition after the final heart-rate response";
+                else
+                    reason = "Hold this repetition; final heart-rate response supports the current resistance";
+            }
+            else {
+                reason = "Short interval resistance is held for the full repetition";
+            }
         }
         else {
             reason = "Short interval resistance is held for the full repetition";
@@ -149,14 +154,19 @@ function workGuidance(context, state, phaseChanged) {
     else if (context.phaseDurationSeconds <= 150) {
         if (!nextState.mediumIntervalEvaluated && context.phaseElapsedSeconds >= 60) {
             const adapted = adaptWorkResistance(context, resistance);
-            nextState.mediumIntervalEvaluated = true;
-            resistance = adapted.resistance;
-            action = actionForResistance(nextState.currentResistance, resistance, false);
-            nextState.currentResistance = resistance;
-            nextState.nextWorkResistance = resistance;
-            reason = action === "hold"
-                ? "Heart-rate response supports the current resistance"
-                : `Adjusted after ${Math.round(adapted.median)} bpm rolling heart rate`;
+            if (adapted.evaluated) {
+                nextState.mediumIntervalEvaluated = true;
+                resistance = adapted.resistance;
+                action = actionForResistance(nextState.currentResistance, resistance, false);
+                nextState.currentResistance = resistance;
+                nextState.nextWorkResistance = resistance;
+                reason = action === "hold"
+                    ? "Heart-rate response supports the current resistance"
+                    : `Adjusted after ${Math.round(adapted.median)} bpm rolling heart rate`;
+            }
+            else {
+                reason = "Waiting 60 seconds for heart-rate response";
+            }
         }
         else if (!nextState.mediumIntervalEvaluated) {
             reason = "Waiting 60 seconds for heart-rate response";
@@ -171,14 +181,19 @@ function workGuidance(context, state, phaseChanged) {
             (lastEvaluation === undefined || context.phaseElapsedSeconds - lastEvaluation >= 60);
         if (canEvaluate) {
             const adapted = adaptWorkResistance(context, resistance);
-            nextState.lastEvaluationPhaseElapsedSeconds = context.phaseElapsedSeconds;
-            resistance = adapted.resistance;
-            action = actionForResistance(nextState.currentResistance, resistance, false);
-            nextState.currentResistance = resistance;
-            nextState.nextWorkResistance = resistance;
-            reason = action === "hold"
-                ? "Rolling heart rate is within the target range"
-                : `Adjusted after ${Math.round(adapted.median)} bpm rolling heart rate`;
+            if (adapted.evaluated) {
+                nextState.lastEvaluationPhaseElapsedSeconds = context.phaseElapsedSeconds;
+                resistance = adapted.resistance;
+                action = actionForResistance(nextState.currentResistance, resistance, false);
+                nextState.currentResistance = resistance;
+                nextState.nextWorkResistance = resistance;
+                reason = action === "hold"
+                    ? "Rolling heart rate is within the target range"
+                    : `Adjusted after ${Math.round(adapted.median)} bpm rolling heart rate`;
+            }
+            else {
+                reason = "Waiting 90 seconds for heart-rate stabilization";
+            }
         }
         else if (context.phaseElapsedSeconds < 90) {
             reason = "Waiting 90 seconds for heart-rate stabilization";

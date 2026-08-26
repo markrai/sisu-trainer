@@ -113,7 +113,15 @@ test("short intervals hold during the rep and adapt only the next repetition", (
     result.state
   );
   assert.equal(result.guidance.resistance, 11);
+  assert.equal(result.state.nextWorkResistance, 11);
+  assert.equal(result.state.shortIntervalEvaluated, false);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: recent(150) }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 11);
   assert.equal(result.state.nextWorkResistance, 12);
+  assert.equal(result.state.shortIntervalEvaluated, true);
   result = getProFormSmartPower10Guidance(
     context({ phaseId: "work:2", workoutElapsedSeconds: 120, intervalIndex: 2 }),
     result.state
@@ -128,10 +136,17 @@ test("short-interval final HR holds in range and reduces when high", () => {
     result.state
   );
   assert.equal(result.state.nextWorkResistance, 11);
+  assert.equal(result.state.shortIntervalEvaluated, false);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: recent(165) }),
+    result.state
+  );
+  assert.equal(result.state.nextWorkResistance, 11);
+  assert.equal(result.state.shortIntervalEvaluated, true);
 
   result = getProFormSmartPower10Guidance(context(), createMachineGuidanceState());
   result = getProFormSmartPower10Guidance(
-    context({ phaseElapsedSeconds: 45, recentHeartRates: recent(175) }),
+    context({ phaseElapsedSeconds: 59, recentHeartRates: recent(175) }),
     result.state
   );
   assert.equal(result.state.nextWorkResistance, 10);
@@ -141,7 +156,7 @@ test("short-interval automatic guidance never exceeds resistance 15", () => {
   const state = { ...createMachineGuidanceState(), nextWorkResistance: 15 };
   let result = getProFormSmartPower10Guidance(context(), state);
   result = getProFormSmartPower10Guidance(
-    context({ phaseElapsedSeconds: 45, recentHeartRates: recent(140) }),
+    context({ phaseElapsedSeconds: 59, recentHeartRates: recent(140) }),
     result.state
   );
   assert.equal(result.state.nextWorkResistance, 15);
@@ -206,6 +221,70 @@ test("long intervals stabilize for 90 seconds and enforce a 60-second cooldown",
   assert.equal(result.guidance.resistance, 9);
 });
 
+test("missing HR or targets does not consume work evaluations", () => {
+  let result = getProFormSmartPower10Guidance(context(), createMachineGuidanceState());
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: [] }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 11);
+  assert.equal(result.state.nextWorkResistance, 11);
+  assert.equal(result.state.shortIntervalEvaluated, false);
+  assert.match(result.guidance.reason, /held for the full repetition/i);
+  result = getProFormSmartPower10Guidance(
+    context({
+      phaseElapsedSeconds: 59,
+      recentHeartRates: recent(150),
+      targetHeartRateMin: undefined,
+      targetHeartRateMax: undefined,
+    }),
+    result.state
+  );
+  assert.equal(result.state.shortIntervalEvaluated, false);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseElapsedSeconds: 59, recentHeartRates: recent(150) }),
+    result.state
+  );
+  assert.equal(result.state.shortIntervalEvaluated, true);
+  assert.equal(result.state.nextWorkResistance, 12);
+
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 120 }),
+    createMachineGuidanceState()
+  );
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 120, phaseElapsedSeconds: 60, recentHeartRates: [] }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 10);
+  assert.equal(result.state.mediumIntervalEvaluated, false);
+  assert.match(result.guidance.reason, /Waiting 60 seconds/i);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 120, phaseElapsedSeconds: 61, recentHeartRates: recent(150) }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 11);
+  assert.equal(result.state.mediumIntervalEvaluated, true);
+
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 240 }),
+    createMachineGuidanceState()
+  );
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 240, phaseElapsedSeconds: 90, recentHeartRates: [] }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 8);
+  assert.equal(result.state.lastEvaluationPhaseElapsedSeconds, undefined);
+  assert.match(result.guidance.reason, /Waiting 90 seconds/i);
+  result = getProFormSmartPower10Guidance(
+    context({ phaseDurationSeconds: 240, phaseElapsedSeconds: 91, recentHeartRates: recent(150) }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 9);
+  assert.equal(result.state.lastEvaluationPhaseElapsedSeconds, 91);
+});
+
 test("resistance 13 and 14 require a five-bpm deficit and resistance 15 cannot increase", () => {
   for (const resistance of [13, 14]) {
     let result = getProFormSmartPower10Guidance(
@@ -213,7 +292,7 @@ test("resistance 13 and 14 require a five-bpm deficit and resistance 15 cannot i
       { ...createMachineGuidanceState(), nextWorkResistance: resistance }
     );
     result = getProFormSmartPower10Guidance(
-      context({ phaseElapsedSeconds: 45, recentHeartRates: recent(156) }),
+      context({ phaseElapsedSeconds: 59, recentHeartRates: recent(156) }),
       result.state
     );
     assert.equal(result.state.nextWorkResistance, resistance);
@@ -223,7 +302,7 @@ test("resistance 13 and 14 require a five-bpm deficit and resistance 15 cannot i
       { ...createMachineGuidanceState(), nextWorkResistance: resistance }
     );
     result = getProFormSmartPower10Guidance(
-      context({ phaseElapsedSeconds: 45, recentHeartRates: recent(155) }),
+      context({ phaseElapsedSeconds: 59, recentHeartRates: recent(155) }),
       result.state
     );
     assert.equal(result.state.nextWorkResistance, resistance + 1);
@@ -234,7 +313,7 @@ test("resistance 13 and 14 require a five-bpm deficit and resistance 15 cannot i
     { ...createMachineGuidanceState(), nextWorkResistance: 15 }
   );
   result = getProFormSmartPower10Guidance(
-    context({ phaseElapsedSeconds: 45, recentHeartRates: recent(140) }),
+    context({ phaseElapsedSeconds: 59, recentHeartRates: recent(140) }),
     result.state
   );
   assert.equal(result.state.nextWorkResistance, 15);
@@ -310,16 +389,16 @@ test("runtime uses only the bounded recent HR window", () => {
   setSelectedMachine("bike", "proform-smart-power-10", storage);
   resetMachineGuidanceRuntime("session-2");
   recordMachineHeartRateSample("session-2", 1, 190);
-  for (let elapsed = 31; elapsed <= 45; elapsed++) recordMachineHeartRateSample("session-2", elapsed, 150);
+  for (let elapsed = 44; elapsed <= 59; elapsed++) recordMachineHeartRateSample("session-2", elapsed, 150);
   const update = updateMachineGuidanceRuntime({
     sessionId: "session-2",
     activity: "bike",
     phaseKind: "work",
     phaseId: "work:1",
     phaseDisplayName: "hard",
-    phaseElapsedSeconds: 45,
+    phaseElapsedSeconds: 59,
     phaseDurationSeconds: 60,
-    workoutElapsedSeconds: 45,
+    workoutElapsedSeconds: 59,
     intervalIndex: 1,
     targetHeartRateMin: 160,
     targetHeartRateMax: 170,

@@ -1,4 +1,4 @@
-import type { MachineGuidanceTraceEntry, MachineId } from "./machines/types.js";
+import type { MachineGuidanceTraceEntry, MachineId } from "./machines/trace.js";
 
 export type DayName =
   | "Monday"
