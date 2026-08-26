@@ -69,6 +69,17 @@ function collectWorkPhases(trace) {
 function lastHalf(items) {
     return items.slice(Math.floor(items.length / 2));
 }
+export function lateHrWindow(phase) {
+    const tailSeconds = phase.durationClass === "short"
+        ? 15
+        : phase.durationClass === "medium"
+            ? 30
+            : phase.durationSeconds / 3;
+    return {
+        start: Math.max(phase.startElapsed, phase.endElapsed - tailSeconds),
+        end: phase.endElapsed,
+    };
+}
 function samplesInWindows(samples, windows) {
     return samples.filter((sample) => windows.some((window) => sample.elapsedSeconds >= window.start && sample.elapsedSeconds < window.end));
 }
@@ -87,7 +98,6 @@ function resistanceAtTime(phase, elapsedSeconds) {
 function longBlockCandidate(phase) {
     var _a;
     const thirdStart = phase.startElapsed + phase.durationSeconds * (2 / 3);
-    const windows = [{ start: thirdStart, end: phase.endElapsed }];
     const resistances = [];
     const begin = Math.floor(thirdStart);
     const finish = Math.max(begin + 1, Math.floor(phase.endElapsed));
@@ -101,14 +111,13 @@ function longBlockCandidate(phase) {
         if (fallback !== undefined)
             resistances.push(fallback);
     }
-    return { resistance: integerMedian(resistances), windows };
+    return { resistance: integerMedian(resistances) };
 }
 function repeatedIntervalCandidate(phases) {
     const late = lastHalf(phases);
     return {
         resistance: integerMedian(late.map((phase) => phase.finalResistance)),
-        windows: late.map((phase) => ({ start: phase.startElapsed, end: phase.endElapsed })),
-        targets: late.map((phase) => ({ min: phase.targetHeartRateMin, max: phase.targetHeartRateMax })),
+        late,
     };
 }
 export function hrResponseQualifies(samples, windows, targetMin, targetMax) {
@@ -118,6 +127,12 @@ export function hrResponseQualifies(samples, windows, targetMin, targetMax) {
     if (median === undefined)
         return false;
     return median >= targetMin - 3 && median <= targetMax + 3;
+}
+function phaseHrQualifies(phase, samples) {
+    return hrResponseQualifies(samples, [lateHrWindow(phase)], phase.targetHeartRateMin, phase.targetHeartRateMax);
+}
+function lateWorkHrQualifies(phases, samples) {
+    return phases.length > 0 && phases.every((phase) => phaseHrQualifies(phase, samples));
 }
 export function deriveLearningCandidate(summary, hrSamples) {
     var _a;
@@ -139,22 +154,13 @@ export function deriveLearningCandidate(summary, hrSamples) {
     if (classes.size !== 1)
         return undefined;
     const durationClass = phases[0].durationClass;
-    const derived = durationClass === "long" && phases.length === 1
-        ? longBlockCandidate(phases[0])
+    const singleLong = durationClass === "long" && phases.length === 1;
+    const derived = singleLong
+        ? { ...longBlockCandidate(phases[0]), late: phases }
         : repeatedIntervalCandidate(phases);
     if (derived.resistance === undefined)
         return undefined;
-    const targetMin = durationClass === "long"
-        ? phases[0].targetHeartRateMin
-        : lastHalf(phases).every((phase) => phase.targetHeartRateMin !== undefined)
-            ? Math.min(...lastHalf(phases).map((phase) => phase.targetHeartRateMin))
-            : undefined;
-    const targetMax = durationClass === "long"
-        ? phases[0].targetHeartRateMax
-        : lastHalf(phases).every((phase) => phase.targetHeartRateMax !== undefined)
-            ? Math.max(...lastHalf(phases).map((phase) => phase.targetHeartRateMax))
-            : undefined;
-    if (!hrResponseQualifies(hrSamples, derived.windows, targetMin, targetMax))
+    if (!lateWorkHrQualifies(derived.late, hrSamples))
         return undefined;
     return {
         key: {

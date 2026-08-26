@@ -4,7 +4,7 @@ import { applyConservativeUpdate, getLearnedStartingResistance, loadLearnedStore
 import { learningKey, workDurationClass, } from "./types.js";
 export { LEARNING_STORAGE_KEY, formatLearnedGuidanceLabel, learningKey, parseLearningKey, workDurationClass, } from "./types.js";
 export { applyConservativeUpdate, getLearnedStartingResistance, listLearnedStarts, loadLearnedStore, putLearnedStart, resetLearnedGuidanceForMachine, saveLearnedStore, } from "./storage.js";
-export { deriveLearningCandidate, hrResponseQualifies, integerMedian, rollingHrMedian } from "./derive.js";
+export { deriveLearningCandidate, hrResponseQualifies, integerMedian, lateHrWindow, rollingHrMedian } from "./derive.js";
 export function lookupLearnedWorkStart(parts, storage) {
     return getLearnedStartingResistance({
         machineId: parts.machineId,

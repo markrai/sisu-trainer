@@ -34,7 +34,7 @@ export {
   resetLearnedGuidanceForMachine,
   saveLearnedStore,
 } from "./storage.js";
-export { deriveLearningCandidate, hrResponseQualifies, integerMedian, rollingHrMedian } from "./derive.js";
+export { deriveLearningCandidate, hrResponseQualifies, integerMedian, lateHrWindow, rollingHrMedian } from "./derive.js";
 
 export function lookupLearnedWorkStart(
   parts: Omit<LearningKeyParts, "durationClass"> & { durationSeconds: number },

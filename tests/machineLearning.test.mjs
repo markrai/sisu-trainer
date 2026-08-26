@@ -39,18 +39,40 @@ function memoryStorage(initial = {}) {
 function qualifyingHr(windows, bpm = 165) {
   const samples = [];
   for (const window of windows) {
-    const start = Math.floor(window.start);
-    for (let elapsed = start; elapsed < start + 8; elapsed++) {
+    const end = Math.floor(window.end);
+    const start = Math.max(Math.floor(window.start), end - 8);
+    for (let elapsed = start; elapsed < end; elapsed++) {
       samples.push({ elapsedSeconds: elapsed, bpm });
     }
   }
   return samples;
 }
 
+function fillWindow(window, bpm) {
+  const samples = [];
+  for (let elapsed = Math.floor(window.start); elapsed < Math.floor(window.end); elapsed++) {
+    samples.push({ elapsedSeconds: elapsed, bpm });
+  }
+  return samples;
+}
+
+const shortLateWindows = [
+  { start: 405, end: 420 },
+  { start: 525, end: 540 },
+  { start: 645, end: 660 },
+];
+
+const shortEarlyWindows = [
+  { start: 360, end: 375 },
+  { start: 480, end: 495 },
+  { start: 600, end: 615 },
+];
+
 function workPhase(resistance, index, extras = {}) {
   const work = extras.work ?? 60;
   const recovery = extras.recovery ?? 60;
   const elapsed = (extras.workStart ?? 0) + index * (work + recovery);
+  const target = extras.targets?.[index];
   return {
     elapsedSeconds: elapsed,
     resistance,
@@ -61,8 +83,8 @@ function workPhase(resistance, index, extras = {}) {
     intervalIndex: index + 1,
     phaseDurationSeconds: work,
     phaseElapsedSeconds: 0,
-    targetHeartRateMin: extras.targetMin ?? 160,
-    targetHeartRateMax: extras.targetMax ?? 170,
+    targetHeartRateMin: target?.min ?? extras.targetMin ?? 160,
+    targetHeartRateMax: target?.max ?? extras.targetMax ?? 170,
     reason: "work",
   };
 }
@@ -183,7 +205,7 @@ test("learning keys keep intent and duration class separate", () => {
 test("settled short intervals learn the later work median", () => {
   const trace = intervalTrace([11, 12, 12, 12, 12, 12]);
   const summary = bikeSummary({ machine_guidance_trace: trace });
-  const candidate = deriveLearningCandidate(summary, qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }]));
+  const candidate = deriveLearningCandidate(summary, qualifyingHr(shortLateWindows));
   assert.equal(candidate?.resistance, 12);
   assert.equal(candidate?.key.durationClass, "short");
   assert.equal(candidate?.key.intent, "vo2_primer");
@@ -193,7 +215,7 @@ test("oscillating short intervals learn the settled later median", () => {
   const summary = bikeSummary({ machine_guidance_trace: intervalTrace([11, 12, 13, 12, 12, 12]) });
   const candidate = deriveLearningCandidate(
     summary,
-    qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }])
+    qualifyingHr(shortLateWindows)
   );
   assert.equal(candidate?.resistance, 12);
 });
@@ -203,7 +225,7 @@ test("high HR does not update learned state", () => {
   const summary = bikeSummary();
   const result = applyCompletedWorkoutLearning(
     summary,
-    qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }], 180),
+    qualifyingHr(shortLateWindows, 180),
     storage
   );
   assert.equal(result, undefined);
@@ -221,7 +243,7 @@ test("cancelled workouts do not train learned guidance", () => {
   const summary = bikeSummary({ cancelled: true });
   const result = applyCompletedWorkoutLearning(
     summary,
-    qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }]),
+    qualifyingHr(shortLateWindows),
     storage
   );
   assert.equal(result, undefined);
@@ -229,7 +251,7 @@ test("cancelled workouts do not train learned guidance", () => {
 
 test("wrong machine or profile version does not train learned guidance", () => {
   const storage = memoryStorage();
-  const hr = qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }]);
+  const hr = qualifyingHr(shortLateWindows);
   assert.equal(applyCompletedWorkoutLearning(bikeSummary({ machine_id: "other-bike" }), hr, storage), undefined);
   assert.equal(applyCompletedWorkoutLearning(bikeSummary({ machine_profile_version: 2 }), hr, storage), undefined);
   assert.equal(getLearnedStartingResistance(vo2ShortKey, storage), undefined);
@@ -248,18 +270,65 @@ test("conservative updates move at most one resistance level", () => {
 
 test("first qualifying workout stores the candidate directly, later ones step by one", () => {
   const storage = memoryStorage();
-  const hr = qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }]);
+  const hr = qualifyingHr(shortLateWindows);
   const first = applyCompletedWorkoutLearning(bikeSummary(), hr, storage, "2026-08-26T12:00:00.000Z");
   assert.equal(first?.resistance, 12);
   assert.equal(first?.sampleCount, 1);
   const jumped = applyCompletedWorkoutLearning(
     bikeSummary({ machine_guidance_trace: intervalTrace([13, 13, 13, 14, 14, 14]) }),
-    qualifyingHr([{ start: 360, end: 420 }, { start: 480, end: 540 }, { start: 600, end: 660 }]),
+    qualifyingHr(shortLateWindows),
     storage,
     "2026-08-26T13:00:00.000Z"
   );
   assert.equal(jumped?.resistance, 13);
   assert.equal(jumped?.sampleCount, 2);
+});
+
+test("early-repetition HR in range does not qualify short-interval learning", () => {
+  const summary = bikeSummary();
+  assert.equal(deriveLearningCandidate(summary, qualifyingHr(shortEarlyWindows)), undefined);
+});
+
+test("lagging short-interval HR still qualifies from the final 15 seconds", () => {
+  const summary = bikeSummary();
+  const samples = [
+    ...shortEarlyWindows.flatMap((window) => fillWindow(window, 148)),
+    ...qualifyingHr(shortLateWindows, 164),
+  ];
+  const candidate = deriveLearningCandidate(summary, samples);
+  assert.equal(candidate?.resistance, 12);
+});
+
+test("repeated long intervals qualify each late window against its own target", () => {
+  const extras = {
+    work: 240,
+    recovery: 180,
+    targets: [
+      { min: 158, max: 162 },
+      { min: 160, max: 165 },
+      { min: 165, max: 170 },
+      { min: 168, max: 172 },
+    ],
+  };
+  const summary = bikeSummary({
+    intent: "vo2_priority",
+    machine_guidance_trace: intervalTrace([8, 9, 10, 10], extras),
+  });
+  const interval3Late = { start: 1000, end: 1080 };
+  const interval4Late = { start: 1420, end: 1500 };
+  const compensating = [
+    ...fillWindow(interval3Late, 168),
+    ...fillWindow(interval4Late, 164),
+  ];
+  assert.equal(deriveLearningCandidate(summary, compensating), undefined);
+  const bothInRange = [
+    ...fillWindow(interval3Late, 167),
+    ...fillWindow(interval4Late, 170),
+  ];
+  const candidate = deriveLearningCandidate(summary, bothInRange);
+  assert.equal(candidate?.resistance, 10);
+  assert.equal(candidate?.key.durationClass, "long");
+  assert.equal(candidate?.key.intent, "vo2_priority");
 });
 
 test("learned short start is used once, then the controller can move away", () => {
