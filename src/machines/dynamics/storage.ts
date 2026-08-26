@@ -2,7 +2,7 @@ import { integerMedian } from "../hrQuality.js";
 import { getMachineDefinition, isMachineId } from "../registry.js";
 import type { EquipmentStorage } from "../selection.js";
 import { learningKey, parseLearningKey, type LearningKeyParts } from "../learning/types.js";
-import { hasActiveTimingPersonalization } from "./timing.js";
+import { hasActiveTimingPersonalization, timingModeForEntry } from "./timing.js";
 import {
   DYNAMICS_SAMPLE_LIMIT,
   DYNAMICS_STORAGE_KEY,
@@ -210,6 +210,8 @@ export function toPublicDynamics(parts: LearningKeyParts, entry: StoredDynamicsE
     updatedAt: entry.updatedAt,
   };
   if (hasActiveTimingPersonalization(entry, parts.durationClass)) listed.timingPersonalized = true;
+  const timingMode = timingModeForEntry(entry, parts.durationClass);
+  if (timingMode) listed.timingMode = timingMode;
   return listed;
 }
 

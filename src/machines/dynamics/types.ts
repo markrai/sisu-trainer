@@ -101,5 +101,6 @@ export interface LearnedHrDynamics {
   decreaseRecentObservationCount: number;
   decreaseRecentDetectedResponseCount: number;
   timingPersonalized?: boolean;
+  timingMode?: "earlier" | "extended" | "mixed";
   updatedAt: string;
 }

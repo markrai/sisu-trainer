@@ -225,6 +225,7 @@ function mediumWaitReason(
   usingLearnedStart: boolean
 ): string {
   if (usingLearnedStart) return "Learned starting resistance from prior workouts";
+  if (initialWait < 60) return waitingForObservedResponse();
   if (initialWait > 60 && elapsedSeconds >= 60) return waitingForObservedResponse();
   return "Waiting 60 seconds for heart-rate response";
 }
@@ -235,12 +236,14 @@ function longInitialWaitReason(
   usingLearnedStart: boolean
 ): string {
   if (usingLearnedStart) return "Learned starting resistance from prior workouts";
+  if (initialWait < 90) return waitingForObservedResponse();
   if (initialWait > 90 && elapsedSeconds >= 90) return waitingForObservedResponse();
   return "Waiting 90 seconds for heart-rate stabilization";
 }
 
 function longCooldownWaitReason(elapsedSeconds: number, lastEvaluation: number | undefined, cooldown: number): string {
   const since = lastEvaluation === undefined ? elapsedSeconds : elapsedSeconds - lastEvaluation;
+  if (cooldown < 60) return waitingForObservedResponse();
   if (cooldown > 60 && since >= 60) return waitingForObservedResponse();
   return "Holding during the 60-second adjustment cooldown";
 }

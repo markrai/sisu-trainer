@@ -73,14 +73,29 @@ export {
   DEFAULT_MEDIUM_INITIAL_SECONDS,
   delayMedianAbsoluteDeviation,
   deriveLongCooldownSeconds,
+  deriveLongEarlyCooldownSeconds,
+  deriveLongEarlyInitialEvaluationSeconds,
   deriveLongInitialEvaluationSeconds,
+  deriveMediumEarlyEvaluationSeconds,
   deriveMediumInitialEvaluationSeconds,
   derivePersonalizedMachineTiming,
+  EARLY_TIMING_CONCENTRATION_WINDOW_SECONDS,
   hasActiveTimingPersonalization,
+  highConfidenceRecentDelayEstimate,
   MAX_DELAY_MAD_SECONDS,
+  MAX_EARLY_TIMING_MAD_SECONDS,
+  MIN_EARLY_TIMING_CONCENTRATION,
+  MIN_EARLY_TIMING_DETECTED_RESPONSES,
+  MIN_EARLY_TIMING_DETECTION_RATE,
+  MIN_LONG_COOLDOWN_EARLY_SECONDS,
+  MIN_LONG_INITIAL_EARLY_SECONDS,
+  MIN_MEDIUM_EARLY_SECONDS,
   MIN_TRUSTED_DELAY_SAMPLES,
+  timingModeForEntry,
+  timingModeForPersonalizedTiming,
   trustedDelayMedian,
 } from "./timing.js";
+export type { HighConfidenceRecentDelayEstimate, TimingMode } from "./timing.js";
 export type { PersonalizedWorkTiming } from "../types.js";
 
 function perLevelDelta(observation: MachineHrResponseObservation): number | undefined {

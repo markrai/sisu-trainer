@@ -1,7 +1,7 @@
 import { integerMedian } from "../hrQuality.js";
 import { getMachineDefinition, isMachineId } from "../registry.js";
 import { learningKey, parseLearningKey } from "../learning/types.js";
-import { hasActiveTimingPersonalization } from "./timing.js";
+import { hasActiveTimingPersonalization, timingModeForEntry } from "./timing.js";
 import { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, RECENT_OPPORTUNITY_LIMIT, RESPONSE_SEARCH_SECONDS, } from "./types.js";
 import { recentDetectedCount, recentObservationCount } from "./recent.js";
 function storageOrBrowser(storage) {
@@ -176,6 +176,9 @@ export function toPublicDynamics(parts, entry) {
     };
     if (hasActiveTimingPersonalization(entry, parts.durationClass))
         listed.timingPersonalized = true;
+    const timingMode = timingModeForEntry(entry, parts.durationClass);
+    if (timingMode)
+        listed.timingMode = timingMode;
     return listed;
 }
 export function getDynamicsEntry(parts, storage) {

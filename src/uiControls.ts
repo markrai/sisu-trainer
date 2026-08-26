@@ -935,9 +935,15 @@ function renderHrDynamicsGroup(entry: LearnedHrDynamics): string {
     blocks.push(rows.join(""));
   }
   if (blocks.length === 0) return "";
-  if (entry.timingPersonalized) {
+  if (entry.timingMode || entry.timingPersonalized) {
+    const status =
+      entry.timingMode === "earlier"
+        ? "Earlier"
+        : entry.timingMode === "extended"
+          ? "Extended"
+          : "Personalized";
     blocks.push(
-      `<div class="hr-dynamics-subhead">Controller timing</div>${metricRow("Status", "Personalized")}`
+      `<div class="hr-dynamics-subhead">Controller timing</div>${metricRow("Status", status)}`
     );
   }
   return `<div class="hr-dynamics-block"><div class="hr-dynamics-heading">${formatLearnedGuidanceLabel(entry.intent, entry.durationClass)}</div>${blocks.join("")}</div>`;
