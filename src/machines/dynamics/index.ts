@@ -8,6 +8,7 @@ import {
   observationHrDeltaIsSane,
 } from "./derive.js";
 import {
+  appendBoundedRecentResponse,
   appendBoundedSample,
   cloneEntry,
   emptyDynamicsEntry,
@@ -30,10 +31,12 @@ export {
   MAX_ABS_HR_PER_LEVEL,
   MAX_RESISTANCE_STEP,
   MIN_OBSERVABLE_WINDOW_SECONDS,
+  RECENT_OPPORTUNITY_LIMIT,
   RESPONSE_SEARCH_SECONDS,
   type LearnedHrDynamics,
   type LearnedHrDynamicsStore,
   type MachineHrResponseObservation,
+  type RecentHrResponse,
   type StoredDynamicsEntry,
 } from "./types.js";
 export {
@@ -46,6 +49,14 @@ export {
   workoutEligibleForHrDynamics,
 } from "./derive.js";
 export {
+  delayConcentrationNearMedian,
+  recentDetectedCount,
+  recentDetectedDelays,
+  recentDetectionRate,
+  recentObservationCount,
+} from "./recent.js";
+export {
+  appendBoundedRecentResponse,
   appendBoundedSample,
   emptyDynamicsStore,
   getDynamicsEntry,
@@ -95,6 +106,10 @@ export function mergeObservationIntoEntry(
     if (observable) {
       next.workStartObservationCount += 1;
       if (detected) next.workStartDetectedResponseCount += 1;
+      next.workStartRecentResponses = appendBoundedRecentResponse(
+        next.workStartRecentResponses,
+        detected && delay !== undefined ? delay : null
+      );
     }
     if (delay !== undefined) next.workStartDelays = appendBoundedSample(next.workStartDelays, delay);
     if (hrDelta !== undefined) next.workStartHrDeltas = appendBoundedSample(next.workStartHrDeltas, hrDelta);
@@ -104,6 +119,10 @@ export function mergeObservationIntoEntry(
     if (observable) {
       next.increaseObservationCount += 1;
       if (detected) next.increaseDetectedResponseCount += 1;
+      next.increaseRecentResponses = appendBoundedRecentResponse(
+        next.increaseRecentResponses,
+        detected && delay !== undefined ? delay : null
+      );
     }
     if (delay !== undefined) next.increaseDelays = appendBoundedSample(next.increaseDelays, delay);
     if (perLevel !== undefined) next.increaseHrPerLevel = appendBoundedSample(next.increaseHrPerLevel, perLevel);
@@ -112,6 +131,10 @@ export function mergeObservationIntoEntry(
   if (observable) {
     next.decreaseObservationCount += 1;
     if (detected) next.decreaseDetectedResponseCount += 1;
+    next.decreaseRecentResponses = appendBoundedRecentResponse(
+      next.decreaseRecentResponses,
+      detected && delay !== undefined ? delay : null
+    );
   }
   if (delay !== undefined) next.decreaseDelays = appendBoundedSample(next.decreaseDelays, delay);
   if (perLevel !== undefined) next.decreaseHrPerLevel = appendBoundedSample(next.decreaseHrPerLevel, perLevel);

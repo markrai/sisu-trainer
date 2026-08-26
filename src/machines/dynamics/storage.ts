@@ -9,11 +9,14 @@ import {
   DYNAMICS_STORE_VERSION,
   MAX_ABS_HR_DELTA,
   MAX_ABS_HR_PER_LEVEL,
+  RECENT_OPPORTUNITY_LIMIT,
   RESPONSE_SEARCH_SECONDS,
   type LearnedHrDynamics,
   type LearnedHrDynamicsStore,
+  type RecentHrResponse,
   type StoredDynamicsEntry,
 } from "./types.js";
+import { recentDetectedCount, recentObservationCount } from "./recent.js";
 
 export type DynamicsStorage = EquipmentStorage;
 
@@ -35,6 +38,9 @@ function emptyEntry(updatedAt: string): StoredDynamicsEntry {
     increaseDetectedResponseCount: 0,
     decreaseObservationCount: 0,
     decreaseDetectedResponseCount: 0,
+    workStartRecentResponses: [],
+    increaseRecentResponses: [],
+    decreaseRecentResponses: [],
     updatedAt,
   };
 }
@@ -64,6 +70,19 @@ function sanitizeCount(value: unknown): number {
 
 function sanitizeDetectedCount(detected: unknown, observed: number): number {
   return Math.min(sanitizeCount(detected), observed);
+}
+
+function sanitizeRecentResponses(value: unknown): RecentHrResponse[] {
+  if (!Array.isArray(value)) return [];
+  const clean: RecentHrResponse[] = [];
+  for (const item of value) {
+    if (item === null) {
+      clean.push(null);
+      continue;
+    }
+    if (isFiniteNumber(item) && delayAllowed(item)) clean.push(item);
+  }
+  return clean.slice(-RECENT_OPPORTUNITY_LIMIT);
 }
 
 function delayAllowed(value: number): boolean {
@@ -104,6 +123,9 @@ function sanitizeStoredEntry(value: unknown): StoredDynamicsEntry | undefined {
       raw.decreaseDetectedResponseCount,
       sanitizeCount(raw.decreaseObservationCount)
     ),
+    workStartRecentResponses: sanitizeRecentResponses(raw.workStartRecentResponses),
+    increaseRecentResponses: sanitizeRecentResponses(raw.increaseRecentResponses),
+    decreaseRecentResponses: sanitizeRecentResponses(raw.decreaseRecentResponses),
     updatedAt: raw.updatedAt,
   };
 }
@@ -150,6 +172,14 @@ export function appendBoundedSample(values: readonly number[], value: number): n
   return next.length > DYNAMICS_SAMPLE_LIMIT ? next.slice(-DYNAMICS_SAMPLE_LIMIT) : next;
 }
 
+export function appendBoundedRecentResponse(
+  values: readonly RecentHrResponse[],
+  value: RecentHrResponse
+): RecentHrResponse[] {
+  const next = [...values, value];
+  return next.length > RECENT_OPPORTUNITY_LIMIT ? next.slice(-RECENT_OPPORTUNITY_LIMIT) : next;
+}
+
 export function toPublicDynamics(parts: LearningKeyParts, entry: StoredDynamicsEntry): LearnedHrDynamics {
   const listed: LearnedHrDynamics = {
     ...parts,
@@ -171,6 +201,12 @@ export function toPublicDynamics(parts: LearningKeyParts, entry: StoredDynamicsE
     increaseDetectedResponseCount: entry.increaseDetectedResponseCount,
     decreaseObservationCount: entry.decreaseObservationCount,
     decreaseDetectedResponseCount: entry.decreaseDetectedResponseCount,
+    workStartRecentObservationCount: recentObservationCount(entry.workStartRecentResponses ?? []),
+    workStartRecentDetectedResponseCount: recentDetectedCount(entry.workStartRecentResponses ?? []),
+    increaseRecentObservationCount: recentObservationCount(entry.increaseRecentResponses ?? []),
+    increaseRecentDetectedResponseCount: recentDetectedCount(entry.increaseRecentResponses ?? []),
+    decreaseRecentObservationCount: recentObservationCount(entry.decreaseRecentResponses ?? []),
+    decreaseRecentDetectedResponseCount: recentDetectedCount(entry.decreaseRecentResponses ?? []),
     updatedAt: entry.updatedAt,
   };
   if (hasActiveTimingPersonalization(entry, parts.durationClass)) listed.timingPersonalized = true;
@@ -234,7 +270,10 @@ export function entryHasDynamicsSamples(entry: StoredDynamicsEntry): boolean {
     entry.decreaseHrPerLevel.length > 0 ||
     entry.workStartObservationCount > 0 ||
     entry.increaseObservationCount > 0 ||
-    entry.decreaseObservationCount > 0
+    entry.decreaseObservationCount > 0 ||
+    (entry.workStartRecentResponses?.length ?? 0) > 0 ||
+    (entry.increaseRecentResponses?.length ?? 0) > 0 ||
+    (entry.decreaseRecentResponses?.length ?? 0) > 0
   );
 }
 
@@ -252,6 +291,9 @@ export function cloneEntry(entry: StoredDynamicsEntry): StoredDynamicsEntry {
     increaseDetectedResponseCount: entry.increaseDetectedResponseCount ?? 0,
     decreaseObservationCount: entry.decreaseObservationCount ?? 0,
     decreaseDetectedResponseCount: entry.decreaseDetectedResponseCount ?? 0,
+    workStartRecentResponses: [...(entry.workStartRecentResponses ?? [])],
+    increaseRecentResponses: [...(entry.increaseRecentResponses ?? [])],
+    decreaseRecentResponses: [...(entry.decreaseRecentResponses ?? [])],
     updatedAt: entry.updatedAt,
   };
 }

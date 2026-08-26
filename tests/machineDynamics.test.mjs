@@ -11,8 +11,12 @@ import {
   loadDynamicsStore,
   mergeObservationIntoEntry,
   putDynamicsEntry,
+  RECENT_OPPORTUNITY_LIMIT,
   resetHrDynamicsForMachine,
   responseDetectionRate,
+  recentDetectedDelays,
+  recentDetectionRate,
+  delayConcentrationNearMedian,
 } from "../dist/machines/dynamics/index.js";
 import {
   applyCompletedWorkoutLearning,
@@ -614,7 +618,13 @@ test("an observable window with no persistent HR response is censored, not dropp
   const saved = applyCompletedWorkoutDynamics(summary, samples, storage);
   assert.equal(saved[0].workStartObservationCount, 1);
   assert.equal(saved[0].workStartDetectedResponseCount, 0);
+  assert.equal(saved[0].workStartRecentObservationCount, 1);
+  assert.equal(saved[0].workStartRecentDetectedResponseCount, 0);
   assert.deepEqual(saved[0].workStartDelaySampleCount, 0);
+  assert.deepEqual(
+    loadDynamicsStore(storage).entries[learningKey(vo2ShortKey)].workStartRecentResponses,
+    [null]
+  );
   assert.equal(responseDetectionRate(saved[0].workStartDetectedResponseCount, saved[0].workStartObservationCount), 0);
 });
 
@@ -650,6 +660,10 @@ test("three non-consecutive evaluable rolling seconds are not an observation opp
     loadDynamicsStore(storage).entries[learningKey(vo2ShortKey)]?.workStartObservationCount ?? 0,
     0
   );
+  assert.equal(
+    loadDynamicsStore(storage).entries[learningKey(vo2ShortKey)]?.workStartRecentResponses?.length ?? 0,
+    0
+  );
 });
 
 test("three consecutive evaluable rolling seconds make a window observable", () => {
@@ -664,6 +678,8 @@ test("three consecutive evaluable rolling seconds make a window observable", () 
   const saved = applyCompletedWorkoutDynamics(summary, samples, storage);
   assert.equal(saved[0].workStartObservationCount, 1);
   assert.equal(saved[0].workStartDetectedResponseCount, 0);
+  assert.equal(saved[0].workStartRecentObservationCount, 1);
+  assert.equal(saved[0].workStartRecentDetectedResponseCount, 0);
 });
 
 test("a truncated window too short to observe a response is not an opportunity", () => {
@@ -679,6 +695,8 @@ test("a truncated window too short to observe a response is not an opportunity",
   if (saved.length > 0) {
     assert.equal(saved[0].workStartObservationCount, 0);
     assert.equal(saved[0].workStartDetectedResponseCount, 0);
+    assert.equal(saved[0].workStartRecentObservationCount, 0);
+    assert.equal(saved[0].workStartRecentDetectedResponseCount, 0);
   }
 });
 
@@ -707,8 +725,12 @@ test("increase and decrease reliability counts stay independent", () => {
   const saved = applyCompletedWorkoutDynamics(summary, samples, storage)[0];
   assert.equal(saved.workStartObservationCount, 1);
   assert.equal(saved.workStartDetectedResponseCount, 1);
+  assert.equal(saved.workStartRecentObservationCount, 1);
+  assert.equal(saved.workStartRecentDetectedResponseCount, 1);
   assert.equal(saved.increaseObservationCount, 1);
   assert.equal(saved.increaseDetectedResponseCount, 0);
+  assert.equal(saved.increaseRecentObservationCount, 1);
+  assert.equal(saved.increaseRecentDetectedResponseCount, 0);
   assert.equal(saved.decreaseObservationCount, 0);
   assert.equal(responseDetectionRate(1, 2), 0.5);
   assert.equal(responseDetectionRate(10, 20), 0.5);
@@ -744,6 +766,9 @@ test("reliability counts do not use UI sample-count maxima and missing counts sa
   assert.equal(listed.workStartDetectedResponseCount, 10);
   assert.equal(listed.increaseObservationCount, 0);
   assert.equal(listed.increaseDetectedResponseCount, 0);
+  assert.equal(listed.workStartRecentObservationCount, 0);
+  assert.equal(listed.workStartRecentDetectedResponseCount, 0);
+  assert.deepEqual(loadDynamicsStore(storage).entries[learningKey(vo2ShortKey)].workStartRecentResponses, []);
   assert.equal(responseDetectionRate(listed.workStartDetectedResponseCount, listed.workStartObservationCount), 0.5);
 });
 
@@ -774,4 +799,75 @@ test("observation counts are lifetime and are not capped at the delay sample lim
   assert.equal(entry.workStartDelays.length, DYNAMICS_SAMPLE_LIMIT);
   assert.equal(entry.workStartObservationCount, 25);
   assert.equal(entry.workStartDetectedResponseCount, 25);
+  assert.equal(entry.workStartRecentResponses.length, RECENT_OPPORTUNITY_LIMIT);
+  assert.equal(entry.workStartRecentResponses.every((value) => value === 30), true);
+});
+
+function workStartObservation(overrides = {}) {
+  return {
+    machineId: "proform-smart-power-10",
+    machineProfileVersion: 1,
+    activity: "bike",
+    intent: "vo2_primer",
+    durationClass: "short",
+    phaseId: "work:1",
+    toResistance: 11,
+    changeElapsedSeconds: 100,
+    observationWindowSeconds: 60,
+    kind: "work_start",
+    windowObservable: true,
+    responseDetected: false,
+    ...overrides,
+  };
+}
+
+test("the 21st recent opportunity drops the oldest slot including a null", () => {
+  let entry = mergeObservationIntoEntry(undefined, workStartObservation(), "t");
+  for (let index = 0; index < 20; index++) {
+    entry = mergeObservationIntoEntry(
+      entry,
+      workStartObservation({ responseDetected: true, responseDelaySeconds: 30 }),
+      "t"
+    );
+  }
+  assert.equal(entry.workStartRecentResponses.length, RECENT_OPPORTUNITY_LIMIT);
+  assert.equal(entry.workStartRecentResponses[0], 30);
+  assert.equal(entry.workStartRecentResponses.includes(null), false);
+});
+
+test("recent detection rate uses the bounded opportunity population, not lifetime counts", () => {
+  const recent = [...Array(15).fill(null), 29, 30, 31, 28, 30];
+  const storage = memoryStorage({
+    [DYNAMICS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      entries: {
+        [learningKey(vo2ShortKey)]: {
+          workStartDelays: [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 29, 30, 31, 28, 30],
+          workStartHrDeltas: [],
+          increaseDelays: [],
+          increaseHrPerLevel: [],
+          decreaseDelays: [],
+          decreaseHrPerLevel: [],
+          workStartObservationCount: 120,
+          workStartDetectedResponseCount: 100,
+          workStartRecentResponses: recent,
+          updatedAt: "t",
+        },
+      },
+    }),
+  });
+  const listed = listHrDynamics("proform-smart-power-10", storage)[0];
+  assert.equal(listed.workStartObservationCount, 120);
+  assert.equal(listed.workStartDetectedResponseCount, 100);
+  assert.equal(listed.workStartDelaySampleCount, 20);
+  assert.equal(listed.workStartRecentObservationCount, 20);
+  assert.equal(listed.workStartRecentDetectedResponseCount, 5);
+  assert.equal(recentDetectionRate(recent), 0.25);
+  assert.deepEqual(recentDetectedDelays(recent), [29, 30, 31, 28, 30]);
+  assert.equal(responseDetectionRate(listed.workStartDetectedResponseCount, listed.workStartObservationCount), 100 / 120);
+});
+
+test("delay concentration near the median is independent of detection rate", () => {
+  assert.equal(delayConcentrationNearMedian([20, 21, 22, 23, 24, 25, 26, 50, 51, 52], 10), 0.7);
+  assert.equal(delayConcentrationNearMedian([], 10), undefined);
 });

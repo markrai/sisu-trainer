@@ -7,6 +7,7 @@ export type { WorkDurationClass };
 export const DYNAMICS_STORAGE_KEY = "sisu_trainer_hr_dynamics";
 export const DYNAMICS_STORE_VERSION = 1 as const;
 export const DYNAMICS_SAMPLE_LIMIT = 20;
+export const RECENT_OPPORTUNITY_LIMIT = 20;
 export const RESPONSE_SEARCH_SECONDS = 90;
 export const RESPONSE_ONSET_BPM = 3;
 export const RESPONSE_PERSISTENCE_SECONDS = 3;
@@ -21,6 +22,7 @@ export const MAX_RESISTANCE_STEP = 2;
 export const MIN_OBSERVABLE_WINDOW_SECONDS = 15;
 
 export type HrResponseKind = "work_start" | "resistance_increase" | "resistance_decrease";
+export type RecentHrResponse = number | null;
 
 export interface MachineHrResponseObservation {
   machineId: MachineId;
@@ -57,6 +59,9 @@ export interface StoredDynamicsEntry {
   increaseDetectedResponseCount: number;
   decreaseObservationCount: number;
   decreaseDetectedResponseCount: number;
+  workStartRecentResponses: RecentHrResponse[];
+  increaseRecentResponses: RecentHrResponse[];
+  decreaseRecentResponses: RecentHrResponse[];
   updatedAt: string;
 }
 
@@ -89,6 +94,12 @@ export interface LearnedHrDynamics {
   increaseDetectedResponseCount: number;
   decreaseObservationCount: number;
   decreaseDetectedResponseCount: number;
+  workStartRecentObservationCount: number;
+  workStartRecentDetectedResponseCount: number;
+  increaseRecentObservationCount: number;
+  increaseRecentDetectedResponseCount: number;
+  decreaseRecentObservationCount: number;
+  decreaseRecentDetectedResponseCount: number;
   timingPersonalized?: boolean;
   updatedAt: string;
 }

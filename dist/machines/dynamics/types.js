@@ -1,6 +1,7 @@
 export const DYNAMICS_STORAGE_KEY = "sisu_trainer_hr_dynamics";
 export const DYNAMICS_STORE_VERSION = 1;
 export const DYNAMICS_SAMPLE_LIMIT = 20;
+export const RECENT_OPPORTUNITY_LIMIT = 20;
 export const RESPONSE_SEARCH_SECONDS = 90;
 export const RESPONSE_ONSET_BPM = 3;
 export const RESPONSE_PERSISTENCE_SECONDS = 3;

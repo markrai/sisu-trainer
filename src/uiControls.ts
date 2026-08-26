@@ -852,9 +852,29 @@ function signedBpm(value: number): string {
   return `${value > 0 ? "+" : ""}${value} bpm`;
 }
 
+function reliabilityRows(
+  observationCount: number,
+  detectedCount: number,
+  recentObservationCount: number,
+  recentDetectedCount: number,
+  fallbackLabel: string,
+  fallbackCount: number
+): string[] {
+  const rows: string[] = [];
+  if (observationCount > 0) {
+    rows.push(metricRow("Response observed", `${detectedCount} of ${observationCount}`));
+  } else if (fallbackCount > 0) {
+    rows.push(metricRow(fallbackLabel, sampleCountLabel(fallbackCount)));
+  }
+  if (recentObservationCount > 0) {
+    rows.push(metricRow("Recent", `${recentDetectedCount} of ${recentObservationCount}`));
+  }
+  return rows;
+}
+
 function renderHrDynamicsGroup(entry: LearnedHrDynamics): string {
   const blocks: string[] = [];
-  if (entry.workStartSampleCount > 0 || entry.workStartObservationCount > 0) {
+  if (entry.workStartSampleCount > 0 || entry.workStartObservationCount > 0 || entry.workStartRecentObservationCount > 0) {
     const rows: string[] = ['<div class="hr-dynamics-subhead">Work start</div>'];
     if (entry.medianWorkStartDelaySeconds !== undefined) {
       rows.push(metricRow("Typical rise delay", `${entry.medianWorkStartDelaySeconds} s`));
@@ -862,19 +882,19 @@ function renderHrDynamicsGroup(entry: LearnedHrDynamics): string {
     if (entry.medianWorkStartHrDelta !== undefined) {
       rows.push(metricRow("Observed HR rise", signedBpm(entry.medianWorkStartHrDelta)));
     }
-    if (entry.workStartObservationCount > 0) {
-      rows.push(
-        metricRow(
-          "Response observed",
-          `${entry.workStartDetectedResponseCount} of ${entry.workStartObservationCount}`
-        )
-      );
-    } else {
-      rows.push(metricRow("Based on", sampleCountLabel(entry.workStartSampleCount)));
-    }
+    rows.push(
+      ...reliabilityRows(
+        entry.workStartObservationCount,
+        entry.workStartDetectedResponseCount,
+        entry.workStartRecentObservationCount,
+        entry.workStartRecentDetectedResponseCount,
+        "Based on",
+        entry.workStartSampleCount
+      )
+    );
     blocks.push(rows.join(""));
   }
-  if (entry.increaseSampleCount > 0 || entry.increaseObservationCount > 0) {
+  if (entry.increaseSampleCount > 0 || entry.increaseObservationCount > 0 || entry.increaseRecentObservationCount > 0) {
     const rows: string[] = ['<div class="hr-dynamics-subhead">+1 resistance</div>'];
     if (entry.medianIncreaseDelaySeconds !== undefined) {
       rows.push(metricRow("Typical response delay", `${entry.medianIncreaseDelaySeconds} s`));
@@ -882,16 +902,19 @@ function renderHrDynamicsGroup(entry: LearnedHrDynamics): string {
     if (entry.medianIncreaseHrDeltaPerStep !== undefined) {
       rows.push(metricRow("Observed HR change", signedBpm(entry.medianIncreaseHrDeltaPerStep)));
     }
-    if (entry.increaseObservationCount > 0) {
-      rows.push(
-        metricRow("Response observed", `${entry.increaseDetectedResponseCount} of ${entry.increaseObservationCount}`)
-      );
-    } else {
-      rows.push(metricRow("Samples", sampleCountLabel(entry.increaseSampleCount)));
-    }
+    rows.push(
+      ...reliabilityRows(
+        entry.increaseObservationCount,
+        entry.increaseDetectedResponseCount,
+        entry.increaseRecentObservationCount,
+        entry.increaseRecentDetectedResponseCount,
+        "Samples",
+        entry.increaseSampleCount
+      )
+    );
     blocks.push(rows.join(""));
   }
-  if (entry.decreaseSampleCount > 0 || entry.decreaseObservationCount > 0) {
+  if (entry.decreaseSampleCount > 0 || entry.decreaseObservationCount > 0 || entry.decreaseRecentObservationCount > 0) {
     const rows: string[] = ['<div class="hr-dynamics-subhead">-1 resistance</div>'];
     if (entry.medianDecreaseDelaySeconds !== undefined) {
       rows.push(metricRow("Typical response delay", `${entry.medianDecreaseDelaySeconds} s`));
@@ -899,13 +922,16 @@ function renderHrDynamicsGroup(entry: LearnedHrDynamics): string {
     if (entry.medianDecreaseHrDeltaPerStep !== undefined) {
       rows.push(metricRow("Observed HR change", signedBpm(entry.medianDecreaseHrDeltaPerStep)));
     }
-    if (entry.decreaseObservationCount > 0) {
-      rows.push(
-        metricRow("Response observed", `${entry.decreaseDetectedResponseCount} of ${entry.decreaseObservationCount}`)
-      );
-    } else {
-      rows.push(metricRow("Samples", sampleCountLabel(entry.decreaseSampleCount)));
-    }
+    rows.push(
+      ...reliabilityRows(
+        entry.decreaseObservationCount,
+        entry.decreaseDetectedResponseCount,
+        entry.decreaseRecentObservationCount,
+        entry.decreaseRecentDetectedResponseCount,
+        "Samples",
+        entry.decreaseSampleCount
+      )
+    );
     blocks.push(rows.join(""));
   }
   if (blocks.length === 0) return "";
@@ -928,7 +954,10 @@ function renderHrDynamicsPanel() {
     entry.decreaseSampleCount > 0 ||
     entry.workStartObservationCount > 0 ||
     entry.increaseObservationCount > 0 ||
-    entry.decreaseObservationCount > 0
+    entry.decreaseObservationCount > 0 ||
+    entry.workStartRecentObservationCount > 0 ||
+    entry.increaseRecentObservationCount > 0 ||
+    entry.decreaseRecentObservationCount > 0
   ) : [];
   if (!machineId || entries.length === 0) {
     section.hidden = true;

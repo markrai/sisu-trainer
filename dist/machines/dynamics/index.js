@@ -1,11 +1,12 @@
 import { getHrSamples } from "../../workoutStorage.js";
 import { learningKey, workDurationClass } from "../learning/types.js";
 import { deriveHrDynamicsObservations, observationContributesToStore, observationDelayIsSane, observationHrDeltaIsSane, } from "./derive.js";
-import { appendBoundedSample, cloneEntry, emptyDynamicsEntry, entryHasDynamicsSamples, getDynamicsEntry, loadDynamicsStore, putDynamicsEntry, toPublicDynamics, } from "./storage.js";
+import { appendBoundedRecentResponse, appendBoundedSample, cloneEntry, emptyDynamicsEntry, entryHasDynamicsSamples, getDynamicsEntry, loadDynamicsStore, putDynamicsEntry, toPublicDynamics, } from "./storage.js";
 import { derivePersonalizedMachineTiming } from "./timing.js";
-export { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, MAX_RESISTANCE_STEP, MIN_OBSERVABLE_WINDOW_SECONDS, RESPONSE_SEARCH_SECONDS, } from "./types.js";
+export { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, MAX_RESISTANCE_STEP, MIN_OBSERVABLE_WINDOW_SECONDS, RECENT_OPPORTUNITY_LIMIT, RESPONSE_SEARCH_SECONDS, } from "./types.js";
 export { deriveHrDynamicsObservations, observationContributesToStore, observationHasAggregatableMetric, observationPassesSanity, observationWindowIsObservable, responseDetectionRate, workoutEligibleForHrDynamics, } from "./derive.js";
-export { appendBoundedSample, emptyDynamicsStore, getDynamicsEntry, listHrDynamics, loadDynamicsStore, putDynamicsEntry, resetHrDynamicsForMachine, saveDynamicsStore, sanitizeDynamicsStore, } from "./storage.js";
+export { delayConcentrationNearMedian, recentDetectedCount, recentDetectedDelays, recentDetectionRate, recentObservationCount, } from "./recent.js";
+export { appendBoundedRecentResponse, appendBoundedSample, emptyDynamicsStore, getDynamicsEntry, listHrDynamics, loadDynamicsStore, putDynamicsEntry, resetHrDynamicsForMachine, saveDynamicsStore, sanitizeDynamicsStore, } from "./storage.js";
 export { DEFAULT_LONG_COOLDOWN_SECONDS, DEFAULT_LONG_INITIAL_SECONDS, DEFAULT_MEDIUM_INITIAL_SECONDS, delayMedianAbsoluteDeviation, deriveLongCooldownSeconds, deriveLongInitialEvaluationSeconds, deriveMediumInitialEvaluationSeconds, derivePersonalizedMachineTiming, hasActiveTimingPersonalization, MAX_DELAY_MAD_SECONDS, MIN_TRUSTED_DELAY_SAMPLES, trustedDelayMedian, } from "./timing.js";
 function perLevelDelta(observation) {
     if (observation.hrDelta === undefined || observation.resistanceDelta === undefined)
@@ -28,6 +29,7 @@ export function mergeObservationIntoEntry(previous, observation, updatedAt) {
             next.workStartObservationCount += 1;
             if (detected)
                 next.workStartDetectedResponseCount += 1;
+            next.workStartRecentResponses = appendBoundedRecentResponse(next.workStartRecentResponses, detected && delay !== undefined ? delay : null);
         }
         if (delay !== undefined)
             next.workStartDelays = appendBoundedSample(next.workStartDelays, delay);
@@ -40,6 +42,7 @@ export function mergeObservationIntoEntry(previous, observation, updatedAt) {
             next.increaseObservationCount += 1;
             if (detected)
                 next.increaseDetectedResponseCount += 1;
+            next.increaseRecentResponses = appendBoundedRecentResponse(next.increaseRecentResponses, detected && delay !== undefined ? delay : null);
         }
         if (delay !== undefined)
             next.increaseDelays = appendBoundedSample(next.increaseDelays, delay);
@@ -51,6 +54,7 @@ export function mergeObservationIntoEntry(previous, observation, updatedAt) {
         next.decreaseObservationCount += 1;
         if (detected)
             next.decreaseDetectedResponseCount += 1;
+        next.decreaseRecentResponses = appendBoundedRecentResponse(next.decreaseRecentResponses, detected && delay !== undefined ? delay : null);
     }
     if (delay !== undefined)
         next.decreaseDelays = appendBoundedSample(next.decreaseDelays, delay);

@@ -2,7 +2,8 @@ import { integerMedian } from "../hrQuality.js";
 import { getMachineDefinition, isMachineId } from "../registry.js";
 import { learningKey, parseLearningKey } from "../learning/types.js";
 import { hasActiveTimingPersonalization } from "./timing.js";
-import { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, RESPONSE_SEARCH_SECONDS, } from "./types.js";
+import { DYNAMICS_SAMPLE_LIMIT, DYNAMICS_STORAGE_KEY, DYNAMICS_STORE_VERSION, MAX_ABS_HR_DELTA, MAX_ABS_HR_PER_LEVEL, RECENT_OPPORTUNITY_LIMIT, RESPONSE_SEARCH_SECONDS, } from "./types.js";
+import { recentDetectedCount, recentObservationCount } from "./recent.js";
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
 }
@@ -20,6 +21,9 @@ function emptyEntry(updatedAt) {
         increaseDetectedResponseCount: 0,
         decreaseObservationCount: 0,
         decreaseDetectedResponseCount: 0,
+        workStartRecentResponses: [],
+        increaseRecentResponses: [],
+        decreaseRecentResponses: [],
         updatedAt,
     };
 }
@@ -47,6 +51,20 @@ function sanitizeCount(value) {
 }
 function sanitizeDetectedCount(detected, observed) {
     return Math.min(sanitizeCount(detected), observed);
+}
+function sanitizeRecentResponses(value) {
+    if (!Array.isArray(value))
+        return [];
+    const clean = [];
+    for (const item of value) {
+        if (item === null) {
+            clean.push(null);
+            continue;
+        }
+        if (isFiniteNumber(item) && delayAllowed(item))
+            clean.push(item);
+    }
+    return clean.slice(-RECENT_OPPORTUNITY_LIMIT);
 }
 function delayAllowed(value) {
     return Number.isInteger(value) && value >= 0 && value <= RESPONSE_SEARCH_SECONDS;
@@ -76,6 +94,9 @@ function sanitizeStoredEntry(value) {
         increaseDetectedResponseCount: sanitizeDetectedCount(raw.increaseDetectedResponseCount, sanitizeCount(raw.increaseObservationCount)),
         decreaseObservationCount: sanitizeCount(raw.decreaseObservationCount),
         decreaseDetectedResponseCount: sanitizeDetectedCount(raw.decreaseDetectedResponseCount, sanitizeCount(raw.decreaseObservationCount)),
+        workStartRecentResponses: sanitizeRecentResponses(raw.workStartRecentResponses),
+        increaseRecentResponses: sanitizeRecentResponses(raw.increaseRecentResponses),
+        decreaseRecentResponses: sanitizeRecentResponses(raw.decreaseRecentResponses),
         updatedAt: raw.updatedAt,
     };
 }
@@ -119,7 +140,12 @@ export function appendBoundedSample(values, value) {
     const next = [...values, value];
     return next.length > DYNAMICS_SAMPLE_LIMIT ? next.slice(-DYNAMICS_SAMPLE_LIMIT) : next;
 }
+export function appendBoundedRecentResponse(values, value) {
+    const next = [...values, value];
+    return next.length > RECENT_OPPORTUNITY_LIMIT ? next.slice(-RECENT_OPPORTUNITY_LIMIT) : next;
+}
 export function toPublicDynamics(parts, entry) {
+    var _a, _b, _c, _d, _e, _f;
     const listed = {
         ...parts,
         workStartSampleCount: Math.max(entry.workStartDelays.length, entry.workStartHrDeltas.length),
@@ -140,6 +166,12 @@ export function toPublicDynamics(parts, entry) {
         increaseDetectedResponseCount: entry.increaseDetectedResponseCount,
         decreaseObservationCount: entry.decreaseObservationCount,
         decreaseDetectedResponseCount: entry.decreaseDetectedResponseCount,
+        workStartRecentObservationCount: recentObservationCount((_a = entry.workStartRecentResponses) !== null && _a !== void 0 ? _a : []),
+        workStartRecentDetectedResponseCount: recentDetectedCount((_b = entry.workStartRecentResponses) !== null && _b !== void 0 ? _b : []),
+        increaseRecentObservationCount: recentObservationCount((_c = entry.increaseRecentResponses) !== null && _c !== void 0 ? _c : []),
+        increaseRecentDetectedResponseCount: recentDetectedCount((_d = entry.increaseRecentResponses) !== null && _d !== void 0 ? _d : []),
+        decreaseRecentObservationCount: recentObservationCount((_e = entry.decreaseRecentResponses) !== null && _e !== void 0 ? _e : []),
+        decreaseRecentDetectedResponseCount: recentDetectedCount((_f = entry.decreaseRecentResponses) !== null && _f !== void 0 ? _f : []),
         updatedAt: entry.updatedAt,
     };
     if (hasActiveTimingPersonalization(entry, parts.durationClass))
@@ -187,6 +219,7 @@ export function resetHrDynamicsForMachine(machineId, storage) {
     return saveDynamicsStore({ version: DYNAMICS_STORE_VERSION, entries }, storage);
 }
 export function entryHasDynamicsSamples(entry) {
+    var _a, _b, _c, _d, _e, _f;
     return (entry.workStartDelays.length > 0 ||
         entry.workStartHrDeltas.length > 0 ||
         entry.increaseDelays.length > 0 ||
@@ -195,10 +228,13 @@ export function entryHasDynamicsSamples(entry) {
         entry.decreaseHrPerLevel.length > 0 ||
         entry.workStartObservationCount > 0 ||
         entry.increaseObservationCount > 0 ||
-        entry.decreaseObservationCount > 0);
+        entry.decreaseObservationCount > 0 ||
+        ((_b = (_a = entry.workStartRecentResponses) === null || _a === void 0 ? void 0 : _a.length) !== null && _b !== void 0 ? _b : 0) > 0 ||
+        ((_d = (_c = entry.increaseRecentResponses) === null || _c === void 0 ? void 0 : _c.length) !== null && _d !== void 0 ? _d : 0) > 0 ||
+        ((_f = (_e = entry.decreaseRecentResponses) === null || _e === void 0 ? void 0 : _e.length) !== null && _f !== void 0 ? _f : 0) > 0);
 }
 export function cloneEntry(entry) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     return {
         workStartDelays: [...entry.workStartDelays],
         workStartHrDeltas: [...entry.workStartHrDeltas],
@@ -212,6 +248,9 @@ export function cloneEntry(entry) {
         increaseDetectedResponseCount: (_d = entry.increaseDetectedResponseCount) !== null && _d !== void 0 ? _d : 0,
         decreaseObservationCount: (_e = entry.decreaseObservationCount) !== null && _e !== void 0 ? _e : 0,
         decreaseDetectedResponseCount: (_f = entry.decreaseDetectedResponseCount) !== null && _f !== void 0 ? _f : 0,
+        workStartRecentResponses: [...((_g = entry.workStartRecentResponses) !== null && _g !== void 0 ? _g : [])],
+        increaseRecentResponses: [...((_h = entry.increaseRecentResponses) !== null && _h !== void 0 ? _h : [])],
+        decreaseRecentResponses: [...((_j = entry.decreaseRecentResponses) !== null && _j !== void 0 ? _j : [])],
         updatedAt: entry.updatedAt,
     };
 }
