@@ -10,8 +10,8 @@ Equipment selection is stored separately from the physiological profile under th
 }
 ```
 
-The machine registry currently contains only ProForm SMART Power 10.0 profile version 1. Its resistance-to-watts table is an empirical approximation measured near 70 RPM, not manufacturer watt data. Automatic guidance is limited to resistance 1–15. Working guidance targets 70 RPM; recovery uses approximately 60–65 RPM and omits estimated watts.
+The machine registry currently contains only ProForm SMART Power 10.0 profile version 1. Its resistance-to-watts table is an empirical approximation measured near 70 RPM, not manufacturer watt data. Automatic guidance is limited to resistance 1–15. Working guidance targets 70 RPM; recovery uses 63 RPM and omits estimated watts.
 
-Machine policy is isolated in `src/machines/proformSmartPower10.ts`. The generic runtime maintains a bounded 15-second HR buffer, transient controller state, duplicate-free voice events, and a trace that appends only when resistance, cadence, or estimated watts changes. Transient state resets when a workout starts or restarts.
+Machine policy is isolated in `src/machines/proformSmartPower10.ts`. Heart-rate adaptation uses a rolling median and requires at least five distinct valid samples spanning at least four seconds. Short work intervals (≤75s) adapt the next repetition only; if the final in-phase tick is missed, the runtime finalizes from the completed work window at the phase boundary without speaking or tracing the internal next-resistance decision. The generic runtime maintains a bounded 15-second HR buffer, transient controller state, duplicate-free voice events, and a trace that appends only when the active recommendation’s resistance, cadence, or estimated watts changes. Transient state resets when a workout starts or restarts.
 
 Local workout summaries can include `machine_id`, `machine_profile_version`, and `machine_guidance_trace`. This repository contains no SISU server schema or evidence that `/workout/ingest` accepts arbitrary summary fields. The SISU client therefore removes those three local-only fields before sending the existing network payload.

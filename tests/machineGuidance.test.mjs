@@ -70,11 +70,17 @@ test("registry resolves only the supported ProForm bike", () => {
 });
 
 test("empirical calibration is limited to resistance 1 through 15", () => {
-  assert.equal(getEstimatedWattsAt70Rpm(1), 66);
-  assert.equal(getEstimatedWattsAt70Rpm(8), 108);
-  assert.equal(getEstimatedWattsAt70Rpm(15), 201);
+  const expected = {
+    1: 66, 2: 69, 3: 70, 4: 78, 5: 82, 6: 86, 7: 97,
+    8: 108, 9: 114, 10: 123, 11: 134, 12: 147, 13: 156, 14: 180, 15: 201,
+  };
+  for (const [resistance, watts] of Object.entries(expected)) {
+    assert.equal(getEstimatedWattsAt70Rpm(Number(resistance)), watts);
+  }
   assert.equal(getEstimatedWattsAt70Rpm(16), undefined);
+  assert.equal(getEstimatedWattsAt70Rpm(22), undefined);
   assert.equal(clampAutomaticResistance(16), 15);
+  assert.equal(clampAutomaticResistance(0), 1);
 });
 
 test("recovery starts easy, never reacts upward to low HR, and can reduce to one", () => {
@@ -431,6 +437,18 @@ test("equipment selection round-trips independently", () => {
   assert.equal(storage.getItem(EQUIPMENT_STORAGE_KEY), '{"bike":"proform-smart-power-10"}');
   setSelectedMachine("bike", undefined, storage);
   assert.deepEqual(getEquipmentSelection(storage), {});
+});
+
+test("invalid equipment machine IDs are sanitized and profile storage is untouched", () => {
+  const storage = memoryStorage({
+    [EQUIPMENT_STORAGE_KEY]: JSON.stringify({ bike: "not-a-real-machine", elliptical: "proform-smart-power-10" }),
+    profile: JSON.stringify({ maxHr: 190, restingHr: 55 }),
+  });
+  assert.deepEqual(getEquipmentSelection(storage), {});
+  assert.equal(storage.getItem("profile"), JSON.stringify({ maxHr: 190, restingHr: 55 }));
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  assert.deepEqual(getEquipmentSelection(storage), { bike: "proform-smart-power-10" });
+  assert.equal(storage.getItem("profile"), JSON.stringify({ maxHr: 190, restingHr: 55 }));
 });
 
 test("runtime emits one voice event and trace entry per changed recommendation", () => {
@@ -792,7 +810,10 @@ test("workout definitions use activities and structured interval kinds", async (
   const serialized = JSON.stringify(data);
   assert.equal(serialized.includes('"machine"'), false);
   assert.equal(serialized.includes("Bike or Elliptical"), false);
+  assert.equal(serialized.includes("Combo Machine"), false);
   assert.deepEqual(data.weekly_plan[0].activities, ["bike"]);
   assert.equal(data.weekly_plan[0].main_set.intervals[0].kind, "work");
   assert.equal(data.weekly_plan[0].main_set.intervals[1].kind, "recovery");
+  const sunday = data.weekly_plan.find((day) => day.day === "Sunday");
+  assert.deepEqual(sunday?.activities, ["bike", "elliptical"]);
 });
