@@ -13,7 +13,7 @@ export function validDistinctHr(samples) {
         .sort((a, b) => a[0] - b[0])
         .map(([elapsedSeconds, bpm]) => ({ elapsedSeconds, bpm }));
 }
-export function qualifiedHrMedian(samples) {
+export function qualifiedHrMedianDetails(samples) {
     const distinct = validDistinctHr(samples);
     if (distinct.length < MIN_HR_SAMPLES)
         return undefined;
@@ -22,7 +22,16 @@ export function qualifiedHrMedian(samples) {
         return undefined;
     const values = distinct.map((sample) => sample.bpm).sort((a, b) => a - b);
     const middle = Math.floor(values.length / 2);
-    return values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+    const median = values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+    return {
+        median,
+        sampleCount: distinct.length,
+        windowSpanSeconds: span,
+    };
+}
+export function qualifiedHrMedian(samples) {
+    var _a;
+    return (_a = qualifiedHrMedianDetails(samples)) === null || _a === void 0 ? void 0 : _a.median;
 }
 export function integerMedian(values) {
     if (values.length === 0)

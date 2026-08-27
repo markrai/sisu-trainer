@@ -1,6 +1,7 @@
 import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommendation } from "./guidance.js";
 import { lookupLearnedWorkStart } from "./learning/index.js";
 import { lookupPersonalizedTiming } from "./dynamics/index.js";
+import { createMachineDecisionAuditState, observeMachineDecisions } from "./audit/index.js";
 import { getMachineDefinition } from "./registry.js";
 import { getSelectedMachineId } from "./selection.js";
 function newRuntimeState(sessionId) {
@@ -9,6 +10,7 @@ function newRuntimeState(sessionId) {
         guidanceState: createMachineGuidanceState(),
         recentHeartRates: [],
         trace: [],
+        decisionAudit: createMachineDecisionAuditState(),
     };
 }
 let runtime = newRuntimeState(null);
@@ -97,6 +99,7 @@ export function updateMachineGuidanceRuntime(input, storage) {
         runtime.trace = [];
         runtime.lastPhaseId = undefined;
         runtime.pendingShortWork = undefined;
+        runtime.decisionAudit = createMachineDecisionAuditState();
     }
     const leavingShortWork = runtime.pendingShortWork !== undefined &&
         (input.phaseId !== runtime.pendingShortWork.phaseId || input.phaseKind !== "work");
@@ -158,6 +161,11 @@ export function updateMachineGuidanceRuntime(input, storage) {
     runtime.guidanceState = result.state;
     runtime.previousGuidance = result.guidance;
     runtime.lastPhaseId = input.phaseId;
+    runtime.decisionAudit = observeMachineDecisions(runtime.decisionAudit, input.workoutElapsedSeconds, {
+        priorWorkEvaluation: result.priorWorkEvaluation,
+        workPhaseStarted: result.workPhaseStarted,
+        workEvaluation: result.workEvaluation,
+    });
     if (input.phaseKind === "work" && input.phaseDurationSeconds <= 75) {
         runtime.pendingShortWork = {
             phaseId: input.phaseId,
@@ -200,5 +208,8 @@ export function getMachineUsageSnapshot(sessionId) {
         machineId: machine.id,
         profileVersion: machine.profileVersion,
         guidanceTrace: runtime.trace.map((entry) => ({ ...entry })),
+        decisionAudit: runtime.decisionAudit.entries.length > 0
+            ? runtime.decisionAudit.entries.map((entry) => ({ ...entry }))
+            : undefined,
     };
 }

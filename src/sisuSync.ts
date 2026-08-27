@@ -274,6 +274,7 @@ function buildSisuWorkoutPayload(summary: any) {
   delete payload.machine_id;
   delete payload.machine_profile_version;
   delete payload.machine_guidance_trace;
+  delete payload.machine_decision_audit;
   delete payload.activity;
   delete payload.shadow_predictions;
   delete payload.shadow_resistance_predictions;

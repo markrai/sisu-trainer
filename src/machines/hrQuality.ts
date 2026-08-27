@@ -18,14 +18,29 @@ export function validDistinctHr(samples: readonly HrQualitySample[]): HrQualityS
     .map(([elapsedSeconds, bpm]) => ({ elapsedSeconds, bpm }));
 }
 
-export function qualifiedHrMedian(samples: readonly HrQualitySample[]): number | undefined {
+export interface QualifiedHrMedian {
+  median: number;
+  sampleCount: number;
+  windowSpanSeconds: number;
+}
+
+export function qualifiedHrMedianDetails(samples: readonly HrQualitySample[]): QualifiedHrMedian | undefined {
   const distinct = validDistinctHr(samples);
   if (distinct.length < MIN_HR_SAMPLES) return undefined;
   const span = distinct[distinct.length - 1].elapsedSeconds - distinct[0].elapsedSeconds;
   if (span < MIN_HR_SPAN_SECONDS) return undefined;
   const values = distinct.map((sample) => sample.bpm).sort((a, b) => a - b);
   const middle = Math.floor(values.length / 2);
-  return values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+  const median = values.length % 2 === 0 ? (values[middle - 1] + values[middle]) / 2 : values[middle];
+  return {
+    median,
+    sampleCount: distinct.length,
+    windowSpanSeconds: span,
+  };
+}
+
+export function qualifiedHrMedian(samples: readonly HrQualitySample[]): number | undefined {
+  return qualifiedHrMedianDetails(samples)?.median;
 }
 
 export function integerMedian(values: number[]): number | undefined {

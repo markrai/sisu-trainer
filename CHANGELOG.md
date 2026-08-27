@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.8] - 2026-08-27
+
+### Added
+
+- **Controller decision audit** - Local workout summaries can include a bounded
+  `machine_decision_audit` of work-phase scheduling, HOLD/increase/decrease
+  evaluations, and insufficient-HR deferrals without changing live guidance.
+
 ## [0.10.7] - 2026-08-27
 
 ### Added

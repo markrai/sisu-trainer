@@ -1,7 +1,21 @@
 import type { Activity, WorkoutPhaseKind } from "../types.js";
 import type { MachineId } from "./trace.js";
+import type {
+  MachineDecision,
+  MachineDecisionConstraint,
+  MachineDecisionReason,
+  MachineHeartRateAssessment,
+  MachineWorkDurationBand,
+} from "./audit/types.js";
 
 export type { MachineId, MachineGuidanceTraceEntry } from "./trace.js";
+export type {
+  MachineDecision,
+  MachineDecisionConstraint,
+  MachineDecisionReason,
+  MachineHeartRateAssessment,
+  MachineWorkDurationBand,
+} from "./audit/types.js";
 
 export interface MachineDefinition {
   id: MachineId;
@@ -54,6 +68,55 @@ export interface PersonalizedWorkTiming {
   decreaseCooldownSeconds?: number;
 }
 
+export interface WorkResistanceClassification {
+  assessment: MachineHeartRateAssessment;
+  decision: MachineDecision;
+  constraint: MachineDecisionConstraint;
+  decisionReason: MachineDecisionReason;
+  resistanceBefore: number;
+  resistanceAfter: number;
+}
+
+export interface WorkPhaseStartObservation {
+  phaseKind: WorkoutPhaseKind;
+  phaseId: string;
+  intervalIndex?: number;
+  phaseElapsedSeconds: number;
+  phaseDurationSeconds: number;
+  resistance: number;
+  targetHeartRateMin?: number;
+  targetHeartRateMax?: number;
+  initialEvaluationWaitSeconds: number;
+  nextEligiblePhaseElapsedSeconds: number;
+  personalizedTiming?: PersonalizedWorkTiming;
+}
+
+export interface WorkEvaluationObservation {
+  deferred: boolean;
+  durationBand: MachineWorkDurationBand;
+  phaseKind: WorkoutPhaseKind;
+  phaseId: string;
+  intervalIndex?: number;
+  phaseElapsedSeconds: number;
+  phaseDurationSeconds: number;
+  targetHeartRateMin?: number;
+  targetHeartRateMax?: number;
+  representativeHeartRate?: number;
+  representativeSampleCount?: number;
+  representativeWindowSpanSeconds?: number;
+  resistanceBefore: number;
+  resistanceAfter: number;
+  heartRateAssessment?: MachineHeartRateAssessment;
+  decision?: MachineDecision;
+  constraint?: MachineDecisionConstraint;
+  decisionReason?: MachineDecisionReason;
+  waitBeforeEvaluationSeconds?: number;
+  nextEvaluationWaitSeconds?: number;
+  nextEligiblePhaseElapsedSeconds?: number;
+  eligibleSincePhaseElapsedSeconds?: number;
+  personalizedTiming?: PersonalizedWorkTiming;
+}
+
 export interface MachineGuidance {
   machineId: MachineId;
   resistance?: number;
@@ -82,6 +145,9 @@ export interface MachineGuidanceState {
 export interface MachineGuidanceResult {
   guidance: MachineGuidance;
   state: MachineGuidanceState;
+  workPhaseStarted?: WorkPhaseStartObservation;
+  workEvaluation?: WorkEvaluationObservation;
+  priorWorkEvaluation?: WorkEvaluationObservation;
 }
 
 export interface MachineAdapter {

@@ -1,3 +1,4 @@
+import type { MachineDecisionAuditEntry } from "./machines/audit/types.js";
 import type { MachineGuidanceTraceEntry, MachineId } from "./machines/trace.js";
 
 export type DayName =
@@ -111,6 +112,7 @@ export interface WorkoutSummary {
   machine_id?: MachineId;
   machine_profile_version?: number;
   machine_guidance_trace?: MachineGuidanceTraceEntry[];
+  machine_decision_audit?: MachineDecisionAuditEntry[];
 }
 
 export interface SisuSettings {

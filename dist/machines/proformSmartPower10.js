@@ -1,4 +1,8 @@
-import { qualifiedHrMedian } from "./hrQuality.js";
+import { qualifiedHrMedianDetails } from "./hrQuality.js";
+export const TARGET_HR_ADJUST_MARGIN_BPM = 3;
+export const HIGH_RESISTANCE_INCREASE_DEFICIT_BPM = 5;
+export const HIGH_RESISTANCE_INCREASE_FROM = 13;
+export const HOLD_EVALUATION_COOLDOWN_SECONDS = 60;
 export const estimatedWattsAt70Rpm = Object.freeze({
     1: 66,
     2: 69,
@@ -22,8 +26,68 @@ export function getEstimatedWattsAt70Rpm(resistance) {
 export function clampAutomaticResistance(resistance) {
     return Math.max(1, Math.min(15, Math.round(resistance)));
 }
+function rollingMedianDetails(context) {
+    return qualifiedHrMedianDetails(context.recentHeartRates);
+}
 function rollingMedian(context) {
-    return qualifiedHrMedian(context.recentHeartRates);
+    var _a;
+    return (_a = rollingMedianDetails(context)) === null || _a === void 0 ? void 0 : _a.median;
+}
+export function classifyWorkResistanceAdjustment(median, min, max, currentResistance) {
+    if (median >= max + TARGET_HR_ADJUST_MARGIN_BPM) {
+        const resistanceAfter = clampAutomaticResistance(currentResistance - 1);
+        const blocked = resistanceAfter === currentResistance;
+        return {
+            assessment: "high",
+            decision: blocked ? "hold" : "decrease",
+            constraint: blocked ? "r1_floor" : "none",
+            decisionReason: blocked ? "lower_resistance_bound" : "above_target",
+            resistanceBefore: currentResistance,
+            resistanceAfter,
+        };
+    }
+    const requiredDeficit = currentResistance >= HIGH_RESISTANCE_INCREASE_FROM
+        ? HIGH_RESISTANCE_INCREASE_DEFICIT_BPM
+        : TARGET_HR_ADJUST_MARGIN_BPM;
+    if (median <= min - requiredDeficit && currentResistance < 15) {
+        return {
+            assessment: "low",
+            decision: "increase",
+            constraint: "none",
+            decisionReason: "below_target",
+            resistanceBefore: currentResistance,
+            resistanceAfter: clampAutomaticResistance(currentResistance + 1),
+        };
+    }
+    const genericLow = median <= min - TARGET_HR_ADJUST_MARGIN_BPM;
+    if (genericLow && currentResistance >= 15) {
+        return {
+            assessment: "low",
+            decision: "hold",
+            constraint: "r15_cap",
+            decisionReason: "upper_resistance_bound",
+            resistanceBefore: currentResistance,
+            resistanceAfter: currentResistance,
+        };
+    }
+    if (genericLow && currentResistance >= HIGH_RESISTANCE_INCREASE_FROM) {
+        return {
+            assessment: "low",
+            decision: "hold",
+            constraint: "r13_plus_deficit_guard",
+            decisionReason: "increase_guarded",
+            resistanceBefore: currentResistance,
+            resistanceAfter: currentResistance,
+        };
+    }
+    return {
+        assessment: "target",
+        decision: "hold",
+        constraint: "target_hold",
+        decisionReason: "within_target_policy",
+        resistanceBefore: currentResistance,
+        resistanceAfter: currentResistance,
+    };
 }
 function startingWorkResistance(durationSeconds) {
     if (durationSeconds <= 75)
@@ -76,20 +140,20 @@ export function finalizeProFormShortWork(completed, state) {
     };
 }
 function adaptWorkResistance(context, currentResistance) {
-    const median = rollingMedian(context);
+    const details = rollingMedianDetails(context);
     const min = context.targetHeartRateMin;
     const max = context.targetHeartRateMax;
-    if (median === undefined || min === undefined || max === undefined) {
-        return { resistance: currentResistance, median, evaluated: false };
+    if (details === undefined || min === undefined || max === undefined) {
+        return { resistance: currentResistance, median: details === null || details === void 0 ? void 0 : details.median, evaluated: false, details };
     }
-    if (median >= max + 3) {
-        return { resistance: clampAutomaticResistance(currentResistance - 1), median, evaluated: true };
-    }
-    const requiredDeficit = currentResistance >= 13 ? 5 : 3;
-    if (median <= min - requiredDeficit && currentResistance < 15) {
-        return { resistance: clampAutomaticResistance(currentResistance + 1), median, evaluated: true };
-    }
-    return { resistance: currentResistance, median, evaluated: true };
+    const classified = classifyWorkResistanceAdjustment(details.median, min, max, currentResistance);
+    return {
+        resistance: classified.resistanceAfter,
+        median: details.median,
+        evaluated: true,
+        details,
+        classified,
+    };
 }
 function warmupGuidance(context, state, phaseChanged) {
     const fraction = context.phaseDurationSeconds > 0
@@ -194,8 +258,115 @@ function longCooldownWaitReason(elapsedSeconds, lastEvaluation, cooldown) {
         return waitingForObservedResponse();
     return "Holding during the 60-second adjustment cooldown";
 }
+function durationBandFor(phaseDurationSeconds) {
+    if (phaseDurationSeconds <= 75)
+        return "short";
+    if (phaseDurationSeconds <= 150)
+        return "medium";
+    return "long";
+}
+function frozenTimingFromState(state) {
+    const timing = {};
+    if (state.initialEvaluationSeconds !== undefined)
+        timing.initialEvaluationSeconds = state.initialEvaluationSeconds;
+    if (state.increaseCooldownSeconds !== undefined)
+        timing.increaseCooldownSeconds = state.increaseCooldownSeconds;
+    if (state.decreaseCooldownSeconds !== undefined)
+        timing.decreaseCooldownSeconds = state.decreaseCooldownSeconds;
+    return Object.keys(timing).length > 0 ? timing : undefined;
+}
+function phaseObservationFields(context) {
+    const fields = {
+        phaseKind: context.phaseKind,
+        phaseId: context.phaseId,
+        phaseElapsedSeconds: context.phaseElapsedSeconds,
+        phaseDurationSeconds: context.phaseDurationSeconds,
+    };
+    if (context.intervalIndex !== undefined)
+        fields.intervalIndex = context.intervalIndex;
+    if (context.targetHeartRateMin !== undefined)
+        fields.targetHeartRateMin = context.targetHeartRateMin;
+    if (context.targetHeartRateMax !== undefined)
+        fields.targetHeartRateMax = context.targetHeartRateMax;
+    return fields;
+}
+function nextWaitAfterDecision(state, durationBand) {
+    var _a;
+    if (durationBand !== "long")
+        return undefined;
+    return (_a = state.currentEvaluationCooldownSeconds) !== null && _a !== void 0 ? _a : HOLD_EVALUATION_COOLDOWN_SECONDS;
+}
+function successfulEvaluationObservation(context, state, adapted, resistanceBefore, waitBeforeEvaluationSeconds) {
+    if (!adapted.evaluated || !adapted.classified || !adapted.details)
+        return undefined;
+    const durationBand = durationBandFor(context.phaseDurationSeconds);
+    const nextWait = nextWaitAfterDecision(state, durationBand);
+    const observation = {
+        deferred: false,
+        durationBand,
+        ...phaseObservationFields(context),
+        representativeHeartRate: adapted.details.median,
+        representativeSampleCount: adapted.details.sampleCount,
+        representativeWindowSpanSeconds: adapted.details.windowSpanSeconds,
+        resistanceBefore,
+        resistanceAfter: adapted.classified.resistanceAfter,
+        heartRateAssessment: adapted.classified.assessment,
+        decision: adapted.classified.decision,
+        constraint: adapted.classified.constraint,
+        decisionReason: adapted.classified.decisionReason,
+        waitBeforeEvaluationSeconds,
+    };
+    const timing = frozenTimingFromState(state);
+    if (timing)
+        observation.personalizedTiming = timing;
+    if (nextWait !== undefined) {
+        observation.nextEvaluationWaitSeconds = nextWait;
+        observation.nextEligiblePhaseElapsedSeconds = context.phaseElapsedSeconds + nextWait;
+    }
+    return observation;
+}
+function deferredEvaluationObservation(context, resistance, eligibleSincePhaseElapsedSeconds) {
+    return {
+        deferred: true,
+        durationBand: durationBandFor(context.phaseDurationSeconds),
+        ...phaseObservationFields(context),
+        resistanceBefore: resistance,
+        resistanceAfter: resistance,
+        eligibleSincePhaseElapsedSeconds,
+    };
+}
+function initialWaitSeconds(state, phaseDurationSeconds) {
+    var _a, _b;
+    if (phaseDurationSeconds <= 75)
+        return Math.max(0, phaseDurationSeconds - 1);
+    if (phaseDurationSeconds <= 150)
+        return (_a = state.initialEvaluationSeconds) !== null && _a !== void 0 ? _a : 60;
+    return (_b = state.initialEvaluationSeconds) !== null && _b !== void 0 ? _b : 90;
+}
+function workPhaseStartedObservation(context, state, resistance) {
+    const initialWait = initialWaitSeconds(state, context.phaseDurationSeconds);
+    const observation = {
+        phaseKind: context.phaseKind,
+        phaseId: context.phaseId,
+        phaseElapsedSeconds: context.phaseElapsedSeconds,
+        phaseDurationSeconds: context.phaseDurationSeconds,
+        resistance,
+        initialEvaluationWaitSeconds: initialWait,
+        nextEligiblePhaseElapsedSeconds: initialWait,
+    };
+    if (context.intervalIndex !== undefined)
+        observation.intervalIndex = context.intervalIndex;
+    if (context.targetHeartRateMin !== undefined)
+        observation.targetHeartRateMin = context.targetHeartRateMin;
+    if (context.targetHeartRateMax !== undefined)
+        observation.targetHeartRateMax = context.targetHeartRateMax;
+    const timing = frozenTimingFromState(state);
+    if (timing)
+        observation.personalizedTiming = timing;
+    return observation;
+}
 function workGuidance(context, state, phaseChanged) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     const start = workStartResistance(context);
     const usingLearnedStart = phaseChanged && state.nextWorkResistance === undefined && start.learned;
     let resistance = phaseChanged
@@ -213,8 +384,14 @@ function workGuidance(context, state, phaseChanged) {
             ? (_d = state.nextWorkResistance) !== null && _d !== void 0 ? _d : resistance
             : resistance,
     }, phaseChanged);
+    let workPhaseStarted;
+    let workEvaluation;
+    if (phaseChanged) {
+        workPhaseStarted = workPhaseStartedObservation(context, nextState, resistance);
+    }
     if (context.phaseDurationSeconds <= 75) {
-        if (!nextState.shortIntervalEvaluated && context.phaseElapsedSeconds >= Math.max(0, context.phaseDurationSeconds - 1)) {
+        const shortWait = Math.max(0, context.phaseDurationSeconds - 1);
+        if (!nextState.shortIntervalEvaluated && context.phaseElapsedSeconds >= shortWait) {
             const adapted = adaptWorkResistance(context, resistance);
             if (adapted.evaluated) {
                 nextState.shortIntervalEvaluated = true;
@@ -225,11 +402,13 @@ function workGuidance(context, state, phaseChanged) {
                     reason = "Hold this repetition; reduce the next repetition after the final heart-rate response";
                 else
                     reason = "Hold this repetition; final heart-rate response supports the current resistance";
+                workEvaluation = successfulEvaluationObservation(context, nextState, adapted, resistance, shortWait);
             }
             else {
                 reason = usingLearnedStart
                     ? "Learned starting resistance from prior workouts"
                     : "Short interval resistance is held for the full repetition";
+                workEvaluation = deferredEvaluationObservation(context, resistance, shortWait);
             }
         }
         else {
@@ -243,6 +422,7 @@ function workGuidance(context, state, phaseChanged) {
         if (!nextState.mediumIntervalEvaluated && context.phaseElapsedSeconds >= initialWait) {
             const adapted = adaptWorkResistance(context, resistance);
             if (adapted.evaluated) {
+                const resistanceBefore = (_f = nextState.currentResistance) !== null && _f !== void 0 ? _f : resistance;
                 nextState.mediumIntervalEvaluated = true;
                 resistance = adapted.resistance;
                 action = actionForResistance(nextState.currentResistance, resistance, false);
@@ -251,9 +431,11 @@ function workGuidance(context, state, phaseChanged) {
                 reason = action === "hold"
                     ? "Heart-rate response supports the current resistance"
                     : `Adjusted after ${Math.round(adapted.median)} bpm rolling heart rate`;
+                workEvaluation = successfulEvaluationObservation(context, nextState, adapted, resistanceBefore, initialWait);
             }
             else {
                 reason = mediumWaitReason(context.phaseElapsedSeconds, initialWait, usingLearnedStart);
+                workEvaluation = deferredEvaluationObservation(context, resistance, initialWait);
             }
         }
         else if (!nextState.mediumIntervalEvaluated) {
@@ -264,14 +446,15 @@ function workGuidance(context, state, phaseChanged) {
         }
     }
     else {
-        const initialWait = (_f = nextState.initialEvaluationSeconds) !== null && _f !== void 0 ? _f : 90;
-        const cooldown = (_g = nextState.currentEvaluationCooldownSeconds) !== null && _g !== void 0 ? _g : 60;
+        const initialWait = (_g = nextState.initialEvaluationSeconds) !== null && _g !== void 0 ? _g : 90;
+        const cooldown = (_h = nextState.currentEvaluationCooldownSeconds) !== null && _h !== void 0 ? _h : 60;
         const lastEvaluation = nextState.lastEvaluationPhaseElapsedSeconds;
         const canEvaluate = context.phaseElapsedSeconds >= initialWait &&
             (lastEvaluation === undefined || context.phaseElapsedSeconds - lastEvaluation >= cooldown);
         if (canEvaluate) {
             const adapted = adaptWorkResistance(context, resistance);
             if (adapted.evaluated) {
+                const resistanceBefore = (_j = nextState.currentResistance) !== null && _j !== void 0 ? _j : resistance;
                 resistance = adapted.resistance;
                 action = actionForResistance(nextState.currentResistance, resistance, false);
                 nextState.currentResistance = resistance;
@@ -280,11 +463,15 @@ function workGuidance(context, state, phaseChanged) {
                 reason = action === "hold"
                     ? "Rolling heart rate is within the target range"
                     : `Adjusted after ${Math.round(adapted.median)} bpm rolling heart rate`;
+                const waitBefore = lastEvaluation === undefined ? initialWait : cooldown;
+                workEvaluation = successfulEvaluationObservation(context, nextState, adapted, resistanceBefore, waitBefore);
             }
             else {
                 reason = lastEvaluation === undefined
                     ? longInitialWaitReason(context.phaseElapsedSeconds, initialWait, usingLearnedStart)
                     : longCooldownWaitReason(context.phaseElapsedSeconds, lastEvaluation, cooldown);
+                const eligibleSince = lastEvaluation === undefined ? initialWait : lastEvaluation + cooldown;
+                workEvaluation = deferredEvaluationObservation(context, resistance, eligibleSince);
             }
         }
         else if (context.phaseElapsedSeconds < initialWait) {
@@ -294,15 +481,57 @@ function workGuidance(context, state, phaseChanged) {
             reason = longCooldownWaitReason(context.phaseElapsedSeconds, lastEvaluation, cooldown);
         }
     }
-    return {
+    const result = {
         guidance: recommendation(resistance, 70, action, reason, true),
         state: nextState,
     };
+    if (workPhaseStarted)
+        result.workPhaseStarted = workPhaseStarted;
+    if (workEvaluation)
+        result.workEvaluation = workEvaluation;
+    return result;
 }
 export function getProFormSmartPower10Guidance(context, state) {
+    let priorWorkEvaluation;
     const finalizedState = context.completedShortWork
         ? finalizeProFormShortWork(context.completedShortWork, state)
         : state;
+    if (context.completedShortWork &&
+        !state.shortIntervalEvaluated &&
+        finalizedState.shortIntervalEvaluated) {
+        const completed = context.completedShortWork;
+        const adapted = adaptWorkResistance({
+            recentHeartRates: completed.recentHeartRates,
+            targetHeartRateMin: completed.targetHeartRateMin,
+            targetHeartRateMax: completed.targetHeartRateMax,
+        }, completed.resistance);
+        if (adapted.evaluated && adapted.classified && adapted.details) {
+            priorWorkEvaluation = {
+                deferred: false,
+                durationBand: "short",
+                phaseKind: "work",
+                phaseId: completed.phaseId,
+                phaseElapsedSeconds: completed.phaseDurationSeconds,
+                phaseDurationSeconds: completed.phaseDurationSeconds,
+                representativeHeartRate: adapted.details.median,
+                representativeSampleCount: adapted.details.sampleCount,
+                representativeWindowSpanSeconds: adapted.details.windowSpanSeconds,
+                resistanceBefore: completed.resistance,
+                resistanceAfter: adapted.classified.resistanceAfter,
+                heartRateAssessment: adapted.classified.assessment,
+                decision: adapted.classified.decision,
+                constraint: adapted.classified.constraint,
+                decisionReason: adapted.classified.decisionReason,
+                waitBeforeEvaluationSeconds: Math.max(0, completed.phaseDurationSeconds - 1),
+            };
+            if (completed.targetHeartRateMin !== undefined) {
+                priorWorkEvaluation.targetHeartRateMin = completed.targetHeartRateMin;
+            }
+            if (completed.targetHeartRateMax !== undefined) {
+                priorWorkEvaluation.targetHeartRateMax = completed.targetHeartRateMax;
+            }
+        }
+    }
     const phaseChanged = finalizedState.currentPhaseId !== context.phaseId;
     const phaseState = phaseChanged
         ? {
@@ -319,13 +548,16 @@ export function getProFormSmartPower10Guidance(context, state) {
             lastWorkAdjustmentDirection: undefined,
         }
         : finalizedState;
-    if (context.phaseKind === "warmup")
-        return warmupGuidance(context, phaseState, phaseChanged);
-    if (context.phaseKind === "work")
-        return workGuidance(context, phaseState, phaseChanged);
-    if (context.phaseKind === "recovery")
-        return recoveryGuidance(context, phaseState, phaseChanged, false);
-    return recoveryGuidance(context, phaseState, phaseChanged, true);
+    const result = context.phaseKind === "warmup"
+        ? warmupGuidance(context, phaseState, phaseChanged)
+        : context.phaseKind === "work"
+            ? workGuidance(context, phaseState, phaseChanged)
+            : context.phaseKind === "recovery"
+                ? recoveryGuidance(context, phaseState, phaseChanged, false)
+                : recoveryGuidance(context, phaseState, phaseChanged, true);
+    if (priorWorkEvaluation)
+        result.priorWorkEvaluation = priorWorkEvaluation;
+    return result;
 }
 export const proformSmartPower10Adapter = {
     definition: {

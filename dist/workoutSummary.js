@@ -52,6 +52,9 @@ export function applyMachineUsageToSummary(summary, machineUsage) {
     summary.machine_id = machineUsage.machineId;
     summary.machine_profile_version = machineUsage.profileVersion;
     summary.machine_guidance_trace = machineUsage.guidanceTrace;
+    if (machineUsage.decisionAudit && machineUsage.decisionAudit.length > 0) {
+        summary.machine_decision_audit = machineUsage.decisionAudit;
+    }
     return summary;
 }
 export function applyWorkoutActivityToSummary(summary, activity) {
