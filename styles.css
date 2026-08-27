@@ -45,7 +45,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .calories { text-align: center; margin-top: 6px; font-size: 0.9rem; opacity: .9; }
 
 .hamburger { position: fixed; top: 10px; right: 12px; font-size: 28px; cursor: pointer; padding: 6px 10px; z-index: 20; }
-.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 15; }
+.modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 30; }
 .modal { background: #1a1a1a; padding: 24px; border-radius: 14px; width: 90%; max-width: 400px; position: relative; }
 .modal-title { font-size: 1.4rem; margin-bottom: 20px; text-align: center; font-weight: 600; }
 .close-btn { float: right; cursor: pointer; font-size: 22px; margin-top: -6px; opacity: 0.7; }
@@ -738,7 +738,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .downregulation-prefs-modal-bg {
   align-items: center;
   justify-content: center;
-  z-index: 25;
+  z-index: 31;
 }
 .downregulation-prefs-modal {
   max-width: 20rem;
