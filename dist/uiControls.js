@@ -1,4 +1,4 @@
-import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, } from "./workoutLogic.js";
+import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
@@ -208,6 +208,29 @@ function closeModal() {
     }
 }
 function openCancelModal() {
+    const cooldownBtn = document.getElementById("earlyCooldownButton");
+    if (cooldownBtn) {
+        const day = getSelectedDay();
+        const session = getSession(day);
+        const plan = getPlan();
+        const base = plan[day];
+        const blocks = base ? adjustedBlockLengths(base, null) : null;
+        const elapsedSec = session.paused
+            ? session.pausedElapsed
+            : session.startTime
+                ? Math.floor((Date.now() - parseInt(session.startTime, 10)) / 1000)
+                : 0;
+        const decision = planEarlyCooldownTransition({
+            blocks,
+            hasSession: Boolean(session.startTime),
+            elapsedSec,
+            paused: session.paused,
+            earlyCooldownElapsed: session.earlyCooldownElapsed,
+        });
+        const available = decision.type === "enter-early-cooldown";
+        cooldownBtn.style.display = available ? "" : "none";
+        cooldownBtn.disabled = !available;
+    }
     const bg = document.getElementById("cancelModalBg");
     if (bg)
         bg.style.display = "flex";
@@ -254,6 +277,17 @@ function promptWorkoutActivitySelection(activities) {
 function confirmCancelWorkout() {
     restartWorkout();
     closeCancelModal();
+}
+function confirmEarlyCooldownWorkout() {
+    const btn = document.getElementById("earlyCooldownButton");
+    if (btn === null || btn === void 0 ? void 0 : btn.disabled)
+        return;
+    if (btn)
+        btn.disabled = true;
+    closeCancelModal();
+    const decision = requestEarlyCooldown();
+    if (decision.type === "unavailable" && btn)
+        btn.disabled = false;
 }
 function promptCancelWorkout() {
     if (!phaseDisplayEl)
@@ -361,7 +395,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         return { screen: "idle", day, plan, workoutMetadata, base, blocks, workoutBlocksText };
     }
     const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime)) / 1000);
-    const phase = getPhase(elapsedSec, blocks);
+    const phase = getPhase(elapsedSec, blocks, getSession(day).earlyCooldownElapsed);
     if (phase.done) {
         return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
     }
@@ -1422,6 +1456,7 @@ function registerUiGlobals(phaseBoxEl) {
     window.closeActivitySelectModal = closeActivitySelectModal;
     window.promptWorkoutActivitySelection = promptWorkoutActivitySelection;
     window.confirmCancelWorkout = confirmCancelWorkout;
+    window.confirmEarlyCooldownWorkout = confirmEarlyCooldownWorkout;
     window.promptCancelWorkout = promptCancelWorkout;
     window.switchTab = switchTab;
     window.getShowSecondsCountdown = getShowSecondsCountdown;

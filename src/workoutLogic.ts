@@ -1,7 +1,16 @@
-import { getHrTargets, getWorkoutMetadata } from "./workoutData.js";
+import { getHrTargets, getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
 import { Activity, PlanBlock, WorkoutPhaseState } from "./types.js";
-import { getSession, startSession, pauseSession, resumeSession, clearSession } from "./sessionStore.js";
+import {
+  getSession,
+  startSession,
+  pauseSession,
+  resumeSession,
+  clearSession,
+  getEarlyCooldownElapsed,
+  setEarlyCooldownElapsed,
+  type SessionStorage,
+} from "./sessionStore.js";
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
@@ -38,6 +47,113 @@ function resumeWorkout(day?: string) {
   const dayToUse = day || todayName();
   resumeSession(dayToUse);
   if (typeof (window as any).updateDisplay === "function") (window as any).updateDisplay();
+}
+
+export type EarlyCooldownDecision =
+  | { type: "unavailable" }
+  | { type: "already-in-cooldown"; resume: boolean }
+  | { type: "enter-early-cooldown"; elapsedSec: number; resume: boolean };
+
+export interface EarlyCooldownRequestOptions {
+  storage?: SessionStorage;
+  now?: number;
+  blocks?: PlanBlock | null;
+}
+
+function completedPhase(): WorkoutPhaseState {
+  return {
+    phase: "Completed",
+    kind: "completed",
+    phaseId: "completed",
+    phaseElapsedSeconds: 0,
+    phaseDurationSeconds: 0,
+    timeLeft: 0,
+    done: true,
+  };
+}
+
+function cooldownPhase(elapsedSec: number, startSec: number, durationSec: number): WorkoutPhaseState {
+  const phaseElapsedSeconds = elapsedSec - startSec;
+  if (phaseElapsedSeconds >= durationSec) return completedPhase();
+  return {
+    phase: "Cool-Down",
+    kind: "cooldown",
+    phaseId: "cooldown",
+    phaseElapsedSeconds,
+    phaseDurationSeconds: durationSec,
+    timeLeft: durationSec - phaseElapsedSeconds,
+    done: false,
+  };
+}
+
+function actualElapsedSeconds(
+  startTime: string | null,
+  paused: boolean,
+  pausedElapsed: number,
+  now: number
+): number {
+  if (!startTime) return 0;
+  if (paused) return pausedElapsed;
+  return Math.floor((now - parseInt(startTime, 10)) / 1000);
+}
+
+function planEarlyCooldownTransition(input: {
+  blocks: PlanBlock | null | undefined;
+  hasSession: boolean;
+  elapsedSec: number;
+  paused: boolean;
+  earlyCooldownElapsed?: number | null;
+}): EarlyCooldownDecision {
+  if (!input.hasSession || !input.blocks || input.blocks.cool <= 0) {
+    return { type: "unavailable" };
+  }
+  const phase = getPhase(input.elapsedSec, input.blocks, input.earlyCooldownElapsed);
+  if (phase.done) return { type: "unavailable" };
+  if (phase.kind === "cooldown") {
+    return { type: "already-in-cooldown", resume: input.paused };
+  }
+  return { type: "enter-early-cooldown", elapsedSec: input.elapsedSec, resume: input.paused };
+}
+
+function resolveEarlyCooldownBlocks(
+  day: string,
+  blocksOverride?: PlanBlock | null
+): PlanBlock | null {
+  if (blocksOverride !== undefined) return blocksOverride;
+  const base = getPlan()[day];
+  return base ? adjustedBlockLengths(base, null) : null;
+}
+
+let earlyCooldownInFlight = false;
+
+function requestEarlyCooldown(day?: string, options?: EarlyCooldownRequestOptions): EarlyCooldownDecision {
+  if (earlyCooldownInFlight) return { type: "unavailable" };
+  earlyCooldownInFlight = true;
+  try {
+    const dayToUse = day || (typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName());
+    const storage = options?.storage;
+    const now = options?.now ?? Date.now();
+    const session = getSession(dayToUse, storage);
+    const blocks = resolveEarlyCooldownBlocks(dayToUse, options?.blocks);
+    const elapsedSec = actualElapsedSeconds(session.startTime, session.paused, session.pausedElapsed, now);
+    const decision = planEarlyCooldownTransition({
+      blocks,
+      hasSession: Boolean(session.startTime),
+      elapsedSec,
+      paused: session.paused,
+      earlyCooldownElapsed: getEarlyCooldownElapsed(dayToUse, storage),
+    });
+    if (decision.type === "unavailable") return decision;
+    if (decision.type === "enter-early-cooldown") {
+      setEarlyCooldownElapsed(dayToUse, decision.elapsedSec, storage);
+    }
+    if (session.paused) resumeSession(dayToUse, storage, now);
+    if (typeof (window as any).requestWakeLock === "function") (window as any).requestWakeLock();
+    if (typeof (window as any).updateDisplay === "function") (window as any).updateDisplay();
+    return decision;
+  } finally {
+    earlyCooldownInFlight = false;
+  }
 }
 
 function startWorkout() {
@@ -135,10 +251,19 @@ function getIntervalRuntime(day: string, sustainElapsed: number) {
   return null;
 }
 
-function getPhase(elapsedSec: number, blocks: PlanBlock): WorkoutPhaseState {
+function getPhase(elapsedSec: number, blocks: PlanBlock, earlyCooldownElapsed?: number | null): WorkoutPhaseState {
   const w = blocks.warm * 60;
   const s = blocks.sustain * 60;
   const c = blocks.cool * 60;
+  if (
+    earlyCooldownElapsed != null &&
+    Number.isFinite(earlyCooldownElapsed) &&
+    earlyCooldownElapsed >= 0 &&
+    c > 0 &&
+    elapsedSec >= earlyCooldownElapsed
+  ) {
+    return cooldownPhase(elapsedSec, earlyCooldownElapsed, c);
+  }
   if (elapsedSec < w) {
     return {
       phase: "Warm-Up",
@@ -178,26 +303,9 @@ function getPhase(elapsedSec: number, blocks: PlanBlock): WorkoutPhaseState {
     };
   }
   if (elapsedSec < w + s + c) {
-    const cooldownElapsed = elapsedSec - w - s;
-    return {
-      phase: "Cool-Down",
-      kind: "cooldown",
-      phaseId: "cooldown",
-      phaseElapsedSeconds: cooldownElapsed,
-      phaseDurationSeconds: c,
-      timeLeft: w + s + c - elapsedSec,
-      done: false,
-    };
+    return cooldownPhase(elapsedSec, w + s, c);
   }
-  return {
-    phase: "Completed",
-    kind: "completed",
-    phaseId: "completed",
-    phaseElapsedSeconds: 0,
-    phaseDurationSeconds: 0,
-    timeLeft: 0,
-    done: true,
-  };
+  return completedPhase();
 }
 
 function formatTime(sec: number, options?: { showSeconds?: boolean }) {
@@ -309,6 +417,7 @@ export function registerWorkoutLogicGlobals() {
   (window as any).startWorkout = startWorkout;
   (window as any).beginWorkout = beginWorkout;
   (window as any).restartWorkout = restartWorkout;
+  (window as any).requestEarlyCooldown = requestEarlyCooldown;
   (window as any).getPhase = getPhase;
   (window as any).formatTime = formatTime;
   (window as any).getTodayHRV = getTodayHRV;
@@ -328,6 +437,8 @@ export {
   startWorkout,
   beginWorkout,
   restartWorkout,
+  requestEarlyCooldown,
+  planEarlyCooldownTransition,
   getPhase,
   formatTime,
   adjustedBlockLengths,

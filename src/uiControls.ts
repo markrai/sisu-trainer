@@ -10,6 +10,8 @@ import {
   pauseWorkout,
   restartWorkout,
   resumeWorkout,
+  requestEarlyCooldown,
+  planEarlyCooldownTransition,
   startWorkout,
   todayName,
   hrTargetText,
@@ -251,6 +253,29 @@ function closeModal() {
 }
 
 function openCancelModal() {
+  const cooldownBtn = document.getElementById("earlyCooldownButton") as HTMLButtonElement | null;
+  if (cooldownBtn) {
+    const day = getSelectedDay();
+    const session = getSession(day);
+    const plan = getPlan();
+    const base = (plan as any)[day];
+    const blocks = base ? adjustedBlockLengths(base, null) : null;
+    const elapsedSec = session.paused
+      ? session.pausedElapsed
+      : session.startTime
+        ? Math.floor((Date.now() - parseInt(session.startTime, 10)) / 1000)
+        : 0;
+    const decision = planEarlyCooldownTransition({
+      blocks,
+      hasSession: Boolean(session.startTime),
+      elapsedSec,
+      paused: session.paused,
+      earlyCooldownElapsed: session.earlyCooldownElapsed,
+    });
+    const available = decision.type === "enter-early-cooldown";
+    cooldownBtn.style.display = available ? "" : "none";
+    cooldownBtn.disabled = !available;
+  }
   const bg = document.getElementById("cancelModalBg");
   if (bg) bg.style.display = "flex";
 }
@@ -297,6 +322,15 @@ function promptWorkoutActivitySelection(activities: Activity[]) {
 function confirmCancelWorkout() {
   restartWorkout();
   closeCancelModal();
+}
+
+function confirmEarlyCooldownWorkout() {
+  const btn = document.getElementById("earlyCooldownButton") as HTMLButtonElement | null;
+  if (btn?.disabled) return;
+  if (btn) btn.disabled = true;
+  closeCancelModal();
+  const decision = requestEarlyCooldown();
+  if (decision.type === "unavailable" && btn) btn.disabled = false;
 }
 
 function promptCancelWorkout() {
@@ -447,7 +481,7 @@ function deriveWorkoutState(
   }
 
   const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime)) / 1000);
-  const phase = getPhase(elapsedSec, blocks);
+  const phase = getPhase(elapsedSec, blocks, getSession(day).earlyCooldownElapsed);
 
   if (phase.done) {
     return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
@@ -1524,6 +1558,7 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).closeActivitySelectModal = closeActivitySelectModal;
   (window as any).promptWorkoutActivitySelection = promptWorkoutActivitySelection;
   (window as any).confirmCancelWorkout = confirmCancelWorkout;
+  (window as any).confirmEarlyCooldownWorkout = confirmEarlyCooldownWorkout;
   (window as any).promptCancelWorkout = promptCancelWorkout;
   (window as any).switchTab = switchTab;
   (window as any).getShowSecondsCountdown = getShowSecondsCountdown;

@@ -244,8 +244,9 @@
   <div class="modal">
     <div class="close-btn" onclick="closeCancelModal()">×</div>
     <div class="modal-title">End workout?</div>
-    <div class="label" style="text-align:center;">This workout will be saved and marked as cancelled in Settings → Workouts.</div>
-    <div class="modal-actions">
+    <div class="label" style="text-align:center;">You can cool down first, end and save now, or keep going.</div>
+    <div class="modal-actions modal-actions-stack">
+      <button class="button" id="earlyCooldownButton" onclick="confirmEarlyCooldownWorkout()">Cooldown</button>
       <button class="button" onclick="confirmCancelWorkout()">Yes, end and save</button>
       <button class="button secondary" onclick="closeCancelModal()">Keep going</button>
     </div>
