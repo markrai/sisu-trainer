@@ -12,6 +12,7 @@ import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./m
 import { formatLearnedGuidanceLabel, listLearnedStarts, resetLearnedGuidanceForMachine, } from "./machines/learning/index.js";
 import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/index.js";
 import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
+import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 let selectedDay = null;
 let liveBpm = null;
@@ -923,6 +924,18 @@ function renderShadowPredictionPanel() {
     section.hidden = false;
     list.innerHTML = entries.map(renderShadowPredictionGroup).join("");
 }
+function exportMachineDiagnostics() {
+    const prepared = prepareMachineDiagnosticsExport(buildMachineDiagnosticsSnapshot());
+    const blob = new Blob([prepared.body], { type: prepared.mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = prepared.filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
 function promptResetShadowPredictions() {
     const machineId = getEquipmentSelection().bike;
     if (!machineId)
@@ -1422,6 +1435,7 @@ function registerUiGlobals(phaseBoxEl) {
     window.promptResetShadowPredictions = promptResetShadowPredictions;
     window.closeResetShadowPredictionsModal = closeResetShadowPredictionsModal;
     window.confirmResetShadowPredictions = confirmResetShadowPredictions;
+    window.exportMachineDiagnostics = exportMachineDiagnostics;
     window.loadWorkoutSummaries = loadWorkoutSummaries;
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;

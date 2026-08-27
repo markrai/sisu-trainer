@@ -163,6 +163,11 @@
         <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Diagnostic only. These predictions never change live resistance.</div>
         <button type="button" class="button secondary" onclick="promptResetShadowPredictions()">Reset shadow prediction data</button>
       </div>
+      <div id="machineDiagnosticsSection" class="modal-section">
+        <div class="modal-section-title">Machine diagnostics</div>
+        <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Export the local machine-learning state used for equipment guidance.</div>
+        <button type="button" class="button secondary" onclick="exportMachineDiagnostics()">Export diagnostics</button>
+      </div>
     </div>
     
     <!-- Workouts Tab -->

@@ -46,6 +46,10 @@ import {
   shadowValidationStatusLabel,
   type ShadowResistanceDiagnostics,
 } from "./machines/prediction/index.js";
+import {
+  buildMachineDiagnosticsSnapshot,
+  prepareMachineDiagnosticsExport,
+} from "./machines/diagnostics/index.js";
 import type { Activity, WorkoutPhaseState } from "./types.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 
@@ -1042,6 +1046,19 @@ function renderShadowPredictionPanel() {
   list.innerHTML = entries.map(renderShadowPredictionGroup).join("");
 }
 
+function exportMachineDiagnostics() {
+  const prepared = prepareMachineDiagnosticsExport(buildMachineDiagnosticsSnapshot());
+  const blob = new Blob([prepared.body], { type: prepared.mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = prepared.filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 function promptResetShadowPredictions() {
   const machineId = getEquipmentSelection().bike;
   if (!machineId) return;
@@ -1518,6 +1535,7 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).promptResetShadowPredictions = promptResetShadowPredictions;
   (window as any).closeResetShadowPredictionsModal = closeResetShadowPredictionsModal;
   (window as any).confirmResetShadowPredictions = confirmResetShadowPredictions;
+  (window as any).exportMachineDiagnostics = exportMachineDiagnostics;
   (window as any).loadWorkoutSummaries = loadWorkoutSummaries;
   (window as any).viewWorkoutSummary = viewWorkoutSummary;
   (window as any).showWorkoutSummaryModal = showWorkoutSummaryModal;
