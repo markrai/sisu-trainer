@@ -16,8 +16,29 @@ export function getRuntimePlatform() {
     const platform = (_b = (_a = getCapacitorBridge()) === null || _a === void 0 ? void 0 : _a.getPlatform) === null || _b === void 0 ? void 0 : _b.call(_a);
     return platform === "android" || platform === "ios" ? platform : "web";
 }
+async function hideSystemBars() {
+    const { SystemBars } = await import("@capacitor/core");
+    await SystemBars.hide();
+}
+function listenForAppResume(onResume) {
+    var _a;
+    document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible")
+            onResume();
+    });
+    const capacitor = getCapacitorBridge();
+    (_a = capacitor.addListener) === null || _a === void 0 ? void 0 : _a.call(capacitor, "App", "appStateChange", (state) => {
+        if (state === null || state === void 0 ? void 0 : state.isActive)
+            onResume();
+    });
+}
 export function applyRuntimeDocumentState() {
-    if (isNativeRuntime()) {
-        document.documentElement.classList.add("capacitor-native");
-    }
+    if (!isNativeRuntime())
+        return;
+    document.documentElement.classList.add("capacitor-native");
+    const hideBars = () => {
+        void hideSystemBars().catch(() => { });
+    };
+    hideBars();
+    listenForAppResume(hideBars);
 }

@@ -1249,10 +1249,31 @@ function closeWorkoutSummaryModal() {
         bg.style.display = "none";
     currentWorkoutSummary = null;
 }
-function downloadWorkoutSummaryJson() {
-    if (!currentWorkoutSummary)
+function downloadJsonFile(filename, data) {
+    const payload = { ...data };
+    delete payload.day;
+    const jsonStr = JSON.stringify(payload, null, 2);
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+function downloadWorkoutSummaryFile(summary) {
+    if (!summary) {
+        showToast("Workout summary not available", "error");
         return;
-    downloadWorkoutJson(currentWorkoutSummary.external_session_id);
+    }
+    const sessionId = summary.external_session_id || "workout";
+    downloadJsonFile(`workout-${sessionId}.json`, summary);
+    showToast("Workout JSON downloaded", "success");
+}
+function downloadWorkoutSummaryJson() {
+    downloadWorkoutSummaryFile(currentWorkoutSummary);
 }
 function showToast(message, type = "info") {
     const existingToast = document.getElementById("toast");
@@ -1268,30 +1289,6 @@ function showToast(message, type = "info") {
         toast.classList.remove("show");
         setTimeout(() => toast.remove(), 300);
     }, 3000);
-}
-function downloadWorkoutJson(sessionId) {
-    window.initDB().then((db) => {
-        const transaction = db.transaction(["workouts"], "readonly");
-        const store = transaction.objectStore("workouts");
-        const request = store.get(sessionId);
-        request.onsuccess = () => {
-            const workout = request.result;
-            if (workout && workout.summary) {
-                const summaryForEmission = { ...workout.summary };
-                delete summaryForEmission.day;
-                const jsonStr = JSON.stringify(summaryForEmission, null, 2);
-                const blob = new Blob([jsonStr], { type: "application/json" });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement("a");
-                a.href = url;
-                a.download = `workout-${summaryForEmission.external_session_id}.json`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-            }
-        };
-    });
 }
 function displayWorkoutSummaries(workouts) {
     const listContainer = document.getElementById("workoutSummaryList");
@@ -1327,9 +1324,16 @@ function displayWorkoutSummaries(workouts) {
       </div>
       <div class="workout-item-actions">
         <button class="button" onclick="viewWorkoutSummary('${summary.external_session_id}')">View</button>
-        <button class="button secondary" onclick="downloadWorkoutJson('${summary.external_session_id}')">Download JSON</button>
+        <button type="button" class="button secondary" data-download-json>Download JSON</button>
       </div>
     `;
+        const downloadBtn = workoutItem.querySelector("[data-download-json]");
+        if (downloadBtn) {
+            downloadBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                downloadWorkoutSummaryFile(summary);
+            });
+        }
         const swipe = createSwipeHandler(() => {
             const sessionId = workoutItem.dataset.sessionId;
             if (sessionId) {
@@ -1442,7 +1446,6 @@ function registerUiGlobals(phaseBoxEl) {
     window.closeWorkoutSummaryModal = closeWorkoutSummaryModal;
     window.downloadWorkoutSummaryJson = downloadWorkoutSummaryJson;
     window.showToast = showToast;
-    window.downloadWorkoutJson = downloadWorkoutJson;
     window.openDeleteWorkoutModal = openDeleteWorkoutModal;
     window.closeDeleteWorkoutModal = closeDeleteWorkoutModal;
     window.confirmDeleteWorkout = confirmDeleteWorkout;

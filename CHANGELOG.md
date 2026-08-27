@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- **Workout JSON download** - Download JSON from the workout list and summary
+  modal uses in-memory summary data so the browser keeps the user gesture.
 - **Modal overlay stacking** - Dialog overlays use a higher z-index so they sit
   above the hamburger / chrome UI.
 - **Native system bars** - System bars stay hidden after app resume on native
