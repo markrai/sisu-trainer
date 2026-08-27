@@ -348,11 +348,11 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   color: inherit;
 }
 
-/* Mobile view - optimize for tall screens like Pixel 8 (1080x2400) */
+/* Mobile portrait - keep the workout stack on-screen on short phones */
 @media (max-width: 768px) and (orientation: portrait) {
   /* Increase container padding and spacing */
   .container { 
-    padding: 24px 20px 40px 20px; 
+    padding: 24px 20px 16px 20px; 
     max-width: 100%;
   }
   
@@ -362,6 +362,10 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
     border-radius: 16px; 
     margin-bottom: 28px; 
     min-height: auto;
+  }
+
+  .workout-main-section {
+    padding: 14px 16px 2.25rem;
   }
   
   /* Increase text sizes for better readability */
@@ -377,6 +381,10 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
     margin-top: 18px; 
     border-radius: 14px;
   }
+  .workout-main-section .button {
+    padding: 12px;
+    font-size: 1rem;
+  }
   
   /* Increase metric and phase box sizes */
   .metric { 
@@ -385,56 +393,62 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
     margin-bottom: 16px;
   }
   .phase-box { 
-    font-size: 1.8rem; 
-    padding: 20px; 
+    font-size: 1.45rem; 
+    padding: 10px 14px; 
     border-radius: 14px; 
-    margin-top: 28px; 
-    margin-bottom: 8px;
+    margin-top: 10px; 
+  }
+  .machine-guidance {
+    margin-top: 8px;
+    padding: 8px 10px;
+  }
+  .machine-guidance-values {
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .machine-guidance-number {
+    font-size: 1.35rem;
+  }
+  .machine-guidance-watts {
+    margin-top: 4px;
   }
   .work-blocks { 
     font-size: 0.7rem; 
     margin-top: 12px; 
   }
   
-  /* Increase spacing for start button row; keep both buttons aligned (no margin on #startButton) */
+  /* Keep both buttons aligned (no margin on #startButton) */
   .start-button-row {
-    margin-top: 20px;
-    margin-bottom: 8px;
+    margin-top: 10px;
+    margin-bottom: 4px;
   }
   .start-button-row .button-cancel-workout {
-    padding: 16px 16px;
-    font-size: 1.1rem;
+    padding: 12px 16px;
+    font-size: 1rem;
   }
   
-  /* Make ring larger and add more spacing */
   .ring-container { 
-    width: 16rem; 
-    height: 16rem; 
-    margin: 2.5rem auto 2rem; 
+    width: min(12.5rem, 30dvh); 
+    height: min(12.5rem, 30dvh); 
+    margin: 1rem auto 0.75rem; 
   }
   .ring-bg { stroke-width: 10; }
   .ring-progress { stroke-width: 10; }
-  .ring-center { font-size: 1.4rem; }
-  
-  /* Add extra bottom padding to workout section for icon spacing */
-  .workout-main-section {
-    padding-bottom: 6rem !important;
-  }
+  .ring-center { font-size: 1.25rem; }
   
   .ring-wrapper {
-    min-height: 20rem;
-    padding-bottom: 4rem;
+    padding-bottom: 2rem;
   }
   
   /* Reposition heart container to bottom left of section - aligned baseline */
   .heart-container {
     position: absolute !important;
     left: 1.5rem !important;
-    bottom: 1.5rem !important;
+    bottom: 0.25rem !important;
     top: auto !important;
     width: 4rem !important;
     height: 4rem !important;
-    transform: translateY(50%) !important;
+    transform: none !important;
   }
   
   #heartIcon {
@@ -452,14 +466,14 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   #activityIcon {
     position: absolute !important;
     right: 1.5rem !important;
-    bottom: 1.5rem !important;
+    bottom: 0.25rem !important;
     left: auto !important;
     top: auto !important;
     width: 4rem !important;
     height: 4rem !important;
     max-width: 4rem !important;
     max-height: 4rem !important;
-    transform: translateY(50%) !important;
+    transform: none !important;
     transform-origin: center bottom !important;
     object-fit: contain !important;
     object-position: center bottom !important;
@@ -524,6 +538,30 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   @keyframes heartPulseMobile {
     0%, 100% { transform: scale(1); }
     50% { transform: scale(1.15); }
+  }
+
+  @media (max-height: 700px) {
+    .ring-container {
+      width: min(11rem, 26dvh);
+      height: min(11rem, 26dvh);
+    }
+    .phase-box {
+      font-size: 1.3rem;
+      padding: 8px 12px;
+    }
+    .machine-guidance-number {
+      font-size: 1.2rem;
+    }
+    .heart-container {
+      width: 3.5rem !important;
+      height: 3.5rem !important;
+    }
+    #activityIcon {
+      width: 3.5rem !important;
+      height: 3.5rem !important;
+      max-width: 3.5rem !important;
+      max-height: 3.5rem !important;
+    }
   }
 }
 

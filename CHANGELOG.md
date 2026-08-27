@@ -8,6 +8,11 @@
   `machine_decision_audit` of work-phase scheduling, HOLD/increase/decrease
   evaluations, and insufficient-HR deferrals without changing live guidance.
 
+### Fixed
+
+- **In-workout portrait height** - Pause, phase, machine card, and ring no
+  longer push the heart and machine icons below the viewport on short phones.
+
 ## [0.10.7] - 2026-08-27
 
 ### Added
