@@ -5,6 +5,7 @@ import type { LearningHrSample } from "../learning/types.js";
 import { deriveShadowResistancePredictions } from "./derive.js";
 import {
   persistShadowPredictions,
+  hasProcessedShadowSession,
   type ShadowPredictionStorage,
 } from "./storage.js";
 import type { MachineShadowResistancePrediction } from "./types.js";
@@ -24,6 +25,7 @@ export {
   type ShadowPredictionStore,
   type ShadowResistanceDiagnostics,
   type ShadowResistanceDirection,
+  type ShadowValidationStatus,
   type StoredShadowPredictionEntry,
 } from "./types.js";
 export {
@@ -43,13 +45,33 @@ export {
   appendBoundedPredictions,
   emptyShadowPredictionStore,
   getShadowPredictionEntry,
+  hasProcessedShadowSession,
   listShadowPredictions,
   loadShadowPredictionStore,
+  markShadowSessionProcessed,
   persistShadowPredictions,
   resetShadowPredictionsForMachine,
   saveShadowPredictionStore,
   sanitizeShadowPredictionStore,
 } from "./storage.js";
+export {
+  isOneLevelValidationOpportunity,
+  MAX_SHADOW_VALIDATION_ABS_MEDIAN_BIAS_BPM,
+  MAX_SHADOW_VALIDATION_MEDIAN_ABSOLUTE_ERROR_BPM,
+  MIN_SHADOW_VALIDATION_DIRECTION_MATCH_RATE,
+  MIN_SHADOW_VALIDATION_DISTINCT_SESSIONS,
+  MIN_SHADOW_VALIDATION_REALIZATION_RATE,
+  MIN_SHADOW_VALIDATION_REALIZED_PREDICTIONS,
+  MIN_SHADOW_VALIDATION_WITHIN_TOLERANCE_RATE,
+  realizedShadowValidation,
+  SHADOW_VALIDATION_ERROR_TOLERANCE_BPM,
+  shadowPredictionEventKey,
+  shadowValidationStatusLabel,
+  usableShadowSessionId,
+  validateShadowDirection,
+  type RealizedShadowValidation,
+  type ShadowDirectionValidation,
+} from "./validation.js";
 
 export function applyCompletedWorkoutShadowPredictions(
   summary: WorkoutSummary,
@@ -57,10 +79,11 @@ export function applyCompletedWorkoutShadowPredictions(
   storage?: ShadowPredictionStorage & DynamicsStorage,
   updatedAt = new Date().toISOString()
 ): MachineShadowResistancePrediction[] {
+  const sessionId = summary.external_session_id;
+  if (hasProcessedShadowSession(sessionId, storage)) return [];
   const preWorkoutDynamics = loadDynamicsStore(storage);
   const predictions = deriveShadowResistancePredictions(summary, hrSamples, preWorkoutDynamics.entries);
-  if (predictions.length === 0) return [];
-  return persistShadowPredictions(predictions, storage, updatedAt);
+  return persistShadowPredictions(predictions, storage, updatedAt, sessionId);
 }
 
 export function learnShadowPredictionsFromSamples(

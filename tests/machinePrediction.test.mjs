@@ -401,7 +401,8 @@ test("increase and decrease models are isolated", () => {
   seedIncreaseModel(storage, [], vo2LongKey);
   const increase = increaseWorkout();
   assert.equal(applyCompletedWorkoutShadowPredictions(increase.summary, increase.samples, storage).length, 0);
-  const trustedDecrease = applyCompletedWorkoutShadowPredictions(decrease.summary, decrease.samples, storage);
+  const laterDecrease = decreaseWorkout({ sessionId: "pred-dec-2" });
+  const trustedDecrease = applyCompletedWorkoutShadowPredictions(laterDecrease.summary, laterDecrease.samples, storage);
   assert.equal(trustedDecrease.length, 1);
   assert.equal(trustedDecrease[0].direction, "decrease");
 });
@@ -483,7 +484,11 @@ test("reset shadow prediction data leaves learned starts, dynamics, and equipmen
   const dynamicsBefore = storage.getItem(DYNAMICS_STORAGE_KEY);
   const equipmentBefore = storage.getItem(EQUIPMENT_STORAGE_KEY);
   resetShadowPredictionsForMachine("proform-smart-power-10", storage);
-  assert.deepEqual(loadShadowPredictionStore(storage), { version: 1, entries: {} });
+  assert.deepEqual(loadShadowPredictionStore(storage), {
+    version: 1,
+    entries: {},
+    processedSessions: ["pred-inc"],
+  });
   assert.equal(storage.getItem(LEARNING_STORAGE_KEY), learnedBefore);
   assert.equal(storage.getItem(DYNAMICS_STORAGE_KEY), dynamicsBefore);
   assert.equal(storage.getItem(EQUIPMENT_STORAGE_KEY), equipmentBefore);

@@ -60,7 +60,10 @@ export interface StoredShadowPredictionEntry {
 export interface ShadowPredictionStore {
   version: 1;
   entries: Record<string, StoredShadowPredictionEntry>;
+  processedSessions: string[];
 }
+
+export type ShadowValidationStatus = "collecting" | "not_validated" | "validated";
 
 export interface ShadowDirectionDiagnostics {
   modelMedianHrPerLevel: number;
@@ -69,6 +72,15 @@ export interface ShadowDirectionDiagnostics {
   medianSignedPredictionErrorBpm?: number;
   directionMatchCount: number;
   directionEvaluatedCount: number;
+  directionMatchRate?: number;
+  validationStatus: ShadowValidationStatus;
+  validationHighConfidence: boolean;
+  validationOpportunityCount: number;
+  realizedPredictionCount: number;
+  realizationRate?: number;
+  distinctSessionCount: number;
+  withinToleranceCount: number;
+  withinToleranceRate?: number;
 }
 
 export interface ShadowResistanceDiagnostics {

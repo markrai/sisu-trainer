@@ -11,7 +11,7 @@ import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.
 import { recordMachineHeartRateSample, updateMachineGuidanceRuntime, } from "./machines/runtime.js";
 import { formatLearnedGuidanceLabel, listLearnedStarts, resetLearnedGuidanceForMachine, } from "./machines/learning/index.js";
 import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/index.js";
-import { listShadowPredictions, resetShadowPredictionsForMachine, } from "./machines/prediction/index.js";
+import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 let selectedDay = null;
 let liveBpm = null;
@@ -875,11 +875,24 @@ function renderShadowDirectionBlock(label, diagnostics) {
     const rows = [`<div class="hr-dynamics-subhead">${label}</div>`];
     rows.push(metricRow("Model", signedBpmPerLevel(diagnostics.modelMedianHrPerLevel)));
     rows.push(metricRow("Predictions", String(diagnostics.predictionCount)));
+    rows.push(metricRow("Validation", shadowValidationStatusLabel(diagnostics.validationStatus)));
+    if (diagnostics.validationOpportunityCount > 0) {
+        rows.push(metricRow("Realized", `${diagnostics.realizedPredictionCount} of ${diagnostics.validationOpportunityCount}`));
+    }
+    if (diagnostics.distinctSessionCount > 0) {
+        rows.push(metricRow("Sessions", String(diagnostics.distinctSessionCount)));
+    }
     if (diagnostics.medianAbsolutePredictionErrorBpm !== undefined) {
         rows.push(metricRow("Median error", `${diagnostics.medianAbsolutePredictionErrorBpm} bpm`));
     }
+    if (diagnostics.medianSignedPredictionErrorBpm !== undefined) {
+        rows.push(metricRow("Bias", signedBpm(diagnostics.medianSignedPredictionErrorBpm)));
+    }
     if (diagnostics.directionEvaluatedCount > 0) {
         rows.push(metricRow("Direction matched", `${diagnostics.directionMatchCount} of ${diagnostics.directionEvaluatedCount}`));
+    }
+    if (diagnostics.directionEvaluatedCount > 0) {
+        rows.push(metricRow("Within 5 bpm", `${diagnostics.withinToleranceCount} of ${diagnostics.directionEvaluatedCount}`));
     }
     return rows.join("");
 }

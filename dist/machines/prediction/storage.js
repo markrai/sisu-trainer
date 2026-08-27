@@ -1,7 +1,7 @@
-import { integerMedian } from "../hrQuality.js";
 import { getMachineDefinition, isMachineId } from "../registry.js";
 import { learningKey, parseLearningKey } from "../learning/types.js";
 import { MAX_SHADOW_RESISTANCE, MAX_SHADOW_SUGGESTED_LEVELS, MIN_SHADOW_RESISTANCE, SHADOW_PREDICTION_LIMIT, SHADOW_PREDICTION_STORAGE_KEY, SHADOW_PREDICTION_STORE_VERSION, } from "./types.js";
+import { shadowPredictionEventKey, usableShadowSessionId, validateShadowDirection } from "./validation.js";
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
 }
@@ -9,7 +9,7 @@ function emptyEntry(updatedAt) {
     return { increase: [], decrease: [], updatedAt };
 }
 export function emptyShadowPredictionStore() {
-    return { version: SHADOW_PREDICTION_STORE_VERSION, entries: {} };
+    return { version: SHADOW_PREDICTION_STORE_VERSION, entries: {}, processedSessions: [] };
 }
 function isFiniteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
@@ -165,6 +165,19 @@ function sanitizeStoredEntry(value, parts) {
         updatedAt: raw.updatedAt,
     };
 }
+function sanitizeProcessedSessions(value) {
+    if (!Array.isArray(value))
+        return [];
+    const seen = new Set();
+    const processed = [];
+    for (const item of value) {
+        if (!usableShadowSessionId(item) || seen.has(item))
+            continue;
+        seen.add(item);
+        processed.push(item);
+    }
+    return processed;
+}
 export function sanitizeShadowPredictionStore(value) {
     if (!value || typeof value !== "object")
         return emptyShadowPredictionStore();
@@ -187,7 +200,21 @@ export function sanitizeShadowPredictionStore(value) {
             continue;
         entries[key] = clean;
     }
-    return { version: SHADOW_PREDICTION_STORE_VERSION, entries };
+    return {
+        version: SHADOW_PREDICTION_STORE_VERSION,
+        entries,
+        processedSessions: processedSessionsFrom(raw.processedSessions, entries),
+    };
+}
+function processedSessionsFrom(rawProcessedSessions, entries) {
+    const processed = new Set(sanitizeProcessedSessions(rawProcessedSessions));
+    for (const entry of Object.values(entries)) {
+        for (const event of [...entry.increase, ...entry.decrease]) {
+            if (usableShadowSessionId(event.sessionId))
+                processed.add(event.sessionId);
+        }
+    }
+    return [...processed];
 }
 export function loadShadowPredictionStore(storage) {
     try {
@@ -207,6 +234,12 @@ export function appendBoundedPredictions(values, event) {
     const next = [...values, event];
     return next.length > SHADOW_PREDICTION_LIMIT ? next.slice(-SHADOW_PREDICTION_LIMIT) : next;
 }
+function hasMatchingShadowEvent(values, event) {
+    const key = shadowPredictionEventKey(event);
+    if (!key)
+        return false;
+    return values.some((existing) => shadowPredictionEventKey(existing) === key);
+}
 function cloneEntry(entry) {
     return {
         increase: [...entry.increase],
@@ -214,29 +247,35 @@ function cloneEntry(entry) {
         updatedAt: entry.updatedAt,
     };
 }
-function directionDiagnostics(events) {
+function directionDiagnostics(events, direction) {
     if (events.length === 0)
         return undefined;
     const latest = events[events.length - 1];
-    const realizedAbs = events
-        .map((event) => event.absolutePredictionErrorBpm)
-        .filter((value) => value !== undefined);
-    const realizedSigned = events
-        .map((event) => event.predictionErrorBpm)
-        .filter((value) => value !== undefined);
-    const evaluated = events.filter((event) => event.directionMatched !== undefined);
+    const validation = validateShadowDirection(events, direction);
     const diagnostics = {
         modelMedianHrPerLevel: latest.modelMedianHrPerLevel,
         predictionCount: events.length,
-        directionMatchCount: evaluated.filter((event) => event.directionMatched === true).length,
-        directionEvaluatedCount: evaluated.length,
+        directionMatchCount: validation.directionMatchCount,
+        directionEvaluatedCount: validation.realizedPredictionCount,
+        validationStatus: validation.status,
+        validationHighConfidence: validation.highConfidence,
+        validationOpportunityCount: validation.predictionOpportunityCount,
+        realizedPredictionCount: validation.realizedPredictionCount,
+        distinctSessionCount: validation.distinctSessionCount,
+        withinToleranceCount: validation.withinToleranceCount,
     };
-    const medianAbs = integerMedian(realizedAbs);
-    if (medianAbs !== undefined)
-        diagnostics.medianAbsolutePredictionErrorBpm = medianAbs;
-    const medianSigned = integerMedian(realizedSigned);
-    if (medianSigned !== undefined)
-        diagnostics.medianSignedPredictionErrorBpm = medianSigned;
+    if (validation.medianAbsolutePredictionErrorBpm !== undefined) {
+        diagnostics.medianAbsolutePredictionErrorBpm = validation.medianAbsolutePredictionErrorBpm;
+    }
+    if (validation.medianSignedPredictionErrorBpm !== undefined) {
+        diagnostics.medianSignedPredictionErrorBpm = validation.medianSignedPredictionErrorBpm;
+    }
+    if (validation.realizationRate !== undefined)
+        diagnostics.realizationRate = validation.realizationRate;
+    if (validation.directionMatchRate !== undefined)
+        diagnostics.directionMatchRate = validation.directionMatchRate;
+    if (validation.withinToleranceRate !== undefined)
+        diagnostics.withinToleranceRate = validation.withinToleranceRate;
     return diagnostics;
 }
 export function toPublicShadowDiagnostics(parts, entry) {
@@ -244,8 +283,8 @@ export function toPublicShadowDiagnostics(parts, entry) {
         ...parts,
         updatedAt: entry.updatedAt,
     };
-    const increase = directionDiagnostics(entry.increase);
-    const decrease = directionDiagnostics(entry.decrease);
+    const increase = directionDiagnostics(entry.increase, "increase");
+    const decrease = directionDiagnostics(entry.decrease, "decrease");
     if (increase)
         listed.increase = increase;
     if (decrease)
@@ -272,8 +311,16 @@ export function listShadowPredictions(machineId, storage) {
     });
     return listed;
 }
-export function persistShadowPredictions(predictions, storage, updatedAt = new Date().toISOString()) {
-    if (predictions.length === 0)
+export function hasProcessedShadowSession(sessionId, storage) {
+    if (!usableShadowSessionId(sessionId))
+        return false;
+    return loadShadowPredictionStore(storage).processedSessions.includes(sessionId);
+}
+export function markShadowSessionProcessed(sessionId, storage) {
+    persistShadowPredictions([], storage, new Date().toISOString(), sessionId);
+}
+export function persistShadowPredictions(predictions, storage, updatedAt = new Date().toISOString(), processedSessionId) {
+    if (predictions.length === 0 && !usableShadowSessionId(processedSessionId))
         return [];
     const store = loadShadowPredictionStore(storage);
     const saved = [];
@@ -287,6 +334,9 @@ export function persistShadowPredictions(predictions, storage, updatedAt = new D
         };
         const key = learningKey(parts);
         const current = store.entries[key] ? cloneEntry(store.entries[key]) : emptyEntry(updatedAt);
+        const existing = prediction.direction === "increase" ? current.increase : current.decrease;
+        if (hasMatchingShadowEvent(existing, prediction))
+            continue;
         current.updatedAt = updatedAt;
         if (prediction.direction === "increase") {
             current.increase = appendBoundedPredictions(current.increase, prediction);
@@ -297,7 +347,17 @@ export function persistShadowPredictions(predictions, storage, updatedAt = new D
         store.entries[key] = current;
         saved.push(prediction);
     }
-    saveShadowPredictionStore(store, storage);
+    let processedSessions = store.processedSessions;
+    if (usableShadowSessionId(processedSessionId) && !processedSessions.includes(processedSessionId)) {
+        processedSessions = [...processedSessions, processedSessionId];
+    }
+    if (saved.length > 0 || processedSessions !== store.processedSessions) {
+        saveShadowPredictionStore({
+            version: SHADOW_PREDICTION_STORE_VERSION,
+            entries: store.entries,
+            processedSessions,
+        }, storage);
+    }
     return saved;
 }
 export function resetShadowPredictionsForMachine(machineId, storage) {
@@ -309,7 +369,11 @@ export function resetShadowPredictionsForMachine(machineId, storage) {
             continue;
         entries[key] = entry;
     }
-    return saveShadowPredictionStore({ version: SHADOW_PREDICTION_STORE_VERSION, entries }, storage);
+    return saveShadowPredictionStore({
+        version: SHADOW_PREDICTION_STORE_VERSION,
+        entries,
+        processedSessions: store.processedSessions,
+    }, storage);
 }
 export function emptyShadowPredictionEntry(updatedAt) {
     return emptyEntry(updatedAt);

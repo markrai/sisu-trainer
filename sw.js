@@ -43,6 +43,7 @@ const urlsToCache = [
   '/dist/machines/prediction/estimate.js',
   '/dist/machines/prediction/derive.js',
   '/dist/machines/prediction/storage.js',
+  '/dist/machines/prediction/validation.js',
   '/dist/version.js',
   '/data.json',
   '/manifest.json',
