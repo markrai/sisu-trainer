@@ -12,6 +12,11 @@
 
 - **In-workout portrait height** - Pause, phase, machine card, and ring no
   longer push the heart and machine icons below the viewport on short phones.
+  Leftover portrait height is distributed between those blocks so the stack is
+  not packed at the top on taller phones. The ring sits above the heart and
+  activity icons instead of overlapping them. The gray workout card fills the
+  phone height and sits just above the warm-up / workout duration line. The
+  start / pause row sits halfway between the day dropdown and the phase bar.
 
 ## [0.10.7] - 2026-08-27
 
