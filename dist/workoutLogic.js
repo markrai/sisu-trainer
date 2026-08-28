@@ -65,6 +65,24 @@ function actualElapsedSeconds(startTime, paused, pausedElapsed, now) {
         return pausedElapsed;
     return Math.floor((now - parseInt(startTime, 10)) / 1000);
 }
+function lastPersistedElapsedFromHrSamples(samples) {
+    let max;
+    for (const sample of samples) {
+        if (!Number.isFinite(sample.timestamp_sec))
+            continue;
+        if (max === undefined || sample.timestamp_sec > max)
+            max = sample.timestamp_sec;
+    }
+    return max;
+}
+function workoutRelativeHrSample(session, now = Date.now(), lastPersistedElapsed) {
+    if (!session.startTime || !session.sessionId || session.paused)
+        return null;
+    const elapsedSec = actualElapsedSeconds(session.startTime, false, session.pausedElapsed, now);
+    if (lastPersistedElapsed != null && elapsedSec <= lastPersistedElapsed)
+        return null;
+    return { elapsedSec };
+}
 function planEarlyCooldownTransition(input) {
     if (!input.hasSession || !input.blocks || input.blocks.cool <= 0) {
         return { type: "unavailable" };
@@ -397,4 +415,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, planEarlyCooldownTransition, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, planEarlyCooldownTransition, actualElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };

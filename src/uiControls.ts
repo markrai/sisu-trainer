@@ -12,6 +12,8 @@ import {
   resumeWorkout,
   requestEarlyCooldown,
   planEarlyCooldownTransition,
+  lastPersistedElapsedFromHrSamples,
+  workoutRelativeHrSample,
   startWorkout,
   todayName,
   hrTargetText,
@@ -19,7 +21,7 @@ import {
   updateRing,
 } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
-import { getAllWorkoutSummaries, deleteWorkoutSummary } from "./workoutStorage.js";
+import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
@@ -1509,6 +1511,57 @@ function displayWorkoutSummaries(workouts: any[]) {
   });
 }
 
+let lastPersistedWorkoutHrElapsed: number | undefined;
+let lastPersistedWorkoutHrSessionId: string | null = null;
+let lastPersistedHydratedSessionId: string | null = null;
+let lastPersistedHydrate: { sessionId: string; promise: Promise<void> } | null = null;
+
+async function ensureLastPersistedHydrated(sessionId: string): Promise<void> {
+  if (lastPersistedHydratedSessionId === sessionId) return;
+  if (lastPersistedHydrate?.sessionId === sessionId) {
+    await lastPersistedHydrate.promise;
+    return;
+  }
+  const promise = getHrSamples(sessionId)
+    .then((samples) => {
+      if (lastPersistedHydrate?.sessionId !== sessionId) return;
+      const max = lastPersistedElapsedFromHrSamples(samples);
+      if (lastPersistedWorkoutHrSessionId !== sessionId) {
+        lastPersistedWorkoutHrSessionId = sessionId;
+        lastPersistedWorkoutHrElapsed = max;
+      } else if (
+        max !== undefined &&
+        (lastPersistedWorkoutHrElapsed === undefined || max > lastPersistedWorkoutHrElapsed)
+      ) {
+        lastPersistedWorkoutHrElapsed = max;
+      }
+      lastPersistedHydratedSessionId = sessionId;
+    })
+    .catch((err: unknown) => console.error("Error hydrating persisted HR elapsed:", err));
+  lastPersistedHydrate = { sessionId, promise };
+  await promise;
+}
+
+async function persistWorkoutRelativeHr(
+  session: ReturnType<typeof getSession>,
+  bpm: number
+): Promise<void> {
+  if (!session.sessionId) return;
+  await ensureLastPersistedHydrated(session.sessionId);
+  const latest = getSession(getSelectedDay());
+  if (latest.sessionId !== session.sessionId) return;
+  const lastElapsed =
+    latest.sessionId === lastPersistedWorkoutHrSessionId ? lastPersistedWorkoutHrElapsed : undefined;
+  const sample = workoutRelativeHrSample(latest, Date.now(), lastElapsed);
+  if (!sample || !latest.sessionId) return;
+  lastPersistedWorkoutHrSessionId = latest.sessionId;
+  lastPersistedWorkoutHrElapsed = sample.elapsedSec;
+  recordMachineHeartRateSample(latest.sessionId, sample.elapsedSec, bpm);
+  if (typeof (window as any).storeHrSample === "function") {
+    (window as any).storeHrSample(latest.sessionId, sample.elapsedSec, bpm).catch((err: any) => console.error("Error storing HR sample:", err));
+  }
+}
+
 function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   phaseDisplayEl = phaseBoxEl;
 
@@ -1523,15 +1576,7 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
     updateHeartColor(bpm, hrTargetEl ? hrTargetEl.textContent : "");
     const day = getSelectedDay();
     const session = getSession(day);
-    const startTime = getStartTime(day);
-    if (startTime && session.sessionId) {
-      const start = typeof startTime === "number" ? startTime : parseInt(String(startTime), 10);
-      const elapsedSec = Math.floor((Date.now() - start) / 1000);
-      if (!session.paused) recordMachineHeartRateSample(session.sessionId, elapsedSec, bpm);
-      if (typeof (window as any).storeHrSample === "function") {
-        (window as any).storeHrSample(session.sessionId, elapsedSec, bpm).catch((err: any) => console.error("Error storing HR sample:", err));
-      }
-    }
+    void persistWorkoutRelativeHr(session, bpm);
   });
 
   if (phaseDisplayEl) {

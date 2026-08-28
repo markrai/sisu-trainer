@@ -9,6 +9,7 @@ import {
   clearSession,
   getEarlyCooldownElapsed,
   setEarlyCooldownElapsed,
+  type SessionData,
   type SessionStorage,
 } from "./sessionStore.js";
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
@@ -95,6 +96,28 @@ function actualElapsedSeconds(
   if (!startTime) return 0;
   if (paused) return pausedElapsed;
   return Math.floor((now - parseInt(startTime, 10)) / 1000);
+}
+
+function lastPersistedElapsedFromHrSamples(
+  samples: readonly { timestamp_sec: number }[]
+): number | undefined {
+  let max: number | undefined;
+  for (const sample of samples) {
+    if (!Number.isFinite(sample.timestamp_sec)) continue;
+    if (max === undefined || sample.timestamp_sec > max) max = sample.timestamp_sec;
+  }
+  return max;
+}
+
+function workoutRelativeHrSample(
+  session: Pick<SessionData, "startTime" | "sessionId" | "paused" | "pausedElapsed">,
+  now = Date.now(),
+  lastPersistedElapsed?: number | null
+): { elapsedSec: number } | null {
+  if (!session.startTime || !session.sessionId || session.paused) return null;
+  const elapsedSec = actualElapsedSeconds(session.startTime, false, session.pausedElapsed, now);
+  if (lastPersistedElapsed != null && elapsedSec <= lastPersistedElapsed) return null;
+  return { elapsedSec };
 }
 
 function planEarlyCooldownTransition(input: {
@@ -439,6 +462,9 @@ export {
   restartWorkout,
   requestEarlyCooldown,
   planEarlyCooldownTransition,
+  actualElapsedSeconds,
+  lastPersistedElapsedFromHrSamples,
+  workoutRelativeHrSample,
   getPhase,
   formatTime,
   adjustedBlockLengths,

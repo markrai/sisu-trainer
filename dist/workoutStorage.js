@@ -38,7 +38,26 @@ async function storeHrSample(sessionId, timestampSec, hr) {
         const database = await initDB();
         const tx = database.transaction([STORE_HR_SAMPLES], "readwrite");
         const store = tx.objectStore(STORE_HR_SAMPLES);
-        await store.put({ session_id: sessionId, timestamp_sec: timestampSec, hr });
+        const key = [sessionId, timestampSec];
+        await new Promise((resolve, reject) => {
+            const getRequest = store.get(key);
+            getRequest.onerror = () => reject(getRequest.error);
+            getRequest.onsuccess = () => {
+                if (getRequest.result) {
+                    resolve();
+                    return;
+                }
+                const addRequest = store.add({ session_id: sessionId, timestamp_sec: timestampSec, hr });
+                addRequest.onsuccess = () => resolve();
+                addRequest.onerror = () => {
+                    var _a;
+                    if (((_a = addRequest.error) === null || _a === void 0 ? void 0 : _a.name) === "ConstraintError")
+                        resolve();
+                    else
+                        reject(addRequest.error);
+                };
+            };
+        });
     }
     catch (error) {
         console.error("Error storing HR sample:", error);

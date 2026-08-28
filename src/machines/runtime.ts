@@ -91,14 +91,16 @@ function ensureSession(sessionId: string): void {
   if (runtime.sessionId !== sessionId) resetMachineGuidanceRuntime(sessionId);
 }
 
-export function recordMachineHeartRateSample(sessionId: string, elapsedSeconds: number, bpm: number): void {
-  if (!sessionId || !Number.isFinite(bpm) || bpm <= 0) return;
+export function recordMachineHeartRateSample(sessionId: string, elapsedSeconds: number, bpm: number): boolean {
+  if (!sessionId || !Number.isFinite(bpm) || bpm <= 0) return false;
   ensureSession(sessionId);
+  if (runtime.recentHeartRates.some((sample) => sample.elapsedSeconds === elapsedSeconds)) return false;
   runtime.recentHeartRates.push({ elapsedSeconds, bpm });
   const cutoff = elapsedSeconds - 15;
   runtime.recentHeartRates = runtime.recentHeartRates
     .filter((sample) => sample.elapsedSeconds >= cutoff)
     .slice(-32);
+  return true;
 }
 
 export function appendMachineGuidanceTrace(

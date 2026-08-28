@@ -23,13 +23,16 @@ function ensureSession(sessionId) {
 }
 export function recordMachineHeartRateSample(sessionId, elapsedSeconds, bpm) {
     if (!sessionId || !Number.isFinite(bpm) || bpm <= 0)
-        return;
+        return false;
     ensureSession(sessionId);
+    if (runtime.recentHeartRates.some((sample) => sample.elapsedSeconds === elapsedSeconds))
+        return false;
     runtime.recentHeartRates.push({ elapsedSeconds, bpm });
     const cutoff = elapsedSeconds - 15;
     runtime.recentHeartRates = runtime.recentHeartRates
         .filter((sample) => sample.elapsedSeconds >= cutoff)
         .slice(-32);
+    return true;
 }
 export function appendMachineGuidanceTrace(trace, elapsedSeconds, guidance, previous, phase) {
     if (isSameMachineRecommendation(previous, guidance))
