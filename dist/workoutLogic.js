@@ -65,6 +65,8 @@ function actualElapsedSeconds(startTime, paused, pausedElapsed, now) {
         return pausedElapsed;
     return Math.floor((now - parseInt(startTime, 10)) / 1000);
 }
+/** Authoritative active workout clock (excludes paused time). */
+const activeElapsedSeconds = actualElapsedSeconds;
 function lastPersistedElapsedFromHrSamples(samples) {
     let max;
     for (const sample of samples) {
@@ -98,6 +100,9 @@ function planEarlyCooldownTransition(input) {
 function resolveEarlyCooldownBlocks(day, blocksOverride) {
     if (blocksOverride !== undefined)
         return blocksOverride;
+    const snapshot = getSession(day).phasePlan;
+    if (snapshot === null || snapshot === void 0 ? void 0 : snapshot.blocks)
+        return snapshot.blocks;
     const base = getPlan()[day];
     return base ? adjustedBlockLengths(base, null) : null;
 }
@@ -155,6 +160,19 @@ function startWorkout() {
     }
     beginWorkout();
 }
+/** Freeze the plan inputs the live runtime will use for this session. */
+function capturePhasePlanSnapshot(day) {
+    var _a;
+    const base = getPlan()[day];
+    if (!base)
+        return null;
+    const blocks = adjustedBlockLengths(base, null);
+    const hrTargets = (_a = getHrTargets()[day]) !== null && _a !== void 0 ? _a : null;
+    return {
+        blocks: { warm: blocks.warm, sustain: blocks.sustain, cool: blocks.cool },
+        hrTargets: hrTargets ? JSON.parse(JSON.stringify(hrTargets)) : null,
+    };
+}
 function beginWorkout(activity) {
     var _a, _b;
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
@@ -165,16 +183,17 @@ function beginWorkout(activity) {
     if (allowed.length > 1 && resolved === undefined)
         return;
     const startTime = Date.now();
+    const phasePlan = capturePhasePlanSnapshot(day);
     let sessionId = null;
     if (typeof window.generateUUID === "function") {
         sessionId = window.generateUUID();
-        startSession(day, startTime, sessionId, resolved);
+        startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
         if (typeof window.initDB === "function") {
             window.initDB().catch((err) => console.error("Failed to init DB:", err));
         }
     }
     else {
-        startSession(day, startTime, null, resolved);
+        startSession(day, startTime, null, resolved, undefined, phasePlan);
     }
     resetMachineGuidanceRuntime(sessionId);
     if (typeof window.requestWakeLock === "function") {
@@ -198,9 +217,12 @@ async function restartWorkout() {
     if (typeof window.updateDisplay === "function")
         window.updateDisplay();
 }
-function getIntervalRuntime(day, sustainElapsed) {
+function resolveDayHrTargets(day, hrTargets) {
+    return hrTargets !== undefined ? hrTargets : getHrTargets()[day];
+}
+function getIntervalRuntime(day, sustainElapsed, hrTargets) {
     var _a;
-    const intervals = (_a = getHrTargets()[day]) === null || _a === void 0 ? void 0 : _a.intervals;
+    const intervals = (_a = resolveDayHrTargets(day, hrTargets)) === null || _a === void 0 ? void 0 : _a.intervals;
     if (!intervals || intervals.phases.length === 0)
         return null;
     const phases = intervals.phases;
@@ -232,7 +254,7 @@ function getIntervalRuntime(day, sustainElapsed) {
     }
     return null;
 }
-function getPhase(elapsedSec, blocks, earlyCooldownElapsed) {
+function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
     var _a, _b;
     const w = blocks.warm * 60;
     const s = blocks.sustain * 60;
@@ -256,9 +278,10 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed) {
         };
     }
     if (elapsedSec < w + s) {
-        const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
+        const day = (_a = options === null || options === void 0 ? void 0 : options.day) !== null && _a !== void 0 ? _a : (typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName());
+        const dayHrTargets = resolveDayHrTargets(day, options === null || options === void 0 ? void 0 : options.hrTargets);
         const sustainElapsed = Math.max(0, elapsedSec - w);
-        const intervalRuntime = getIntervalRuntime(day, sustainElapsed);
+        const intervalRuntime = getIntervalRuntime(day, sustainElapsed, dayHrTargets);
         if (intervalRuntime) {
             return {
                 phase: "Sustain",
@@ -274,7 +297,7 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed) {
         }
         return {
             phase: "Sustain",
-            kind: (_b = (_a = getHrTargets()[day]) === null || _a === void 0 ? void 0 : _a.main_set_kind) !== null && _b !== void 0 ? _b : "work",
+            kind: (_b = dayHrTargets === null || dayHrTargets === void 0 ? void 0 : dayHrTargets.main_set_kind) !== null && _b !== void 0 ? _b : "work",
             phaseId: "sustain",
             phaseElapsedSeconds: sustainElapsed,
             phaseDurationSeconds: s,
@@ -361,8 +384,8 @@ function parseHrTargetRange(value) {
     const target = parseInt(singleMatch[1]);
     return { min: target - 5, max: target + 5 };
 }
-function hrTargetText(phaseName, day, elapsedSec, blocks) {
-    const dayHrTargets = getHrTargets()[day];
+function hrTargetText(phaseName, day, elapsedSec, blocks, hrTargets) {
+    const dayHrTargets = resolveDayHrTargets(day, hrTargets);
     if (!dayHrTargets)
         return "";
     if (phaseName === "Warm-Up") {
@@ -386,7 +409,7 @@ function hrTargetText(phaseName, day, elapsedSec, blocks) {
         if (dayHrTargets.intervals && dayHrTargets.intervals.phases) {
             const warmSec = blocks.warm * 60;
             const sustainElapsed = Math.max(0, elapsedSec - warmSec);
-            const intervalRuntime = getIntervalRuntime(day, sustainElapsed);
+            const intervalRuntime = getIntervalRuntime(day, sustainElapsed, dayHrTargets);
             if (intervalRuntime === null || intervalRuntime === void 0 ? void 0 : intervalRuntime.interval.target_hr_bpm)
                 return intervalRuntime.interval.target_hr_bpm + " bpm";
         }
@@ -415,4 +438,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, planEarlyCooldownTransition, actualElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, capturePhasePlanSnapshot, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };

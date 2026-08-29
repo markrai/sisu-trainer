@@ -209,13 +209,14 @@ function closeModal() {
     }
 }
 function openCancelModal() {
+    var _a, _b;
     const cooldownBtn = document.getElementById("earlyCooldownButton");
     if (cooldownBtn) {
         const day = getSelectedDay();
         const session = getSession(day);
         const plan = getPlan();
         const base = plan[day];
-        const blocks = base ? adjustedBlockLengths(base, null) : null;
+        const blocks = (_b = (_a = session.phasePlan) === null || _a === void 0 ? void 0 : _a.blocks) !== null && _b !== void 0 ? _b : (base ? adjustedBlockLengths(base, null) : null);
         const elapsedSec = session.paused
             ? session.pausedElapsed
             : session.startTime
@@ -383,20 +384,24 @@ function getWarmupSubsectionName(day, elapsedSec) {
     return null;
 }
 function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime) {
-    var _a, _b;
+    var _a, _b, _c, _d;
     if (day === "Downregulation") {
         return { screen: "downregulation", day: "Downregulation", plan, workoutMetadata };
     }
     if (!base) {
         return { screen: "rest", day, plan, workoutMetadata };
     }
-    const blocks = adjustedBlockLengths(base, null);
+    const session = getSession(day);
+    const blocks = (_b = (_a = session.phasePlan) === null || _a === void 0 ? void 0 : _a.blocks) !== null && _b !== void 0 ? _b : adjustedBlockLengths(base, null);
     const workoutBlocksText = "Warm-Up: " + blocks.warm + " min · Workout: " + blocks.sustain + " min · Cool-Down: " + blocks.cool + " min";
     if (!startTime) {
         return { screen: "idle", day, plan, workoutMetadata, base, blocks, workoutBlocksText };
     }
     const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime)) / 1000);
-    const phase = getPhase(elapsedSec, blocks, getSession(day).earlyCooldownElapsed);
+    const phase = getPhase(elapsedSec, blocks, session.earlyCooldownElapsed, {
+        day,
+        hrTargets: session.phasePlan ? session.phasePlan.hrTargets : undefined,
+    });
     if (phase.done) {
         return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
     }
@@ -412,7 +417,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
     else if (phase.kind === "work" || phase.kind === "recovery") {
         phaseDisplayName = "Workout";
     }
-    const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks);
+    const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks, session.phasePlan ? session.phasePlan.hrTargets : undefined);
     const nowTime = Date.now();
     const liveBpmStale = lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
     return {
@@ -426,7 +431,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         elapsedSec,
         phase,
         phaseDisplayName,
-        activity: (_b = getActiveWorkoutActivity((_a = workoutMetadata[day]) === null || _a === void 0 ? void 0 : _a.activities, getSession(day).activity)) !== null && _b !== void 0 ? _b : null,
+        activity: (_d = getActiveWorkoutActivity((_c = workoutMetadata[day]) === null || _c === void 0 ? void 0 : _c.activities, getSession(day).activity)) !== null && _d !== void 0 ? _d : null,
         paused,
         hrTargetTextValue,
         liveBpm: liveBpm !== null && liveBpm !== void 0 ? liveBpm : null,

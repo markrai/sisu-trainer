@@ -1,10 +1,21 @@
 # Changelog
 
+## [0.10.10] - 2026-08-28
+
+### Added
+
+- **VO2 evidence foundation** - Completed workouts can persist local
+  `vo2_evidence`: pause-safe active duration, phase boundaries, work-end /
+  cooldown markers (including Early Cooldown), HR acquisition facts, and
+  machine provenance. Evidence only; no VO2 calculation, workout, or UI.
+  Historical workouts without evidence remain unchanged. Evidence is stripped
+  from SISU server ingest. See `VO2-EVIDENCE-FOUNDATION.md`.
+
 ## [0.10.9] - 2026-08-28
 
 ### Added
 
-- **Fitbaus Bike Bridge client** - Settings → Equipment can store a LAN bridge
+- **Fitbaus Bike Bridge client** - Settings -> Equipment can store a LAN bridge
   URL and optional automatic resistance control. Native Capacitor HTTP polls
   `/api/v1/status` and `/api/v1/telemetry` once per second and posts absolute
   `/api/v1/resistance` targets from existing machine guidance. Observed bike
@@ -39,7 +50,7 @@
 
 ### Added
 
-- **Machine diagnostics export** - Settings → Equipment can export an on-device
+- **Machine diagnostics export** - Settings -> Equipment can export an on-device
   machine-learning diagnostics snapshot, including timing evidence without
   inventing concrete evaluation times from phase duration alone.
 

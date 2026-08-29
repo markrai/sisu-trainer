@@ -87,12 +87,18 @@ async function storeWorkoutSummary(summary: WorkoutSummary) {
     const database = await initDB();
     const tx = database.transaction([STORE_WORKOUTS], "readwrite");
     const store = tx.objectStore(STORE_WORKOUTS);
-    await store.put({
-      session_id: summary.external_session_id,
-      startedAt: summary.startedAt,
-      endedAt: summary.endedAt,
-      day: summary.day || null,
-      summary,
+    await new Promise<void>((resolve, reject) => {
+      const request = store.put({
+        session_id: summary.external_session_id,
+        startedAt: summary.startedAt,
+        endedAt: summary.endedAt,
+        day: summary.day || null,
+        summary,
+      });
+      request.onerror = () => reject(request.error);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error || new Error("workout summary write aborted"));
     });
   } catch (error) {
     console.error("Error storing workout summary:", error);
@@ -224,6 +230,20 @@ export function registerStorageGlobals() {
   (window as any).storeSisuSettings = storeSisuSettings;
   (window as any).getSisuSettings = getSisuSettings;
   (window as any).clearSisuSettings = clearSisuSettings;
+}
+
+/** Close the cached IDB handle and delete the app database (tests only). */
+export async function resetWorkoutStorageForTests(): Promise<void> {
+  if (db) {
+    db.close();
+    db = null;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase(DB_NAME);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => resolve();
+  });
 }
 
 export {

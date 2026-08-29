@@ -91,6 +91,61 @@ export interface ZoneMinutes {
   z5: number;
 }
 
+/** Local evidence for a future VO2 estimator. Not a VO2 result. */
+export const VO2_EVIDENCE_SCHEMA_VERSION = 1 as const;
+
+export interface Vo2EvidencePhasePrescription {
+  /** Prescribed HR target text or number from the workout plan (not measured). */
+  target_hr_bpm?: string | number;
+  target_hr_min?: number;
+  target_hr_max?: number;
+}
+
+export interface Vo2EvidencePhase {
+  phase_id: string;
+  kind: WorkoutPhaseKind;
+  detail_name?: string;
+  interval_index?: number;
+  active_start_sec: number;
+  active_end_sec: number;
+  prescribed?: Vo2EvidencePhasePrescription;
+}
+
+export interface Vo2EvidenceHr {
+  /** Chest-strap BLE is the only live HR source today. */
+  source: "ble_chest_strap" | "absent";
+  /** Count of active-workout HR samples (pause-era HR is not stored as workout samples). */
+  sample_count: number;
+  first_active_elapsed_sec?: number;
+  last_active_elapsed_sec?: number;
+}
+
+export interface Vo2EvidenceMachine {
+  machine_id?: MachineId;
+  machine_profile_version?: number;
+  guidance_trace_entry_count?: number;
+}
+
+export interface Vo2Evidence {
+  schema_version: typeof VO2_EVIDENCE_SCHEMA_VERSION;
+  activity?: Activity;
+  intent?: string;
+  day?: DayName | string;
+  /** Active workout elapsed at completion (excludes paused time). */
+  active_duration_sec: number;
+  /** Cumulative paused wall time during the session. */
+  paused_duration_sec: number;
+  /** Active elapsed when meaningful work ended; null if work never ended. */
+  work_end_active_sec: number | null;
+  /** Active elapsed when cooldown started; null if cooldown never started. */
+  cooldown_start_active_sec: number | null;
+  early_cooldown: boolean;
+  cancelled?: boolean;
+  phases: Vo2EvidencePhase[];
+  hr: Vo2EvidenceHr;
+  machine?: Vo2EvidenceMachine;
+}
+
 export interface WorkoutSummary {
   external_session_id: string;
   startedAt: string;
@@ -113,6 +168,11 @@ export interface WorkoutSummary {
   machine_profile_version?: number;
   machine_guidance_trace?: MachineGuidanceTraceEntry[];
   machine_decision_audit?: MachineDecisionAuditEntry[];
+  /**
+   * Pause-safe stage-aware physiological evidence for a future VO2 estimator.
+   * Absent on historical workouts that predate this format.
+   */
+  vo2_evidence?: Vo2Evidence;
 }
 
 export interface SisuSettings {

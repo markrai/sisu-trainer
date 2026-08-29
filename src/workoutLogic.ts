@@ -1,6 +1,6 @@
 import { getHrTargets, getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
-import { Activity, PlanBlock, WorkoutPhaseState } from "./types.js";
+import { Activity, HrTargetsForDay, PlanBlock, WorkoutPhaseState } from "./types.js";
 import {
   getSession,
   startSession,
@@ -9,6 +9,7 @@ import {
   clearSession,
   getEarlyCooldownElapsed,
   setEarlyCooldownElapsed,
+  type PhasePlanSnapshot,
   type SessionData,
   type SessionStorage,
 } from "./sessionStore.js";
@@ -98,6 +99,10 @@ function actualElapsedSeconds(
   return Math.floor((now - parseInt(startTime, 10)) / 1000);
 }
 
+/** Authoritative active workout clock (excludes paused time). */
+const activeElapsedSeconds = actualElapsedSeconds;
+
+
 function lastPersistedElapsedFromHrSamples(
   samples: readonly { timestamp_sec: number }[]
 ): number | undefined {
@@ -143,6 +148,8 @@ function resolveEarlyCooldownBlocks(
   blocksOverride?: PlanBlock | null
 ): PlanBlock | null {
   if (blocksOverride !== undefined) return blocksOverride;
+  const snapshot = getSession(day).phasePlan;
+  if (snapshot?.blocks) return snapshot.blocks;
   const base = getPlan()[day];
   return base ? adjustedBlockLengths(base, null) : null;
 }
@@ -196,6 +203,18 @@ function startWorkout() {
   beginWorkout();
 }
 
+/** Freeze the plan inputs the live runtime will use for this session. */
+function capturePhasePlanSnapshot(day: string): PhasePlanSnapshot | null {
+  const base = getPlan()[day];
+  if (!base) return null;
+  const blocks = adjustedBlockLengths(base, null);
+  const hrTargets = getHrTargets()[day] ?? null;
+  return {
+    blocks: { warm: blocks.warm, sustain: blocks.sustain, cool: blocks.cool },
+    hrTargets: hrTargets ? JSON.parse(JSON.stringify(hrTargets)) : null,
+  };
+}
+
 function beginWorkout(activity?: Activity) {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
   const allowed = getWorkoutMetadata()[day]?.activities ?? [];
@@ -204,15 +223,16 @@ function beginWorkout(activity?: Activity) {
     : getActiveWorkoutActivity(allowed);
   if (allowed.length > 1 && resolved === undefined) return;
   const startTime = Date.now();
+  const phasePlan = capturePhasePlanSnapshot(day);
   let sessionId: string | null = null;
   if (typeof (window as any).generateUUID === "function") {
     sessionId = (window as any).generateUUID();
-    startSession(day, startTime, sessionId, resolved);
+    startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
     if (typeof (window as any).initDB === "function") {
       (window as any).initDB().catch((err: any) => console.error("Failed to init DB:", err));
     }
   } else {
-    startSession(day, startTime, null, resolved);
+    startSession(day, startTime, null, resolved, undefined, phasePlan);
   }
   resetMachineGuidanceRuntime(sessionId);
 
@@ -242,8 +262,21 @@ async function restartWorkout() {
   if (typeof (window as any).updateDisplay === "function") (window as any).updateDisplay();
 }
 
-function getIntervalRuntime(day: string, sustainElapsed: number) {
-  const intervals = getHrTargets()[day]?.intervals;
+export interface GetPhaseOptions {
+  day?: string;
+  hrTargets?: HrTargetsForDay | null;
+}
+
+function resolveDayHrTargets(day: string, hrTargets?: HrTargetsForDay | null): HrTargetsForDay | null | undefined {
+  return hrTargets !== undefined ? hrTargets : getHrTargets()[day];
+}
+
+function getIntervalRuntime(
+  day: string,
+  sustainElapsed: number,
+  hrTargets?: HrTargetsForDay | null
+) {
+  const intervals = resolveDayHrTargets(day, hrTargets)?.intervals;
   if (!intervals || intervals.phases.length === 0) return null;
   const phases = intervals.phases;
   const totalDuration = phases.reduce((sum, phase) => sum + phase.duration * 60, 0);
@@ -274,7 +307,12 @@ function getIntervalRuntime(day: string, sustainElapsed: number) {
   return null;
 }
 
-function getPhase(elapsedSec: number, blocks: PlanBlock, earlyCooldownElapsed?: number | null): WorkoutPhaseState {
+function getPhase(
+  elapsedSec: number,
+  blocks: PlanBlock,
+  earlyCooldownElapsed?: number | null,
+  options?: GetPhaseOptions
+): WorkoutPhaseState {
   const w = blocks.warm * 60;
   const s = blocks.sustain * 60;
   const c = blocks.cool * 60;
@@ -299,9 +337,12 @@ function getPhase(elapsedSec: number, blocks: PlanBlock, earlyCooldownElapsed?: 
     };
   }
   if (elapsedSec < w + s) {
-    const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
+    const day =
+      options?.day ??
+      (typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName());
+    const dayHrTargets = resolveDayHrTargets(day, options?.hrTargets);
     const sustainElapsed = Math.max(0, elapsedSec - w);
-    const intervalRuntime = getIntervalRuntime(day, sustainElapsed);
+    const intervalRuntime = getIntervalRuntime(day, sustainElapsed, dayHrTargets);
     if (intervalRuntime) {
       return {
         phase: "Sustain",
@@ -317,7 +358,7 @@ function getPhase(elapsedSec: number, blocks: PlanBlock, earlyCooldownElapsed?: 
     }
     return {
       phase: "Sustain",
-      kind: getHrTargets()[day]?.main_set_kind ?? "work",
+      kind: dayHrTargets?.main_set_kind ?? "work",
       phaseId: "sustain",
       phaseElapsedSeconds: sustainElapsed,
       phaseDurationSeconds: s,
@@ -401,8 +442,14 @@ function parseHrTargetRange(value: string | null | undefined) {
   return { min: target - 5, max: target + 5 };
 }
 
-function hrTargetText(phaseName: string, day: string, elapsedSec: number, blocks: PlanBlock) {
-  const dayHrTargets = getHrTargets()[day];
+function hrTargetText(
+  phaseName: string,
+  day: string,
+  elapsedSec: number,
+  blocks: PlanBlock,
+  hrTargets?: HrTargetsForDay | null
+) {
+  const dayHrTargets = resolveDayHrTargets(day, hrTargets);
   if (!dayHrTargets) return "";
   if (phaseName === "Warm-Up") {
     if (dayHrTargets.warmup_subsections && Array.isArray(dayHrTargets.warmup_subsections)) {
@@ -421,7 +468,7 @@ function hrTargetText(phaseName: string, day: string, elapsedSec: number, blocks
     if (dayHrTargets.intervals && dayHrTargets.intervals.phases) {
       const warmSec = blocks.warm * 60;
       const sustainElapsed = Math.max(0, elapsedSec - warmSec);
-      const intervalRuntime = getIntervalRuntime(day, sustainElapsed);
+      const intervalRuntime = getIntervalRuntime(day, sustainElapsed, dayHrTargets);
       if (intervalRuntime?.interval.target_hr_bpm) return intervalRuntime.interval.target_hr_bpm + " bpm";
     } else if (dayHrTargets.main_set) {
       return dayHrTargets.main_set + " bpm";
@@ -463,8 +510,10 @@ export {
   requestEarlyCooldown,
   planEarlyCooldownTransition,
   actualElapsedSeconds,
+  activeElapsedSeconds,
   lastPersistedElapsedFromHrSamples,
   workoutRelativeHrSample,
+  capturePhasePlanSnapshot,
   getPhase,
   formatTime,
   adjustedBlockLengths,

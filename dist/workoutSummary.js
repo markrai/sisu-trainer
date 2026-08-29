@@ -2,12 +2,14 @@ import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js"
 import { getHrSamples, storeWorkoutSummary } from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
 import { getMachineUsageSnapshot } from "./machines/runtime.js";
-import { getSession } from "./sessionStore.js";
-import { getWorkoutMetadata } from "./workoutData.js";
+import { getSession, totalPausedDurationSec } from "./sessionStore.js";
+import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
 import { getActiveWorkoutActivity } from "./workoutActivity.js";
 import { learnFromCompletedWorkout } from "./machines/learning/index.js";
 import { learnShadowPredictionsFromCompletedWorkout } from "./machines/prediction/index.js";
 import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
+import { actualElapsedSeconds, adjustedBlockLengths } from "./workoutLogic.js";
+import { attachVo2Evidence, buildVo2Evidence } from "./vo2Evidence.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -99,7 +101,7 @@ function validateSummary(summary) {
         console.error("Workout summary validation errors:", errors);
 }
 async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, options) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e;
     const durationMs = endedAt - startedAt;
     const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
     const MAX_DURATION_MINUTES = 1440;
@@ -135,8 +137,29 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         cancelled: options === null || options === void 0 ? void 0 : options.cancelled,
     };
     applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
+    const session = getSession(day);
     const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
-    applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, getSession(day).activity));
+    applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, session.activity));
+    const base = getPlan()[day];
+    const liveBlocks = base ? adjustedBlockLengths(base, null) : null;
+    const phasePlan = session.phasePlan;
+    const blocks = (_c = phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.blocks) !== null && _c !== void 0 ? _c : liveBlocks;
+    const activeDurationSec = actualElapsedSeconds(session.startTime, session.paused, session.pausedElapsed, endedAt);
+    attachVo2Evidence(summary, buildVo2Evidence({
+        day,
+        activity: summary.activity,
+        intent: summary.intent,
+        blocks,
+        hrTargets: phasePlan ? phasePlan.hrTargets : (_d = getHrTargets()[day]) !== null && _d !== void 0 ? _d : null,
+        activeDurationSec,
+        pausedDurationSec: totalPausedDurationSec(session, endedAt),
+        earlyCooldownElapsed: session.earlyCooldownElapsed,
+        cancelled: options === null || options === void 0 ? void 0 : options.cancelled,
+        hrSamples,
+        machineId: summary.machine_id,
+        machineProfileVersion: summary.machine_profile_version,
+        machineGuidanceTraceEntryCount: (_e = summary.machine_guidance_trace) === null || _e === void 0 ? void 0 : _e.length,
+    }));
     validateSummary(summary);
     const zoneSum = summary.zone_minutes.z1 +
         summary.zone_minutes.z2 +

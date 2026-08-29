@@ -3,12 +3,14 @@ import { getHrSamples, storeWorkoutSummary } from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
 import { Activity, WorkoutSummary } from "./types.js";
 import { getMachineUsageSnapshot, type MachineUsageSnapshot } from "./machines/runtime.js";
-import { getSession } from "./sessionStore.js";
-import { getWorkoutMetadata } from "./workoutData.js";
+import { getSession, totalPausedDurationSec } from "./sessionStore.js";
+import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
 import { getActiveWorkoutActivity } from "./workoutActivity.js";
 import { learnFromCompletedWorkout } from "./machines/learning/index.js";
 import { learnShadowPredictionsFromCompletedWorkout } from "./machines/prediction/index.js";
 import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
+import { actualElapsedSeconds, adjustedBlockLengths } from "./workoutLogic.js";
+import { attachVo2Evidence, buildVo2Evidence } from "./vo2Evidence.js";
 
 // Generate stable UUID (v4-ish)
 function generateUUID(): string {
@@ -159,8 +161,38 @@ async function generateWorkoutSummary(
   };
 
   applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
+  const session = getSession(day);
   const allowed = getWorkoutMetadata()[day]?.activities ?? [];
-  applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, getSession(day).activity));
+  applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, session.activity));
+
+  const base = getPlan()[day];
+  const liveBlocks = base ? adjustedBlockLengths(base, null) : null;
+  const phasePlan = session.phasePlan;
+  const blocks = phasePlan?.blocks ?? liveBlocks;
+  const activeDurationSec = actualElapsedSeconds(
+    session.startTime,
+    session.paused,
+    session.pausedElapsed,
+    endedAt
+  );
+  attachVo2Evidence(
+    summary,
+    buildVo2Evidence({
+      day,
+      activity: summary.activity,
+      intent: summary.intent,
+      blocks,
+      hrTargets: phasePlan ? phasePlan.hrTargets : getHrTargets()[day] ?? null,
+      activeDurationSec,
+      pausedDurationSec: totalPausedDurationSec(session, endedAt),
+      earlyCooldownElapsed: session.earlyCooldownElapsed,
+      cancelled: options?.cancelled,
+      hrSamples,
+      machineId: summary.machine_id,
+      machineProfileVersion: summary.machine_profile_version,
+      machineGuidanceTraceEntryCount: summary.machine_guidance_trace?.length,
+    })
+  );
 
   validateSummary(summary);
   const zoneSum =

@@ -1,4 +1,4 @@
-import type { Activity } from "./types.js";
+import type { Activity, HrTargetsForDay, PlanBlock } from "./types.js";
 import { isActivity } from "./workoutActivity.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
@@ -9,6 +9,12 @@ export interface SessionStorage {
   removeItem(key: string): void;
 }
 
+/** Minimum phase-planning input captured at workout start for evidence replay. */
+export interface PhasePlanSnapshot {
+  blocks: PlanBlock;
+  hrTargets: HrTargetsForDay | null;
+}
+
 export interface SessionData {
   startTime: string | null;
   sessionId: string | null;
@@ -16,8 +22,14 @@ export interface SessionData {
   summaryEmitted: string | null;
   paused: boolean;
   pausedElapsed: number;
+  /** Cumulative completed pause seconds (excludes an open pause). */
+  pausedDurationSec: number;
+  /** Wall-clock ms when the current pause began, if paused. */
+  pauseWallStart: number | null;
   earlyCooldownElapsed: number | null;
   activity?: Activity;
+  /** Blocks + HR targets frozen at workout start for phase evidence replay. */
+  phasePlan: PhasePlanSnapshot | null;
 }
 
 function storageOrBrowser(storage?: SessionStorage): SessionStorage {
@@ -32,11 +44,63 @@ function earlyCooldownKey(day: string): string {
   return "early_cooldown_elapsed_" + day;
 }
 
+function pausedDurationKey(day: string): string {
+  return "paused_duration_" + day;
+}
+
+function pauseWallStartKey(day: string): string {
+  return "pause_wall_start_" + day;
+}
+
+function phasePlanKey(day: string): string {
+  return "phase_plan_" + day;
+}
+
 function parseEarlyCooldownElapsed(raw: string | null): number | null {
   if (raw == null || raw === "") return null;
   const value = Number(raw);
   if (!Number.isFinite(value) || value < 0) return null;
   return value;
+}
+
+function parseNonNegativeInt(raw: string | null): number {
+  const value = parseInt(raw || "0", 10);
+  return Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function parseOptionalWallMs(raw: string | null): number | null {
+  if (raw == null || raw === "") return null;
+  const value = parseInt(raw, 10);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function parsePhasePlan(raw: string | null): PhasePlanSnapshot | null {
+  if (raw == null || raw === "") return null;
+  try {
+    const parsed = JSON.parse(raw);
+    const warm = Number(parsed?.blocks?.warm);
+    const sustain = Number(parsed?.blocks?.sustain);
+    const cool = Number(parsed?.blocks?.cool);
+    if (![warm, sustain, cool].every((n) => Number.isFinite(n) && n >= 0)) return null;
+    return {
+      blocks: { warm, sustain, cool },
+      hrTargets: parsed?.hrTargets && typeof parsed.hrTargets === "object" ? parsed.hrTargets : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Total paused seconds including an open pause through `now`. */
+export function totalPausedDurationSec(
+  session: Pick<SessionData, "paused" | "pausedDurationSec" | "pauseWallStart">,
+  now = Date.now()
+): number {
+  let total = session.pausedDurationSec;
+  if (session.paused && session.pauseWallStart != null) {
+    total += Math.max(0, Math.floor((now - session.pauseWallStart) / 1000));
+  }
+  return total;
 }
 
 export function getEarlyCooldownElapsed(day: string, storage?: SessionStorage): number | null {
@@ -58,8 +122,11 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
     summaryEmitted: store.getItem("summary_emitted_" + day),
     paused: store.getItem("paused_" + day) === "true",
     pausedElapsed: parseInt(store.getItem("paused_elapsed_" + day) || "0", 10),
+    pausedDurationSec: parseNonNegativeInt(store.getItem(pausedDurationKey(day))),
+    pauseWallStart: parseOptionalWallMs(store.getItem(pauseWallStartKey(day))),
     earlyCooldownElapsed: parseEarlyCooldownElapsed(store.getItem(earlyCooldownKey(day))),
     activity: parseStoredActivity(store.getItem("activity_" + day)),
+    phasePlan: parsePhasePlan(store.getItem(phasePlanKey(day))),
   };
 }
 
@@ -68,10 +135,16 @@ export function startSession(
   startTime: number,
   sessionId?: string | null,
   activity?: Activity,
-  storage?: SessionStorage
+  storage?: SessionStorage,
+  phasePlan?: PhasePlanSnapshot | null
 ): void {
   const store = storageOrBrowser(storage);
   store.removeItem(earlyCooldownKey(day));
+  store.removeItem(pausedDurationKey(day));
+  store.removeItem(pauseWallStartKey(day));
+  store.removeItem("paused_" + day);
+  store.removeItem("paused_elapsed_" + day);
+  store.removeItem(phasePlanKey(day));
   store.setItem("start_" + day, String(startTime));
   if (sessionId != null) {
     store.setItem("session_id_" + day, sessionId);
@@ -80,21 +153,45 @@ export function startSession(
   }
   if (activity) store.setItem("activity_" + day, activity);
   else store.removeItem("activity_" + day);
+  if (phasePlan?.blocks) {
+    store.setItem(
+      phasePlanKey(day),
+      JSON.stringify({
+        blocks: phasePlan.blocks,
+        hrTargets: phasePlan.hrTargets ?? null,
+      })
+    );
+  }
 }
 
-export function pauseSession(day: string, elapsedSec: number, storage?: SessionStorage): void {
+export function pauseSession(
+  day: string,
+  elapsedSec: number,
+  storage?: SessionStorage,
+  now = Date.now()
+): void {
   const store = storageOrBrowser(storage);
   store.setItem("paused_" + day, "true");
   store.setItem("paused_elapsed_" + day, String(elapsedSec));
+  if (store.getItem(pauseWallStartKey(day)) == null) {
+    store.setItem(pauseWallStartKey(day), String(now));
+  }
 }
 
 export function resumeSession(day: string, storage?: SessionStorage, now = Date.now()): void {
   const store = storageOrBrowser(storage);
   const pausedElapsed = parseInt(store.getItem("paused_elapsed_" + day) || "0", 10);
+  const pauseWallStart = parseOptionalWallMs(store.getItem(pauseWallStartKey(day)));
+  if (pauseWallStart != null) {
+    const add = Math.max(0, Math.floor((now - pauseWallStart) / 1000));
+    const prev = parseNonNegativeInt(store.getItem(pausedDurationKey(day)));
+    store.setItem(pausedDurationKey(day), String(prev + add));
+  }
   const newStart = now - pausedElapsed * 1000;
   store.setItem("start_" + day, String(newStart));
   store.removeItem("paused_" + day);
   store.removeItem("paused_elapsed_" + day);
+  store.removeItem(pauseWallStartKey(day));
 }
 
 export function clearSession(day: string, storage?: SessionStorage): void {
@@ -105,8 +202,11 @@ export function clearSession(day: string, storage?: SessionStorage): void {
   store.removeItem("summary_emitted_" + day);
   store.removeItem("paused_" + day);
   store.removeItem("paused_elapsed_" + day);
+  store.removeItem(pausedDurationKey(day));
+  store.removeItem(pauseWallStartKey(day));
   store.removeItem(earlyCooldownKey(day));
   store.removeItem("activity_" + day);
+  store.removeItem(phasePlanKey(day));
 }
 
 export function markSummaryEmitted(day: string): void {

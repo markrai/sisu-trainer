@@ -278,6 +278,7 @@ function buildSisuWorkoutPayload(summary: any) {
   delete payload.activity;
   delete payload.shadow_predictions;
   delete payload.shadow_resistance_predictions;
+  delete payload.vo2_evidence;
   if (typeof payload.day !== "string" || payload.day.trim() === "") delete payload.day;
   return payload;
 }

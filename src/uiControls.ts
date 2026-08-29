@@ -267,7 +267,7 @@ function openCancelModal() {
     const session = getSession(day);
     const plan = getPlan();
     const base = (plan as any)[day];
-    const blocks = base ? adjustedBlockLengths(base, null) : null;
+    const blocks = session.phasePlan?.blocks ?? (base ? adjustedBlockLengths(base, null) : null);
     const elapsedSec = session.paused
       ? session.pausedElapsed
       : session.startTime
@@ -480,7 +480,8 @@ function deriveWorkoutState(
     return { screen: "rest", day, plan, workoutMetadata };
   }
 
-  const blocks = adjustedBlockLengths(base, null);
+  const session = getSession(day);
+  const blocks = session.phasePlan?.blocks ?? adjustedBlockLengths(base, null);
   const workoutBlocksText =
     "Warm-Up: " + blocks.warm + " min · Workout: " + blocks.sustain + " min · Cool-Down: " + blocks.cool + " min";
 
@@ -489,7 +490,10 @@ function deriveWorkoutState(
   }
 
   const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime)) / 1000);
-  const phase = getPhase(elapsedSec, blocks, getSession(day).earlyCooldownElapsed);
+  const phase = getPhase(elapsedSec, blocks, session.earlyCooldownElapsed, {
+    day,
+    hrTargets: session.phasePlan ? session.phasePlan.hrTargets : undefined,
+  });
 
   if (phase.done) {
     return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
@@ -505,7 +509,13 @@ function deriveWorkoutState(
     phaseDisplayName = "Workout";
   }
 
-  const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks);
+  const hrTargetTextValue = hrTargetText(
+    phase.phase,
+    day,
+    elapsedSec,
+    blocks,
+    session.phasePlan ? session.phasePlan.hrTargets : undefined
+  );
   const nowTime = Date.now();
   const liveBpmStale =
     lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;

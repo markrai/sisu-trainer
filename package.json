@@ -9,7 +9,7 @@
     "prebuild:native": "node scripts/sync-version.cjs",
     "build:native": "node scripts/build-native.mjs",
     "check": "tsc --noEmit",
-    "test": "npm run build && node --test tests/machineGuidance.test.mjs tests/machineLearning.test.mjs tests/machineDynamics.test.mjs tests/machineTiming.test.mjs tests/machinePrediction.test.mjs tests/machinePredictionValidation.test.mjs tests/machineDiagnostics.test.mjs tests/machineAudit.test.mjs tests/workoutCooldown.test.mjs tests/hrPauseTiming.test.mjs tests/bikeBridge.test.mjs",
+    "test": "npm run build && node --test tests/machineGuidance.test.mjs tests/machineLearning.test.mjs tests/machineDynamics.test.mjs tests/machineTiming.test.mjs tests/machinePrediction.test.mjs tests/machinePredictionValidation.test.mjs tests/machineDiagnostics.test.mjs tests/machineAudit.test.mjs tests/workoutCooldown.test.mjs tests/hrPauseTiming.test.mjs tests/bikeBridge.test.mjs tests/vo2EvidenceFoundation.test.mjs",
     "cap:sync": "npm run build:native && npx cap sync && node scripts/normalize-ios-spm.mjs",
     "cap:sync:android": "npm run build:native && npx cap sync android",
     "cap:sync:ios": "npm run build:native && npx cap sync ios && node scripts/normalize-ios-spm.mjs",
@@ -24,6 +24,7 @@
   "devDependencies": {
     "@capacitor/cli": "8.5.0",
     "esbuild": "0.28.2",
+    "fake-indexeddb": "^6.0.0",
     "typescript": "^5.3.3"
   },
   "dependencies": {
