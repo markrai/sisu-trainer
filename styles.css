@@ -31,6 +31,8 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .machine-guidance-label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.68; }
 .machine-guidance-number { margin-top: 3px; font-size: 1.65rem; font-weight: 750; font-variant-numeric: tabular-nums; }
 .machine-guidance-watts { margin-top: 9px; font-size: 0.82rem; opacity: 0.72; }
+.machine-guidance-bike-live { margin-top: 8px; font-size: 0.78rem; opacity: 0.78; font-variant-numeric: tabular-nums; }
+.bike-bridge-status { margin-top: 10px; line-height: 1.45; text-align: left; white-space: pre-line; }
 .time-left { text-align: center; font-size: 1.1rem; margin-top: 10px; opacity: .9; }
 .work-blocks { text-align: center; margin-top: 8px; font-size: 0.55rem; opacity: .8; }
 .hr-target { text-align: center; font-size: 0.7rem; opacity: .9; }

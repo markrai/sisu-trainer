@@ -144,6 +144,15 @@
             <option value="">No machine</option>
           </select>
         </div>
+        <div class="modal-field">
+          <label class="modal-label" for="bikeBridgeUrl">Bike bridge URL</label>
+          <input id="bikeBridgeUrl" class="modal-input" type="url" inputmode="url" autocomplete="off" placeholder="http://192.168.1.10:8765" onchange="saveBikeBridgeUrl(this.value)">
+        </div>
+        <div class="modal-field modal-field-toggle">
+          <label class="modal-label" for="bikeBridgeAutomaticControl">Automatic resistance control</label>
+          <input type="checkbox" id="bikeBridgeAutomaticControl" class="preference-toggle" onchange="saveBikeBridgeAutomaticControl(this.checked)">
+        </div>
+        <div id="bikeBridgeStatus" class="bike-bridge-status label" style="opacity: 0.85;"></div>
       </div>
       <div id="learnedGuidanceSection" class="modal-section" hidden>
         <div class="modal-section-title">Learned guidance</div>
@@ -343,6 +352,7 @@
       </div>
     </div>
     <div id="machineGuidanceWatts" class="machine-guidance-watts" hidden></div>
+    <div id="machineGuidanceBikeLive" class="machine-guidance-bike-live" hidden></div>
   </section>
 
   <div class="ring-wrapper" style="position: relative;">

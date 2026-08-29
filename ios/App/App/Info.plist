@@ -27,7 +27,12 @@
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Sisu Trainer uses Bluetooth to connect to a heart-rate monitor during workouts.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sisu Trainer uses the local network to connect to your SISU server.</string>
+	<string>Sisu Trainer uses the local network to connect to your SISU server and Fitbaus Bike Bridge.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

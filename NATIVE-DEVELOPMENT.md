@@ -37,11 +37,13 @@ Run iOS sync and open/build commands on macOS with Xcode 26 or newer.
 
 ## Runtime boundaries
 
-The hosted PWA continues to use Web Bluetooth, browser speech synthesis, Screen Wake Lock, browser `fetch`, and its service worker. Android and iOS use Capacitor BLE, native text-to-speech, native Keep Awake, and `CapacitorHttp` only for SISU `/health` and `/workout/ingest` traffic. The native app intentionally does not register the PWA service worker or show PWA installation UI.
+The hosted PWA continues to use Web Bluetooth, browser speech synthesis, Screen Wake Lock, browser `fetch`, and its service worker. Android and iOS use Capacitor BLE, native text-to-speech, native Keep Awake, and `CapacitorHttp` for SISU `/health` and `/workout/ingest` plus Fitbaus Bike Bridge `/api/v1/status`, `/api/v1/telemetry`, and `/api/v1/resistance`. The native app intentionally does not register the PWA service worker or show PWA installation UI.
 
 Browser/PWA storage and installed native WebView storage are separate namespaces. Both continue to use IndexedDB, localStorage, and sessionStorage; data is not migrated between installations.
 
-Use HTTPS for SISU, especially from native builds. The native app does not enable broad cleartext or mixed-content exceptions, so an `http` SISU endpoint reports a transport-security error. Native SISU traffic does not depend on browser CORS.
+Use HTTPS for SISU, especially from native builds. Native SISU traffic still rejects `http://` in application code and does not depend on browser CORS.
+
+Fitbaus Bike Bridge is trusted-LAN HTTP (typically `http://<console>:8765`). Native bike-bridge calls use `CapacitorHttp`, which bypasses WebView CORS. The bridge does not send CORS headers; hosted PWA `fetch(..., mode: "cors")` to the bridge will fail until a later CORS decision is made. Android Network Security Config permits application-wide cleartext so that LAN HTTP can connect; it is not host-restricted to the bike bridge. SISU ingest remains HTTPS-only because `requestSisu` rejects `http://`. iOS uses `NSAllowsLocalNetworking`.
 
 Native projects currently use Capacitor's generated placeholder store artwork. Produce final Play Store and App Store icon/splash variants from the existing Sisu Trainer branding before release.
 
@@ -54,5 +56,6 @@ On a physical Android device and a physical iOS device, verify:
 - A running workout keeps the screen awake, while pause/end/cancel releases Keep Awake and normal sleep resumes.
 - Spoken workout instructions use the existing wording and stop/cancel when the workout lifecycle requests it.
 - SISU HTTPS `/health` succeeds and a completed workout reaches `/workout/ingest` with the existing payload contract.
+- With Fitbaus Bike Bridge running on the LAN, Settings → Equipment accepts the bridge URL, native HTTP status/telemetry succeed, and enabling automatic resistance control during a bike workout posts absolute targets without overlapping requests.
 
 BLE behavior cannot be fully validated in an emulator or the iOS Simulator.

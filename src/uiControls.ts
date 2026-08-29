@@ -28,6 +28,12 @@ import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMon
 import { getSession } from "./sessionStore.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
+import {
+  formatBikeBridgeControl,
+  formatBikeBridgeNumber,
+  formatBikeBridgeReadiness,
+  getBikeBridgeSession,
+} from "./platform/bikeBridgeRuntime.js";
 import { getEquipmentSelection, setSelectedMachine } from "./machines/selection.js";
 import {
   recordMachineHeartRateSample,
@@ -528,6 +534,8 @@ function renderMachineGuidance(update: MachineGuidanceRuntimeUpdate | null) {
   if (!panel) return;
   if (!update || update.guidance.resistance === undefined || update.guidance.cadenceRpm === undefined) {
     panel.hidden = true;
+    const bikeLive = document.getElementById("machineGuidanceBikeLive");
+    if (bikeLive) bikeLive.hidden = true;
     return;
   }
   panel.hidden = false;
@@ -547,6 +555,57 @@ function renderMachineGuidance(update: MachineGuidanceRuntimeUpdate | null) {
       watts.hidden = true;
     }
   }
+  renderBikeBridgeHud();
+}
+
+function renderBikeBridgeHud() {
+  const live = document.getElementById("machineGuidanceBikeLive");
+  if (!live) return;
+  const panel = document.getElementById("machineGuidance");
+  const state = getBikeBridgeSession().getViewState();
+  if (!panel || panel.hidden || state.readiness === "not_configured") {
+    live.hidden = true;
+    live.textContent = "";
+    return;
+  }
+  live.hidden = false;
+  const observed = formatBikeBridgeNumber(state.observedResistance);
+  const rpm = formatBikeBridgeNumber(state.rpm);
+  const watts = formatBikeBridgeNumber(state.watts);
+  const stale = state.telemetryStale ? " (stale)" : "";
+  live.textContent = `Bike observed ${observed} · ${rpm} RPM · ${watts} W${stale}`;
+}
+
+function renderBikeBridgeSettingsStatus() {
+  const el = document.getElementById("bikeBridgeStatus");
+  if (!el) return;
+  const state = getBikeBridgeSession().getViewState();
+  const lines = [
+    `Bike Bridge: ${formatBikeBridgeReadiness(state.readiness)}`,
+    `Control: ${formatBikeBridgeControl(state)}`,
+    `Resistance: ${formatBikeBridgeNumber(state.observedResistance)}`,
+    `Target: ${formatBikeBridgeNumber(state.desiredResistance ?? state.commandedResistance ?? state.requestedResistance)}`,
+    `RPM: ${formatBikeBridgeNumber(state.rpm)}`,
+    `Watts: ${formatBikeBridgeNumber(state.watts)}`,
+  ];
+  if (state.lastError) lines.push(state.lastError);
+  el.textContent = lines.join("\n");
+}
+
+function syncBikeBridgeGuidance(
+  update: MachineGuidanceRuntimeUpdate | null,
+  workoutActive: boolean,
+  paused: boolean
+) {
+  getBikeBridgeSession().onGuidance({
+    desiredResistance: update?.guidance.resistance,
+    recommendationChanged: update?.recommendationChanged === true,
+    workoutActive,
+    paused,
+  });
+  renderBikeBridgeHud();
+  const equipmentTab = document.getElementById("equipmentTab");
+  if (equipmentTab?.classList.contains("active")) renderBikeBridgeSettingsStatus();
 }
 
 function renderWorkout(state: WorkoutDisplayState) {
@@ -568,6 +627,7 @@ function renderWorkout(state: WorkoutDisplayState) {
         startDownregulationView(downregEl as HTMLElement, canvas);
       }
     }
+    syncBikeBridgeGuidance(null, false, false);
     return;
   }
 
@@ -615,6 +675,7 @@ function renderWorkout(state: WorkoutDisplayState) {
 
   if (state.screen === "rest") {
     renderMachineGuidance(null);
+    syncBikeBridgeGuidance(null, false, false);
     if (workoutBlocksEl) workoutBlocksEl.textContent = "Rest Day";
     if (phaseDisplayEl) {
       phaseDisplayEl.innerHTML = '<span class="phase-name">Rest Day</span>';
@@ -634,6 +695,7 @@ function renderWorkout(state: WorkoutDisplayState) {
 
   if (state.screen === "idle") {
     renderMachineGuidance(null);
+    syncBikeBridgeGuidance(null, false, false);
     if (phaseDisplayEl) {
       phaseDisplayEl.innerHTML = '<span class="phase-name">Not Started</span>';
       phaseDisplayEl.dataset.phaseState = "idle";
@@ -656,6 +718,7 @@ function renderWorkout(state: WorkoutDisplayState) {
 
   if (state.screen === "completed") {
     renderMachineGuidance(null);
+    syncBikeBridgeGuidance(null, false, false);
     updateRing(state.elapsedSec, state.blocks as any);
     if (typeof (window as any).releaseWakeLock === "function") (window as any).releaseWakeLock();
     handleWorkoutCompletion(state.day);
@@ -741,6 +804,7 @@ function renderWorkout(state: WorkoutDisplayState) {
         intent: active.workoutMetadata[active.day]?.intent,
       })
     : null;
+  syncBikeBridgeGuidance(machineUpdate, true, active.paused);
   renderMachineGuidance(machineUpdate);
   if (typeof (window as any).announceWorkoutGuidance === "function") {
     (window as any).announceWorkoutGuidance(active.phaseDisplayName, machineUpdate?.voiceEvent ?? null);
@@ -862,6 +926,7 @@ function loadEquipmentSettings() {
     select.appendChild(option);
   }
   select.value = getEquipmentSelection().bike ?? "";
+  loadBikeBridgeSettingsForm();
   renderLearnedGuidancePanel();
   renderHrDynamicsPanel();
   renderShadowPredictionPanel();
@@ -1156,6 +1221,32 @@ function confirmResetLearnedGuidance() {
   renderLearnedGuidancePanel();
   renderHrDynamicsPanel();
   renderShadowPredictionPanel();
+}
+
+function loadBikeBridgeSettingsForm() {
+  const state = getBikeBridgeSession().getViewState();
+  const urlInput = document.getElementById("bikeBridgeUrl") as HTMLInputElement | null;
+  if (urlInput && document.activeElement !== urlInput) urlInput.value = state.configuredUrl;
+  const control = document.getElementById("bikeBridgeAutomaticControl") as HTMLInputElement | null;
+  if (control) control.checked = state.automaticControlEnabled;
+  renderBikeBridgeSettingsStatus();
+}
+
+function saveBikeBridgeUrl(value: string) {
+  const result = getBikeBridgeSession().configure({ baseUrl: value });
+  const urlInput = document.getElementById("bikeBridgeUrl") as HTMLInputElement | null;
+  if (result.ok) {
+    if (urlInput) urlInput.value = getBikeBridgeSession().getViewState().configuredUrl;
+  } else {
+    showToast(result.error || "Invalid bike bridge URL");
+    if (urlInput) urlInput.value = getBikeBridgeSession().getViewState().configuredUrl;
+  }
+  renderBikeBridgeSettingsStatus();
+}
+
+function saveBikeBridgeAutomaticControl(enabled: boolean) {
+  getBikeBridgeSession().configure({ automaticControlEnabled: enabled });
+  renderBikeBridgeSettingsStatus();
 }
 
 function saveBikeEquipmentSelection(value: string) {
@@ -1612,6 +1703,8 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).savePreferenceVoicePrompts = savePreferenceVoicePrompts;
   (window as any).loadEquipmentSettings = loadEquipmentSettings;
   (window as any).saveBikeEquipmentSelection = saveBikeEquipmentSelection;
+  (window as any).saveBikeBridgeUrl = saveBikeBridgeUrl;
+  (window as any).saveBikeBridgeAutomaticControl = saveBikeBridgeAutomaticControl;
   (window as any).promptResetLearnedGuidance = promptResetLearnedGuidance;
   (window as any).closeResetLearnedModal = closeResetLearnedModal;
   (window as any).confirmResetLearnedGuidance = confirmResetLearnedGuidance;
@@ -1635,6 +1728,11 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).updateHeartPulse = updateHeartPulse;
   (window as any).updateHeartColor = updateHeartColor;
   (window as any).updateDisplay = updateDisplay;
+  getBikeBridgeSession().subscribe(() => {
+    renderBikeBridgeHud();
+    const equipmentTab = document.getElementById("equipmentTab");
+    if (equipmentTab?.classList.contains("active")) renderBikeBridgeSettingsStatus();
+  });
 }
 
 export {

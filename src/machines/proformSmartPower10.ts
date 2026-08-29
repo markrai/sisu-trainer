@@ -12,6 +12,8 @@ import type {
   WorkResistanceClassification,
 } from "./types.js";
 
+export const AUTOMATIC_RESISTANCE_MIN = 1;
+export const AUTOMATIC_RESISTANCE_MAX = 15;
 export const TARGET_HR_ADJUST_MARGIN_BPM = 3;
 export const HIGH_RESISTANCE_INCREASE_DEFICIT_BPM = 5;
 export const HIGH_RESISTANCE_INCREASE_FROM = 13;
@@ -40,7 +42,7 @@ export function getEstimatedWattsAt70Rpm(resistance: number): number | undefined
 }
 
 export function clampAutomaticResistance(resistance: number): number {
-  return Math.max(1, Math.min(15, Math.round(resistance)));
+  return Math.max(AUTOMATIC_RESISTANCE_MIN, Math.min(AUTOMATIC_RESISTANCE_MAX, Math.round(resistance)));
 }
 
 function rollingMedianDetails(

@@ -13,6 +13,7 @@ import { registerUiGlobals, updateDisplay } from "./uiControls.js";
 import { registerPwaGlobals } from "./pwaInstall.js";
 import { getSession, isSessionStale, clearSession } from "./sessionStore.js";
 import { applyRuntimeDocumentState } from "./platform/runtime.js";
+import { startBikeBridgeRuntime } from "./platform/bikeBridgeRuntime.js";
 
 applyRuntimeDocumentState();
 
@@ -89,6 +90,7 @@ async function bootstrap() {
   loadProfile();
   cleanupStaleWorkoutSessions();
   await initializeWorkoutPlan();
+  startBikeBridgeRuntime();
   updateDisplay();
   setInterval(updateDisplay, 1000);
   if (typeof (window as any).loadSisuSettings === "function") {

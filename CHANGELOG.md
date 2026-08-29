@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.9] - 2026-08-28
+
+### Added
+
+- **Fitbaus Bike Bridge client** - Settings → Equipment can store a LAN bridge
+  URL and optional automatic resistance control. Native Capacitor HTTP polls
+  `/api/v1/status` and `/api/v1/telemetry` once per second and posts absolute
+  `/api/v1/resistance` targets from existing machine guidance. Observed bike
+  resistance, RPM, and watts stay independent of requested/desired values.
+
+### Fixed
+
+- **Bike bridge resistance range** - ProForm physical levels 1-15 are posted
+  unchanged. The client no longer clamps 11-15 down to 10. Android cleartext
+  documentation no longer claims Network Security Config is limited to the
+  Fitbaus host; SISU ingest remains HTTPS-only in application code.
+
 ## [0.10.8] - 2026-08-27
 
 ### Added
