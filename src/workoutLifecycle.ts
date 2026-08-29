@@ -1,4 +1,5 @@
 import { getSession, clearSession, markSummaryEmitted } from "./sessionStore.js";
+import { isVo2WorkoutSelector } from "./vo2Protocol.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -16,6 +17,9 @@ export function handleWorkoutCompletion(day: string): void {
     return;
   }
   const endedAt = Date.now();
+  if (isVo2WorkoutSelector(day) && typeof (window as any).showToast === "function") {
+    (window as any).showToast("VO2 test evidence recorded. Estimation is not enabled yet.", "success");
+  }
   (window as any)
     .generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day)
     .then((summary: any) => (window as any).emitWorkoutSummary(summary))

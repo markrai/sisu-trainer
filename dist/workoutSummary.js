@@ -10,6 +10,7 @@ import { learnShadowPredictionsFromCompletedWorkout } from "./machines/predictio
 import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
 import { actualElapsedSeconds, adjustedBlockLengths } from "./workoutLogic.js";
 import { attachVo2Evidence, buildVo2Evidence } from "./vo2Evidence.js";
+import { buildVo2ProtocolEvidence } from "./vo2Protocol.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -159,6 +160,10 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         machineId: summary.machine_id,
         machineProfileVersion: summary.machine_profile_version,
         machineGuidanceTraceEntryCount: (_e = summary.machine_guidance_trace) === null || _e === void 0 ? void 0 : _e.length,
+        vo2Protocol: session.vo2ProtocolRuntime,
+        protocol: session.vo2ProtocolRuntime
+            ? buildVo2ProtocolEvidence(session.vo2ProtocolRuntime)
+            : undefined,
     }));
     validateSummary(summary);
     const zoneSum = summary.zone_minutes.z1 +

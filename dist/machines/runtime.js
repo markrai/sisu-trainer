@@ -147,6 +147,8 @@ export function updateMachineGuidanceRuntime(input, storage) {
         completedShortWork,
         learnedStartingResistance,
         personalizedTiming,
+        holdResistance: input.holdResistance,
+        holdCadenceRpm: input.holdCadenceRpm,
     }, runtime.guidanceState);
     if (!result)
         return null;

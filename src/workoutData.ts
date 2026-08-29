@@ -1,6 +1,7 @@
 import { Activity, DayName, HrTargetsByDay, MetadataByDay, Plan, WorkoutPhaseKind } from "./types.js";
 import { todayName } from "./utils/dateTime.js";
 import { isActivity } from "./workoutActivity.js";
+import { VO2_WORKOUT_SELECTOR_ID, vo2PlanBlocks, vo2WorkoutMetadata } from "./vo2Protocol.js";
 
 let plan: Plan = {};
 let workoutMetadata: MetadataByDay = {};
@@ -129,6 +130,16 @@ async function initializeWorkoutPlan() {
   }
   const today = todayName();
   console.log("Today is:", today, "Plan for today:", plan[today as DayName]);
+  installStandaloneVo2Workout();
+}
+
+function installStandaloneVo2Workout(): void {
+  plan[VO2_WORKOUT_SELECTOR_ID] = vo2PlanBlocks();
+  workoutMetadata[VO2_WORKOUT_SELECTOR_ID] = vo2WorkoutMetadata();
+  hrTargets[VO2_WORKOUT_SELECTOR_ID] = {
+    intervals: null,
+    main_set_kind: "work",
+  };
 }
 
 const getPlan = () => plan;
@@ -142,4 +153,4 @@ export function registerWorkoutDataGlobals() {
   (window as any).getHrTargets = getHrTargets;
 }
 
-export { initializeWorkoutPlan, getPlan, getWorkoutMetadata, getHrTargets };
+export { initializeWorkoutPlan, getPlan, getWorkoutMetadata, getHrTargets, installStandaloneVo2Workout };

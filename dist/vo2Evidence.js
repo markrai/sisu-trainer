@@ -90,6 +90,9 @@ export function deriveVo2EvidencePhases(input) {
         open = null;
     };
     const phaseOptions = { day: input.day, hrTargets: input.hrTargets };
+    if (Object.prototype.hasOwnProperty.call(input, "vo2Protocol")) {
+        phaseOptions.vo2Protocol = input.vo2Protocol;
+    }
     for (let t = 0; t < activeDurationSec; t++) {
         const state = getPhase(t, input.blocks, input.earlyCooldownElapsed, phaseOptions);
         if (state.done || state.kind === "completed") {
@@ -161,6 +164,7 @@ export function buildVo2Evidence(input) {
             activeDurationSec,
             earlyCooldownElapsed: input.earlyCooldownElapsed,
             hrTargets: input.hrTargets,
+            vo2Protocol: input.vo2Protocol,
         })
         : [];
     const markers = cooldownMarkers({
@@ -190,6 +194,8 @@ export function buildVo2Evidence(input) {
     const machine = buildMachineEvidence(input);
     if (machine)
         evidence.machine = machine;
+    if (input.protocol)
+        evidence.protocol = input.protocol;
     return evidence;
 }
 export function attachVo2Evidence(summary, evidence) {

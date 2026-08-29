@@ -1,10 +1,11 @@
-import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, } from "./workoutLogic.js";
+import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, tickVo2ProtocolWithCanonicalHr, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
 import { getSession } from "./sessionStore.js";
+import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, VO2_WORKOUT_LABEL, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
 import { formatBikeBridgeControl, formatBikeBridgeNumber, formatBikeBridgeReadiness, getBikeBridgeSession, } from "./platform/bikeBridgeRuntime.js";
@@ -20,6 +21,7 @@ let liveBpm = null;
 let lastBpmUpdateTime = null;
 const BPM_TIMEOUT_MS = 3000;
 let showElapsedInRing = false;
+let pendingVo2Cues = [];
 let heartPulseTargetBpm = null;
 let heartPulseRafId = null;
 const HEART_PULSE_SCALE = 1.15;
@@ -65,6 +67,10 @@ function ensureWorkoutDayDropdown() {
             opt.textContent = meta && meta.type ? day + ": " + meta.type : day;
             select.appendChild(opt);
         });
+        const vo2Opt = document.createElement("option");
+        vo2Opt.value = VO2_WORKOUT_SELECTOR_ID;
+        vo2Opt.textContent = VO2_WORKOUT_LABEL;
+        select.appendChild(vo2Opt);
         const downregOpt = document.createElement("option");
         downregOpt.value = "Downregulation";
         downregOpt.textContent = "Downregulation";
@@ -73,6 +79,17 @@ function ensureWorkoutDayDropdown() {
             selectedDay = this.value;
             updateDisplay();
         });
+    }
+    const hasVo2 = Array.from(select.options).some((o) => o.value === VO2_WORKOUT_SELECTOR_ID);
+    if (!hasVo2) {
+        const vo2Opt = document.createElement("option");
+        vo2Opt.value = VO2_WORKOUT_SELECTOR_ID;
+        vo2Opt.textContent = VO2_WORKOUT_LABEL;
+        const downreg = Array.from(select.options).find((o) => o.value === "Downregulation");
+        if (downreg)
+            select.insertBefore(vo2Opt, downreg);
+        else
+            select.appendChild(vo2Opt);
     }
     const hasDownreg = Array.from(select.options).some((o) => o.value === "Downregulation");
     if (!hasDownreg) {
@@ -228,6 +245,7 @@ function openCancelModal() {
             elapsedSec,
             paused: session.paused,
             earlyCooldownElapsed: session.earlyCooldownElapsed,
+            vo2Protocol: session.vo2ProtocolRuntime,
         });
         const available = decision.type === "enter-early-cooldown";
         cooldownBtn.style.display = available ? "" : "none";
@@ -401,12 +419,16 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
     const phase = getPhase(elapsedSec, blocks, session.earlyCooldownElapsed, {
         day,
         hrTargets: session.phasePlan ? session.phasePlan.hrTargets : undefined,
+        vo2Protocol: session.vo2ProtocolRuntime,
     });
     if (phase.done) {
         return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
     }
     let phaseDisplayName = phase.phase;
-    if (phase.kind === "warmup") {
+    if (isVo2WorkoutSelector(day)) {
+        phaseDisplayName = vo2ProtocolDisplayName(phase);
+    }
+    else if (phase.kind === "warmup") {
         const subsectionName = getWarmupSubsectionName(day, elapsedSec);
         if (subsectionName)
             phaseDisplayName = "Warm-Up (" + subsectionName + ")";
@@ -417,7 +439,9 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
     else if (phase.kind === "work" || phase.kind === "recovery") {
         phaseDisplayName = "Workout";
     }
-    const hrTargetTextValue = hrTargetText(phase.phase, day, elapsedSec, blocks, session.phasePlan ? session.phasePlan.hrTargets : undefined);
+    const hrTargetTextValue = isVo2WorkoutSelector(day)
+        ? "70 RPM prescribed"
+        : hrTargetText(phase.phase, day, elapsedSec, blocks, session.phasePlan ? session.phasePlan.hrTargets : undefined);
     const nowTime = Date.now();
     const liveBpmStale = lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
     return {
@@ -647,8 +671,14 @@ function renderWorkout(state) {
             phaseDisplayEl.innerHTML = '<span class="phase-name">Completed</span>';
             phaseDisplayEl.dataset.phaseState = "completed";
         }
-        if (typeof window.announcePhaseIfChanged === "function")
-            window.announcePhaseIfChanged("Completed");
+        const completedPhrase = isVo2WorkoutSelector(state.day) ? "Test complete" : "Completed";
+        if (typeof window.announceWorkoutGuidance === "function") {
+            window.announceWorkoutGuidance(completedPhrase, null, pendingVo2Cues);
+        }
+        else if (typeof window.announcePhaseIfChanged === "function") {
+            window.announcePhaseIfChanged(completedPhrase);
+        }
+        pendingVo2Cues = [];
         if (startButtonRowEl)
             startButtonRowEl.style.display = "flex";
         if (startBtnEl) {
@@ -716,6 +746,7 @@ function renderWorkout(state) {
         updateHeartColor(null, active.hrTargetTextValue);
     }
     const session = getSession(active.day);
+    const hold = vo2ProtocolHoldForPhase(session.vo2ProtocolRuntime, active.phase.phaseId);
     const targetRange = parseHrTargetRange(active.hrTargetTextValue);
     const machineUpdate = session.sessionId && active.activity
         ? updateMachineGuidanceRuntime({
@@ -732,19 +763,28 @@ function renderWorkout(state) {
             targetHeartRateMin: targetRange === null || targetRange === void 0 ? void 0 : targetRange.min,
             targetHeartRateMax: targetRange === null || targetRange === void 0 ? void 0 : targetRange.max,
             intent: (_b = active.workoutMetadata[active.day]) === null || _b === void 0 ? void 0 : _b.intent,
+            holdResistance: hold === null || hold === void 0 ? void 0 : hold.resistance,
+            holdCadenceRpm: hold === null || hold === void 0 ? void 0 : hold.cadenceRpm,
         })
         : null;
     syncBikeBridgeGuidance(machineUpdate, true, active.paused);
     renderMachineGuidance(machineUpdate);
     if (typeof window.announceWorkoutGuidance === "function") {
-        window.announceWorkoutGuidance(active.phaseDisplayName, (_c = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _c !== void 0 ? _c : null);
+        window.announceWorkoutGuidance(active.phaseDisplayName, (_c = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _c !== void 0 ? _c : null, pendingVo2Cues);
     }
     else if (typeof window.announcePhaseIfChanged === "function") {
         window.announcePhaseIfChanged(active.phaseDisplayName);
     }
+    pendingVo2Cues = [];
     applyPhaseStyle(active.phase.phase);
 }
+let updateDisplaySeq = 0;
 function updateDisplay() {
+    void updateDisplayAsync();
+}
+async function updateDisplayAsync() {
+    var _a;
+    const seq = ++updateDisplaySeq;
     try {
         if (typeof getPlan !== "function" || typeof getWorkoutMetadata !== "function")
             return;
@@ -757,6 +797,16 @@ function updateDisplay() {
         const pausedElapsed = typeof getPausedElapsed === "function" ? getPausedElapsed(day) : 0;
         const liveBpm = window.liveBpm;
         const lastBpmUpdateTime = window.lastBpmUpdateTime;
+        if (startTime && isVo2WorkoutSelector(day)) {
+            const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime, 10)) / 1000);
+            const tick = await tickVo2ProtocolWithCanonicalHr(day, elapsedSec, paused);
+            if (seq !== updateDisplaySeq)
+                return;
+            pendingVo2Cues = (_a = tick === null || tick === void 0 ? void 0 : tick.cues) !== null && _a !== void 0 ? _a : [];
+        }
+        else {
+            pendingVo2Cues = [];
+        }
         const state = deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime);
         if (state.screen === "active" && state.liveBpmStale) {
             window.liveBpm = null;

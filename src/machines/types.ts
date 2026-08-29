@@ -60,6 +60,8 @@ export interface MachineGuidanceContext {
   completedShortWork?: CompletedShortWorkPhase;
   learnedStartingResistance?: number;
   personalizedTiming?: PersonalizedWorkTiming;
+  holdResistance?: number;
+  holdCadenceRpm?: number;
 }
 
 export interface PersonalizedWorkTiming {

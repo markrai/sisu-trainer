@@ -1,9 +1,11 @@
 import { getHrTargets, getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
-import { getSession, startSession, pauseSession, resumeSession, clearSession, getEarlyCooldownElapsed, setEarlyCooldownElapsed, } from "./sessionStore.js";
+import { getSession, startSession, pauseSession, resumeSession, clearSession, getEarlyCooldownElapsed, setEarlyCooldownElapsed, persistVo2ProtocolRuntime, } from "./sessionStore.js";
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
+import { advanceVo2Protocol, createVo2ProtocolRuntime, evaluateVo2PreflightForUi, getVo2ProtocolPhase, isVo2WorkoutSelector, vo2ProtocolNeedsHrEvaluation, vo2ProtocolVoiceCues, } from "./vo2Protocol.js";
+import { getHrSamples } from "./workoutStorage.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
 function getRingCircumference() {
@@ -89,7 +91,9 @@ function planEarlyCooldownTransition(input) {
     if (!input.hasSession || !input.blocks || input.blocks.cool <= 0) {
         return { type: "unavailable" };
     }
-    const phase = getPhase(input.elapsedSec, input.blocks, input.earlyCooldownElapsed);
+    const phase = getPhase(input.elapsedSec, input.blocks, input.earlyCooldownElapsed, {
+        vo2Protocol: input.vo2Protocol,
+    });
     if (phase.done)
         return { type: "unavailable" };
     if (phase.kind === "cooldown") {
@@ -125,11 +129,13 @@ function requestEarlyCooldown(day, options) {
             elapsedSec,
             paused: session.paused,
             earlyCooldownElapsed: getEarlyCooldownElapsed(dayToUse, storage),
+            vo2Protocol: session.vo2ProtocolRuntime,
         });
         if (decision.type === "unavailable")
             return decision;
         if (decision.type === "enter-early-cooldown") {
             setEarlyCooldownElapsed(dayToUse, decision.elapsedSec, storage);
+            tickVo2Protocol(dayToUse, decision.elapsedSec, false, storage);
         }
         if (session.paused)
             resumeSession(dayToUse, storage, now);
@@ -174,9 +180,46 @@ function capturePhasePlanSnapshot(day) {
     };
 }
 function beginWorkout(activity) {
-    var _a, _b;
+    var _a, _b, _c, _d;
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
-    const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
+    if (isVo2WorkoutSelector(day)) {
+        const preflight = evaluateVo2PreflightForUi();
+        if (preflight.ok === false) {
+            if (typeof window.showToast === "function") {
+                window.showToast(preflight.message, "error");
+            }
+            return;
+        }
+        const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
+        const resolved = activity !== undefined
+            ? requireAllowedActivity(allowed, activity)
+            : getActiveWorkoutActivity(allowed);
+        if (allowed.length > 1 && resolved === undefined)
+            return;
+        const startTime = Date.now();
+        const phasePlan = capturePhasePlanSnapshot(day);
+        const runtime = createVo2ProtocolRuntime(preflight.plan);
+        let sessionId = null;
+        if (typeof window.generateUUID === "function") {
+            sessionId = window.generateUUID();
+            startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
+        }
+        else {
+            startSession(day, startTime, null, resolved, undefined, phasePlan);
+        }
+        persistVo2ProtocolRuntime(day, runtime);
+        resetMachineGuidanceRuntime(sessionId);
+        if (typeof window.initDB === "function") {
+            window.initDB().catch((err) => console.error("Failed to init DB:", err));
+        }
+        if (typeof window.requestWakeLock === "function") {
+            window.requestWakeLock();
+        }
+        if (typeof window.updateDisplay === "function")
+            window.updateDisplay();
+        return;
+    }
+    const allowed = (_d = (_c = getWorkoutMetadata()[day]) === null || _c === void 0 ? void 0 : _c.activities) !== null && _d !== void 0 ? _d : [];
     const resolved = activity !== undefined
         ? requireAllowedActivity(allowed, activity)
         : getActiveWorkoutActivity(allowed);
@@ -205,6 +248,8 @@ function beginWorkout(activity) {
 async function restartWorkout() {
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
     const session = getSession(day);
+    const elapsedSec = actualElapsedSeconds(session.startTime, session.paused, session.pausedElapsed, Date.now());
+    markVo2ProtocolCancelled(day, elapsedSec);
     await handleWorkoutCancellation(day);
     if (typeof window.releaseWakeLock === "function") {
         await window.releaseWakeLock();
@@ -254,8 +299,19 @@ function getIntervalRuntime(day, sustainElapsed, hrTargets) {
     }
     return null;
 }
+function resolveVo2ProtocolRuntime(day, options) {
+    if (options && Object.prototype.hasOwnProperty.call(options, "vo2Protocol"))
+        return options.vo2Protocol;
+    if (!isVo2WorkoutSelector(day))
+        return undefined;
+    return getSession(day).vo2ProtocolRuntime;
+}
 function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
-    var _a, _b;
+    var _a, _b, _c;
+    const day = (_a = options === null || options === void 0 ? void 0 : options.day) !== null && _a !== void 0 ? _a : (typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName());
+    const vo2Runtime = resolveVo2ProtocolRuntime(day, options);
+    if (vo2Runtime)
+        return getVo2ProtocolPhase(elapsedSec, vo2Runtime, earlyCooldownElapsed);
     const w = blocks.warm * 60;
     const s = blocks.sustain * 60;
     const c = blocks.cool * 60;
@@ -278,7 +334,7 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
         };
     }
     if (elapsedSec < w + s) {
-        const day = (_a = options === null || options === void 0 ? void 0 : options.day) !== null && _a !== void 0 ? _a : (typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName());
+        const day = (_b = options === null || options === void 0 ? void 0 : options.day) !== null && _b !== void 0 ? _b : (typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName());
         const dayHrTargets = resolveDayHrTargets(day, options === null || options === void 0 ? void 0 : options.hrTargets);
         const sustainElapsed = Math.max(0, elapsedSec - w);
         const intervalRuntime = getIntervalRuntime(day, sustainElapsed, dayHrTargets);
@@ -297,7 +353,7 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
         }
         return {
             phase: "Sustain",
-            kind: (_b = dayHrTargets === null || dayHrTargets === void 0 ? void 0 : dayHrTargets.main_set_kind) !== null && _b !== void 0 ? _b : "work",
+            kind: (_c = dayHrTargets === null || dayHrTargets === void 0 ? void 0 : dayHrTargets.main_set_kind) !== null && _c !== void 0 ? _c : "work",
             phaseId: "sustain",
             phaseElapsedSeconds: sustainElapsed,
             phaseDurationSeconds: s,
@@ -309,6 +365,42 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
         return cooldownPhase(elapsedSec, w + s, c);
     }
     return completedPhase();
+}
+function tickVo2Protocol(day, elapsedSec, paused, storage, samples = []) {
+    const session = getSession(day, storage);
+    if (!session.vo2ProtocolRuntime)
+        return null;
+    const before = session.vo2ProtocolRuntime;
+    const next = advanceVo2Protocol(before, {
+        elapsedSec,
+        paused,
+        samples,
+        earlyCooldownElapsed: getEarlyCooldownElapsed(day, storage),
+    });
+    persistVo2ProtocolRuntime(day, next, storage);
+    return { runtime: next, cues: vo2ProtocolVoiceCues(before, next, elapsedSec) };
+}
+async function tickVo2ProtocolWithCanonicalHr(day, elapsedSec, paused, storage) {
+    const session = getSession(day, storage);
+    if (!session.vo2ProtocolRuntime)
+        return null;
+    let samples = [];
+    if (session.sessionId &&
+        vo2ProtocolNeedsHrEvaluation(session.vo2ProtocolRuntime, elapsedSec, paused)) {
+        samples = await getHrSamples(session.sessionId);
+    }
+    return tickVo2Protocol(day, elapsedSec, paused, storage, samples);
+}
+function markVo2ProtocolCancelled(day, elapsedSec, storage) {
+    const session = getSession(day, storage);
+    if (!session.vo2ProtocolRuntime)
+        return;
+    persistVo2ProtocolRuntime(day, advanceVo2Protocol(session.vo2ProtocolRuntime, {
+        elapsedSec,
+        paused: session.paused,
+        samples: [],
+        cancelled: true,
+    }), storage);
 }
 function formatTime(sec, options) {
     const showSeconds = options && "showSeconds" in options ? !!options.showSeconds : true;
@@ -438,4 +530,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, capturePhasePlanSnapshot, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, capturePhasePlanSnapshot, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, };

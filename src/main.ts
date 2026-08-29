@@ -14,11 +14,21 @@ import { registerPwaGlobals } from "./pwaInstall.js";
 import { getSession, isSessionStale, clearSession } from "./sessionStore.js";
 import { applyRuntimeDocumentState } from "./platform/runtime.js";
 import { startBikeBridgeRuntime } from "./platform/bikeBridgeRuntime.js";
+import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
 
 applyRuntimeDocumentState();
 
 function cleanupStaleWorkoutSessions() {
-  const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const days = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+    VO2_WORKOUT_SELECTOR_ID,
+  ];
   days.forEach((day) => {
     const session = getSession(day);
     if (session.sessionStart && isSessionStale(day)) {

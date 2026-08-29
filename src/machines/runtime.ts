@@ -54,6 +54,8 @@ export interface MachineGuidanceRuntimeInput {
   targetHeartRateMin?: number;
   targetHeartRateMax?: number;
   intent?: string;
+  holdResistance?: number;
+  holdCadenceRpm?: number;
 }
 
 export interface MachineGuidanceRuntimeUpdate {
@@ -242,6 +244,8 @@ export function updateMachineGuidanceRuntime(
       completedShortWork,
       learnedStartingResistance,
       personalizedTiming,
+      holdResistance: input.holdResistance,
+      holdCadenceRpm: input.holdCadenceRpm,
     },
     runtime.guidanceState
   );

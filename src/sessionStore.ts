@@ -1,5 +1,6 @@
 import type { Activity, HrTargetsForDay, PlanBlock } from "./types.js";
 import { isActivity } from "./workoutActivity.js";
+import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime, type Vo2ProtocolRuntime } from "./vo2Protocol.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -30,6 +31,7 @@ export interface SessionData {
   activity?: Activity;
   /** Blocks + HR targets frozen at workout start for phase evidence replay. */
   phasePlan: PhasePlanSnapshot | null;
+  vo2ProtocolRuntime: Vo2ProtocolRuntime | null;
 }
 
 function storageOrBrowser(storage?: SessionStorage): SessionStorage {
@@ -54,6 +56,14 @@ function pauseWallStartKey(day: string): string {
 
 function phasePlanKey(day: string): string {
   return "phase_plan_" + day;
+}
+
+function vo2ProtocolRuntimeKey(day: string): string {
+  return "vo2_protocol_runtime_" + day;
+}
+
+function legacyVo2ProtocolPlanKey(day: string): string {
+  return "vo2_protocol_plan_" + day;
 }
 
 function parseEarlyCooldownElapsed(raw: string | null): number | null {
@@ -127,6 +137,17 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
     earlyCooldownElapsed: parseEarlyCooldownElapsed(store.getItem(earlyCooldownKey(day))),
     activity: parseStoredActivity(store.getItem("activity_" + day)),
     phasePlan: parsePhasePlan(store.getItem(phasePlanKey(day))),
+    vo2ProtocolRuntime: parseVo2ProtocolRuntime(
+      (() => {
+        const raw = store.getItem(vo2ProtocolRuntimeKey(day));
+        if (!raw) return null;
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      })()
+    ),
   };
 }
 
@@ -145,6 +166,8 @@ export function startSession(
   store.removeItem("paused_" + day);
   store.removeItem("paused_elapsed_" + day);
   store.removeItem(phasePlanKey(day));
+  store.removeItem(legacyVo2ProtocolPlanKey(day));
+  store.removeItem(vo2ProtocolRuntimeKey(day));
   store.setItem("start_" + day, String(startTime));
   if (sessionId != null) {
     store.setItem("session_id_" + day, sessionId);
@@ -207,6 +230,17 @@ export function clearSession(day: string, storage?: SessionStorage): void {
   store.removeItem(earlyCooldownKey(day));
   store.removeItem("activity_" + day);
   store.removeItem(phasePlanKey(day));
+  store.removeItem(legacyVo2ProtocolPlanKey(day));
+  store.removeItem(vo2ProtocolRuntimeKey(day));
+}
+
+export function persistVo2ProtocolRuntime(
+  day: string,
+  runtime: Vo2ProtocolRuntime,
+  storage?: SessionStorage
+): void {
+  if (!isValidVo2ProtocolRuntime(runtime)) return;
+  storageOrBrowser(storage).setItem(vo2ProtocolRuntimeKey(day), JSON.stringify(runtime));
 }
 
 export function markSummaryEmitted(day: string): void {

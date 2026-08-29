@@ -53,29 +53,30 @@ function speakText(text) {
     u.pitch = 1;
     window.speechSynthesis.speak(u);
 }
-function announceWorkoutGuidance(phaseDisplayName, machineEvent = null) {
+function announceWorkoutGuidance(phaseDisplayName, machineEvent = null, extraPhrases = []) {
     if (!phaseDisplayName || phaseDisplayName === "Not Started") {
         resetVoiceState();
         return;
     }
     if (typeof window.getVoicePromptsEnabled !== "function" || !window.getVoicePromptsEnabled())
         return;
+    const extra = extraPhrases.filter(Boolean).join(" ");
     const phaseChanged = phaseDisplayName !== lastSpokenPhase;
     if (machineEvent) {
         const event = { ...machineEvent, phaseChanged: machineEvent.phaseChanged || phaseChanged };
         const key = getMachineGuidanceVoiceKey(event);
         const text = key === lastMachineGuidanceKey ? null : formatMachineGuidanceSpeech(event);
-        if (text) {
+        if (text || extra) {
             lastSpokenPhase = phaseDisplayName;
             lastMachineGuidanceKey = key;
-            speakText(text);
+            speakText([extra, text].filter(Boolean).join(" "));
             return;
         }
     }
-    if (!phaseChanged)
+    if (!phaseChanged && !extra)
         return;
     lastSpokenPhase = phaseDisplayName;
-    speakText(phaseDisplayName);
+    speakText([extra, phaseChanged ? phaseDisplayName : ""].filter(Boolean).join(" ") || extra);
 }
 function announcePhaseIfChanged(phaseDisplayName) {
     announceWorkoutGuidance(phaseDisplayName, null);

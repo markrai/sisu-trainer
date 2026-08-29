@@ -126,6 +126,59 @@ export interface Vo2EvidenceMachine {
   guidance_trace_entry_count?: number;
 }
 
+export const VO2_PROTOCOL_ID = "bike-submax-70rpm" as const;
+export const VO2_PROTOCOL_VERSION = 1 as const;
+export type Vo2ProtocolId = typeof VO2_PROTOCOL_ID;
+export type Vo2ProtocolVersion = typeof VO2_PROTOCOL_VERSION;
+
+export type Vo2ProtocolStageStatus =
+  | "accepted"
+  | "unstable_hr"
+  | "insufficient_hr"
+  | "incomplete";
+
+export type Vo2ProtocolTerminationReason =
+  | "protocol_complete"
+  | "submax_hr_ceiling"
+  | "early_cooldown"
+  | "user_cancelled"
+  | "hr_lost"
+  | "insufficient_calibrated_workloads"
+  | "other";
+
+export interface Vo2ProtocolStageHrEvidence {
+  sample_count: number;
+  minute_2_mean_bpm?: number;
+  minute_3_mean_bpm?: number;
+  final_two_window_delta_bpm?: number;
+  steady_state_bpm?: number;
+}
+
+export interface Vo2ProtocolStageEvidence {
+  stage_id: string;
+  active_start_sec: number;
+  active_end_sec: number;
+  requested_watts?: number;
+  prescribed_resistance: number;
+  calibrated_watts_at_70rpm: number;
+  status: Vo2ProtocolStageStatus;
+  nominal_duration_sec: number;
+  actual_duration_sec: number;
+  hr?: Vo2ProtocolStageHrEvidence;
+}
+
+export interface Vo2ProtocolEvidence {
+  protocol_id: Vo2ProtocolId;
+  protocol_version: Vo2ProtocolVersion;
+  prescribed_cadence_rpm: number;
+  stages: Vo2ProtocolStageEvidence[];
+  termination: {
+    reason: Vo2ProtocolTerminationReason;
+  };
+  /** Whether an authoritative HRmax ceiling was available to enforce 85% HRmax. */
+  automatic_submax_hr_ceiling_available: boolean;
+}
+
 export interface Vo2Evidence {
   schema_version: typeof VO2_EVIDENCE_SCHEMA_VERSION;
   activity?: Activity;
@@ -144,6 +197,8 @@ export interface Vo2Evidence {
   phases: Vo2EvidencePhase[];
   hr: Vo2EvidenceHr;
   machine?: Vo2EvidenceMachine;
+  /** Present only for the standalone VO2 Max Estimation protocol. */
+  protocol?: Vo2ProtocolEvidence;
 }
 
 export interface WorkoutSummary {

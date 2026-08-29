@@ -157,6 +157,20 @@ function adaptWorkResistance(context, currentResistance) {
         classified,
     };
 }
+function holdGuidance(context, state, phaseChanged) {
+    var _a;
+    const resistance = clampAutomaticResistance(context.holdResistance);
+    const cadence = (_a = context.holdCadenceRpm) !== null && _a !== void 0 ? _a : 70;
+    const action = actionForResistance(state.currentResistance, resistance, phaseChanged);
+    return {
+        guidance: recommendation(resistance, cadence, action, "Fixed protocol resistance", cadence === 70),
+        state: {
+            ...state,
+            currentResistance: resistance,
+            currentCadenceRpm: cadence,
+        },
+    };
+}
 function warmupGuidance(context, state, phaseChanged) {
     const fraction = context.phaseDurationSeconds > 0
         ? Math.max(0, Math.min(1, context.phaseElapsedSeconds / context.phaseDurationSeconds))
@@ -550,6 +564,12 @@ export function getProFormSmartPower10Guidance(context, state) {
             lastWorkAdjustmentDirection: undefined,
         }
         : finalizedState;
+    if (context.holdResistance != null && Number.isFinite(context.holdResistance)) {
+        const held = holdGuidance(context, phaseState, phaseChanged);
+        if (priorWorkEvaluation)
+            held.priorWorkEvaluation = priorWorkEvaluation;
+        return held;
+    }
     const result = context.phaseKind === "warmup"
         ? warmupGuidance(context, phaseState, phaseChanged)
         : context.phaseKind === "work"

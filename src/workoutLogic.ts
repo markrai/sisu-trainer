@@ -9,6 +9,7 @@ import {
   clearSession,
   getEarlyCooldownElapsed,
   setEarlyCooldownElapsed,
+  persistVo2ProtocolRuntime,
   type PhasePlanSnapshot,
   type SessionData,
   type SessionStorage,
@@ -16,6 +17,17 @@ import {
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
+import {
+  advanceVo2Protocol,
+  createVo2ProtocolRuntime,
+  evaluateVo2PreflightForUi,
+  getVo2ProtocolPhase,
+  isVo2WorkoutSelector,
+  vo2ProtocolNeedsHrEvaluation,
+  vo2ProtocolVoiceCues,
+  type Vo2ProtocolRuntime,
+} from "./vo2Protocol.js";
+import { getHrSamples } from "./workoutStorage.js";
 
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
@@ -131,11 +143,14 @@ function planEarlyCooldownTransition(input: {
   elapsedSec: number;
   paused: boolean;
   earlyCooldownElapsed?: number | null;
+  vo2Protocol?: Vo2ProtocolRuntime | null;
 }): EarlyCooldownDecision {
   if (!input.hasSession || !input.blocks || input.blocks.cool <= 0) {
     return { type: "unavailable" };
   }
-  const phase = getPhase(input.elapsedSec, input.blocks, input.earlyCooldownElapsed);
+  const phase = getPhase(input.elapsedSec, input.blocks, input.earlyCooldownElapsed, {
+    vo2Protocol: input.vo2Protocol,
+  });
   if (phase.done) return { type: "unavailable" };
   if (phase.kind === "cooldown") {
     return { type: "already-in-cooldown", resume: input.paused };
@@ -172,10 +187,12 @@ function requestEarlyCooldown(day?: string, options?: EarlyCooldownRequestOption
       elapsedSec,
       paused: session.paused,
       earlyCooldownElapsed: getEarlyCooldownElapsed(dayToUse, storage),
+      vo2Protocol: session.vo2ProtocolRuntime,
     });
     if (decision.type === "unavailable") return decision;
     if (decision.type === "enter-early-cooldown") {
       setEarlyCooldownElapsed(dayToUse, decision.elapsedSec, storage);
+      tickVo2Protocol(dayToUse, decision.elapsedSec, false, storage);
     }
     if (session.paused) resumeSession(dayToUse, storage, now);
     if (typeof (window as any).requestWakeLock === "function") (window as any).requestWakeLock();
@@ -217,6 +234,40 @@ function capturePhasePlanSnapshot(day: string): PhasePlanSnapshot | null {
 
 function beginWorkout(activity?: Activity) {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
+  if (isVo2WorkoutSelector(day)) {
+    const preflight = evaluateVo2PreflightForUi();
+    if (preflight.ok === false) {
+      if (typeof (window as any).showToast === "function") {
+        (window as any).showToast(preflight.message, "error");
+      }
+      return;
+    }
+    const allowed = getWorkoutMetadata()[day]?.activities ?? [];
+    const resolved = activity !== undefined
+      ? requireAllowedActivity(allowed, activity)
+      : getActiveWorkoutActivity(allowed);
+    if (allowed.length > 1 && resolved === undefined) return;
+    const startTime = Date.now();
+    const phasePlan = capturePhasePlanSnapshot(day);
+    const runtime = createVo2ProtocolRuntime(preflight.plan);
+    let sessionId: string | null = null;
+    if (typeof (window as any).generateUUID === "function") {
+      sessionId = (window as any).generateUUID();
+      startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
+    } else {
+      startSession(day, startTime, null, resolved, undefined, phasePlan);
+    }
+    persistVo2ProtocolRuntime(day, runtime);
+    resetMachineGuidanceRuntime(sessionId);
+    if (typeof (window as any).initDB === "function") {
+      (window as any).initDB().catch((err: any) => console.error("Failed to init DB:", err));
+    }
+    if (typeof (window as any).requestWakeLock === "function") {
+      (window as any).requestWakeLock();
+    }
+    if (typeof (window as any).updateDisplay === "function") (window as any).updateDisplay();
+    return;
+  }
   const allowed = getWorkoutMetadata()[day]?.activities ?? [];
   const resolved = activity !== undefined
     ? requireAllowedActivity(allowed, activity)
@@ -245,6 +296,8 @@ function beginWorkout(activity?: Activity) {
 async function restartWorkout() {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
   const session = getSession(day);
+  const elapsedSec = actualElapsedSeconds(session.startTime, session.paused, session.pausedElapsed, Date.now());
+  markVo2ProtocolCancelled(day, elapsedSec);
 
   await handleWorkoutCancellation(day);
 
@@ -265,6 +318,7 @@ async function restartWorkout() {
 export interface GetPhaseOptions {
   day?: string;
   hrTargets?: HrTargetsForDay | null;
+  vo2Protocol?: Vo2ProtocolRuntime | null;
 }
 
 function resolveDayHrTargets(day: string, hrTargets?: HrTargetsForDay | null): HrTargetsForDay | null | undefined {
@@ -307,12 +361,23 @@ function getIntervalRuntime(
   return null;
 }
 
+function resolveVo2ProtocolRuntime(day: string, options?: GetPhaseOptions): Vo2ProtocolRuntime | null | undefined {
+  if (options && Object.prototype.hasOwnProperty.call(options, "vo2Protocol")) return options.vo2Protocol;
+  if (!isVo2WorkoutSelector(day)) return undefined;
+  return getSession(day).vo2ProtocolRuntime;
+}
+
 function getPhase(
   elapsedSec: number,
   blocks: PlanBlock,
   earlyCooldownElapsed?: number | null,
   options?: GetPhaseOptions
 ): WorkoutPhaseState {
+  const day =
+    options?.day ??
+    (typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName());
+  const vo2Runtime = resolveVo2ProtocolRuntime(day, options);
+  if (vo2Runtime) return getVo2ProtocolPhase(elapsedSec, vo2Runtime, earlyCooldownElapsed);
   const w = blocks.warm * 60;
   const s = blocks.sustain * 60;
   const c = blocks.cool * 60;
@@ -370,6 +435,63 @@ function getPhase(
     return cooldownPhase(elapsedSec, w + s, c);
   }
   return completedPhase();
+}
+
+function tickVo2Protocol(
+  day: string,
+  elapsedSec: number,
+  paused: boolean,
+  storage?: SessionStorage,
+  samples: readonly { timestamp_sec: number; hr: number }[] = []
+): { runtime: Vo2ProtocolRuntime; cues: string[] } | null {
+  const session = getSession(day, storage);
+  if (!session.vo2ProtocolRuntime) return null;
+  const before = session.vo2ProtocolRuntime;
+  const next = advanceVo2Protocol(before, {
+    elapsedSec,
+    paused,
+    samples,
+    earlyCooldownElapsed: getEarlyCooldownElapsed(day, storage),
+  });
+  persistVo2ProtocolRuntime(day, next, storage);
+  return { runtime: next, cues: vo2ProtocolVoiceCues(before, next, elapsedSec) };
+}
+
+async function tickVo2ProtocolWithCanonicalHr(
+  day: string,
+  elapsedSec: number,
+  paused: boolean,
+  storage?: SessionStorage
+): Promise<{ runtime: Vo2ProtocolRuntime; cues: string[] } | null> {
+  const session = getSession(day, storage);
+  if (!session.vo2ProtocolRuntime) return null;
+  let samples: { timestamp_sec: number; hr: number }[] = [];
+  if (
+    session.sessionId &&
+    vo2ProtocolNeedsHrEvaluation(session.vo2ProtocolRuntime, elapsedSec, paused)
+  ) {
+    samples = await getHrSamples(session.sessionId);
+  }
+  return tickVo2Protocol(day, elapsedSec, paused, storage, samples);
+}
+
+function markVo2ProtocolCancelled(
+  day: string,
+  elapsedSec: number,
+  storage?: SessionStorage
+): void {
+  const session = getSession(day, storage);
+  if (!session.vo2ProtocolRuntime) return;
+  persistVo2ProtocolRuntime(
+    day,
+    advanceVo2Protocol(session.vo2ProtocolRuntime, {
+      elapsedSec,
+      paused: session.paused,
+      samples: [],
+      cancelled: true,
+    }),
+    storage
+  );
 }
 
 function formatTime(sec: number, options?: { showSeconds?: boolean }) {
@@ -520,4 +642,7 @@ export {
   updateRing,
   hrTargetText,
   parseHrTargetRange,
+  tickVo2Protocol,
+  tickVo2ProtocolWithCanonicalHr,
+  markVo2ProtocolCancelled,
 };

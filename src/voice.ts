@@ -52,27 +52,32 @@ function speakText(text: string) {
   window.speechSynthesis.speak(u);
 }
 
-function announceWorkoutGuidance(phaseDisplayName: string, machineEvent: MachineGuidanceVoiceEvent | null = null) {
+function announceWorkoutGuidance(
+  phaseDisplayName: string,
+  machineEvent: MachineGuidanceVoiceEvent | null = null,
+  extraPhrases: string[] = []
+) {
   if (!phaseDisplayName || phaseDisplayName === "Not Started") {
     resetVoiceState();
     return;
   }
   if (typeof (window as any).getVoicePromptsEnabled !== "function" || !(window as any).getVoicePromptsEnabled()) return;
+  const extra = extraPhrases.filter(Boolean).join(" ");
   const phaseChanged = phaseDisplayName !== lastSpokenPhase;
   if (machineEvent) {
     const event = { ...machineEvent, phaseChanged: machineEvent.phaseChanged || phaseChanged };
     const key = getMachineGuidanceVoiceKey(event);
     const text = key === lastMachineGuidanceKey ? null : formatMachineGuidanceSpeech(event);
-    if (text) {
+    if (text || extra) {
       lastSpokenPhase = phaseDisplayName;
       lastMachineGuidanceKey = key;
-      speakText(text);
+      speakText([extra, text].filter(Boolean).join(" "));
       return;
     }
   }
-  if (!phaseChanged) return;
+  if (!phaseChanged && !extra) return;
   lastSpokenPhase = phaseDisplayName;
-  speakText(phaseDisplayName);
+  speakText([extra, phaseChanged ? phaseDisplayName : ""].filter(Boolean).join(" ") || extra);
 }
 
 function announcePhaseIfChanged(phaseDisplayName: string) {

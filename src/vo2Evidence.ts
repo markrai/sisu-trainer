@@ -10,10 +10,12 @@ import type {
   Vo2EvidencePhasePrescription,
   WorkoutPhaseKind,
   WorkoutSummary,
+  Vo2ProtocolEvidence,
 } from "./types.js";
 import { VO2_EVIDENCE_SCHEMA_VERSION } from "./types.js";
 import type { MachineId } from "./machines/trace.js";
-import { getPhase, hrTargetText, parseHrTargetRange } from "./workoutLogic.js";
+import { getPhase, hrTargetText, parseHrTargetRange, type GetPhaseOptions } from "./workoutLogic.js";
+import type { Vo2ProtocolRuntime } from "./vo2Protocol.js";
 
 export interface Vo2EvidenceBuildInput {
   day?: string;
@@ -30,6 +32,8 @@ export interface Vo2EvidenceBuildInput {
   machineProfileVersion?: number;
   /** Count-only provenance; full trace stays on WorkoutSummary. */
   machineGuidanceTraceEntryCount?: number;
+  vo2Protocol?: Vo2ProtocolRuntime | null;
+  protocol?: Vo2ProtocolEvidence;
 }
 
 function naturalWorkEndSec(blocks: PlanBlock): number {
@@ -124,6 +128,7 @@ export function deriveVo2EvidencePhases(input: {
   activeDurationSec: number;
   earlyCooldownElapsed?: number | null;
   hrTargets?: HrTargetsForDay | null;
+  vo2Protocol?: Vo2ProtocolRuntime | null;
 }): Vo2EvidencePhase[] {
   const activeDurationSec = Math.max(0, Math.floor(input.activeDurationSec));
   if (activeDurationSec <= 0) return [];
@@ -160,7 +165,10 @@ export function deriveVo2EvidencePhases(input: {
     open = null;
   };
 
-  const phaseOptions = { day: input.day, hrTargets: input.hrTargets };
+  const phaseOptions: GetPhaseOptions = { day: input.day, hrTargets: input.hrTargets };
+  if (Object.prototype.hasOwnProperty.call(input, "vo2Protocol")) {
+    phaseOptions.vo2Protocol = input.vo2Protocol;
+  }
   for (let t = 0; t < activeDurationSec; t++) {
     const state = getPhase(t, input.blocks, input.earlyCooldownElapsed, phaseOptions);
     if (state.done || state.kind === "completed") {
@@ -236,6 +244,7 @@ export function buildVo2Evidence(input: Vo2EvidenceBuildInput): Vo2Evidence {
           activeDurationSec,
           earlyCooldownElapsed: input.earlyCooldownElapsed,
           hrTargets: input.hrTargets,
+          vo2Protocol: input.vo2Protocol,
         })
       : [];
   const markers = cooldownMarkers({
@@ -260,6 +269,7 @@ export function buildVo2Evidence(input: Vo2EvidenceBuildInput): Vo2Evidence {
   if (input.cancelled) evidence.cancelled = true;
   const machine = buildMachineEvidence(input);
   if (machine) evidence.machine = machine;
+  if (input.protocol) evidence.protocol = input.protocol;
   return evidence;
 }
 

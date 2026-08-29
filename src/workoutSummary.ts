@@ -11,6 +11,7 @@ import { learnShadowPredictionsFromCompletedWorkout } from "./machines/predictio
 import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
 import { actualElapsedSeconds, adjustedBlockLengths } from "./workoutLogic.js";
 import { attachVo2Evidence, buildVo2Evidence } from "./vo2Evidence.js";
+import { buildVo2ProtocolEvidence } from "./vo2Protocol.js";
 
 // Generate stable UUID (v4-ish)
 function generateUUID(): string {
@@ -191,6 +192,10 @@ async function generateWorkoutSummary(
       machineId: summary.machine_id,
       machineProfileVersion: summary.machine_profile_version,
       machineGuidanceTraceEntryCount: summary.machine_guidance_trace?.length,
+      vo2Protocol: session.vo2ProtocolRuntime,
+      protocol: session.vo2ProtocolRuntime
+        ? buildVo2ProtocolEvidence(session.vo2ProtocolRuntime)
+        : undefined,
     })
   );
 

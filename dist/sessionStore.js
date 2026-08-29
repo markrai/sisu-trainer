@@ -1,4 +1,5 @@
 import { isActivity } from "./workoutActivity.js";
+import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime } from "./vo2Protocol.js";
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
@@ -17,6 +18,12 @@ function pauseWallStartKey(day) {
 }
 function phasePlanKey(day) {
     return "phase_plan_" + day;
+}
+function vo2ProtocolRuntimeKey(day) {
+    return "vo2_protocol_runtime_" + day;
+}
+function legacyVo2ProtocolPlanKey(day) {
+    return "vo2_protocol_plan_" + day;
 }
 function parseEarlyCooldownElapsed(raw) {
     if (raw == null || raw === "")
@@ -88,6 +95,17 @@ export function getSession(day, storage) {
         earlyCooldownElapsed: parseEarlyCooldownElapsed(store.getItem(earlyCooldownKey(day))),
         activity: parseStoredActivity(store.getItem("activity_" + day)),
         phasePlan: parsePhasePlan(store.getItem(phasePlanKey(day))),
+        vo2ProtocolRuntime: parseVo2ProtocolRuntime((() => {
+            const raw = store.getItem(vo2ProtocolRuntimeKey(day));
+            if (!raw)
+                return null;
+            try {
+                return JSON.parse(raw);
+            }
+            catch {
+                return null;
+            }
+        })()),
     };
 }
 export function startSession(day, startTime, sessionId, activity, storage, phasePlan) {
@@ -99,6 +117,8 @@ export function startSession(day, startTime, sessionId, activity, storage, phase
     store.removeItem("paused_" + day);
     store.removeItem("paused_elapsed_" + day);
     store.removeItem(phasePlanKey(day));
+    store.removeItem(legacyVo2ProtocolPlanKey(day));
+    store.removeItem(vo2ProtocolRuntimeKey(day));
     store.setItem("start_" + day, String(startTime));
     if (sessionId != null) {
         store.setItem("session_id_" + day, sessionId);
@@ -152,6 +172,13 @@ export function clearSession(day, storage) {
     store.removeItem(earlyCooldownKey(day));
     store.removeItem("activity_" + day);
     store.removeItem(phasePlanKey(day));
+    store.removeItem(legacyVo2ProtocolPlanKey(day));
+    store.removeItem(vo2ProtocolRuntimeKey(day));
+}
+export function persistVo2ProtocolRuntime(day, runtime, storage) {
+    if (!isValidVo2ProtocolRuntime(runtime))
+        return;
+    storageOrBrowser(storage).setItem(vo2ProtocolRuntimeKey(day), JSON.stringify(runtime));
 }
 export function markSummaryEmitted(day) {
     localStorage.setItem("summary_emitted_" + day, "true");
