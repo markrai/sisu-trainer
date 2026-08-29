@@ -33,6 +33,18 @@ export const VO2_NOMINAL_WATT_STEP = 25;
 export const VO2_HR_FRESHNESS_MS = 3000;
 export const VO2_UPCOMING_RESISTANCE_LEAD_SEC = 10;
 export const VO2_CALIBRATION_MACHINE_ID = "proform-smart-power-10";
+/** Protocol-v1 end-to-end commandable ceiling. Not the physical bike maximum. */
+export const VO2_PROTOCOL_MAX_RESISTANCE = 10;
+export const VO2_EVAL_RELATIVE_SECONDS = [0, 180, 240, 300] as const;
+const VO2_TERMINATION_REASONS: readonly Vo2ProtocolTerminationReason[] = [
+  "protocol_complete",
+  "submax_hr_ceiling",
+  "early_cooldown",
+  "user_cancelled",
+  "hr_lost",
+  "insufficient_calibrated_workloads",
+  "other",
+];
 
 export interface Vo2ResolvedWorkload {
   requested_watts: number;
@@ -100,7 +112,8 @@ export function listCalibrated70RpmWorkloads(
   getWatts: Vo2WattsLookup = getEstimatedWattsAt70Rpm
 ): Vo2ResolvedWorkload[] {
   const list: Vo2ResolvedWorkload[] = [];
-  for (let resistance = AUTOMATIC_RESISTANCE_MIN; resistance <= AUTOMATIC_RESISTANCE_MAX; resistance++) {
+  const maxResistance = Math.min(AUTOMATIC_RESISTANCE_MAX, VO2_PROTOCOL_MAX_RESISTANCE);
+  for (let resistance = AUTOMATIC_RESISTANCE_MIN; resistance <= maxResistance; resistance++) {
     const watts = getWatts(resistance);
     if (watts == null || !Number.isFinite(watts) || watts <= 0) continue;
     list.push({
@@ -410,6 +423,16 @@ export function vo2ProtocolNeedsHrEvaluation(
   return evalAt > 0 && evalAt > open.last_eval_relative_sec;
 }
 
+export function isStaleVo2ProtocolTick(runtime: Vo2ProtocolRuntime, elapsedSec: number): boolean {
+  const elapsed = Math.max(0, Math.floor(elapsedSec));
+  for (const stage of runtime.stages) {
+    if (stage.active_start_sec > elapsed) return true;
+    if (stage.active_end_sec != null && stage.active_end_sec > elapsed) return true;
+  }
+  if (runtime.cooldown_start_sec != null && runtime.cooldown_start_sec > elapsed) return true;
+  return false;
+}
+
 export interface AdvanceVo2ProtocolInput {
   elapsedSec: number;
   paused: boolean;
@@ -609,6 +632,26 @@ export function getVo2ProtocolPhase(
   return completedPhase();
 }
 
+export function vo2ProtocolUiTargets(
+  runtime: Vo2ProtocolRuntime | null | undefined,
+  phaseId: string
+): {
+  hrTargetTextValue: string;
+  targetHeartRateMin: undefined;
+  targetHeartRateMax: undefined;
+  holdResistance: number | undefined;
+  holdCadenceRpm: number | undefined;
+} {
+  const hold = vo2ProtocolHoldForPhase(runtime, phaseId);
+  return {
+    hrTargetTextValue: "",
+    targetHeartRateMin: undefined,
+    targetHeartRateMax: undefined,
+    holdResistance: hold?.resistance,
+    holdCadenceRpm: hold?.cadenceRpm,
+  };
+}
+
 export function vo2ProtocolHoldForPhase(runtime: Vo2ProtocolRuntime | null | undefined, phaseId: string): {
   resistance: number;
   cadenceRpm: number;
@@ -682,12 +725,32 @@ function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function isProtocolResistance(value: unknown): value is number {
+  return (
+    Number.isInteger(value) &&
+    (value as number) >= AUTOMATIC_RESISTANCE_MIN &&
+    (value as number) <= VO2_PROTOCOL_MAX_RESISTANCE
+  );
+}
+
+function isBooleanFlag(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+function isEvalRelativeSec(value: unknown): boolean {
+  return VO2_EVAL_RELATIVE_SECONDS.some((allowed) => allowed === value);
+}
+
+function isTerminationReason(value: unknown): value is Vo2ProtocolTerminationReason {
+  return typeof value === "string" && (VO2_TERMINATION_REASONS as readonly string[]).includes(value);
+}
+
 export function isValidVo2ResolvedWorkload(value: unknown): value is Vo2ResolvedWorkload {
   if (!value || typeof value !== "object") return false;
   const row = value as Vo2ResolvedWorkload;
   return (
     isPositiveFinite(row.requested_watts) &&
-    isPositiveFinite(row.prescribed_resistance) &&
+    isProtocolResistance(row.prescribed_resistance) &&
     isPositiveFinite(row.calibrated_watts_at_70rpm)
   );
 }
@@ -698,19 +761,22 @@ export function isValidVo2ProtocolPlan(value: unknown): value is Vo2ProtocolPlan
   if (plan.protocol_id !== VO2_PROTOCOL_ID) return false;
   if (plan.protocol_version !== VO2_PROTOCOL_VERSION) return false;
   if (plan.prescribed_cadence_rpm !== VO2_PRESCRIBED_CADENCE_RPM) return false;
-  if (!isPositiveFinite(plan.warmup_resistance) || !isPositiveFinite(plan.warmup_calibrated_watts_at_70rpm)) {
+  if (!isProtocolResistance(plan.warmup_resistance) || !isPositiveFinite(plan.warmup_calibrated_watts_at_70rpm)) {
     return false;
   }
-  if (!isPositiveFinite(plan.warmup_duration_sec) || !isPositiveFinite(plan.cooldown_duration_sec)) return false;
-  if (!Array.isArray(plan.workloads) || plan.workloads.length === 0) return false;
-  let lastWatts = plan.warmup_calibrated_watts_at_70rpm;
+  if (plan.warmup_duration_sec !== VO2_WARMUP_DURATION_SEC) return false;
+  if (plan.cooldown_duration_sec !== VO2_COOLDOWN_DURATION_SEC) return false;
+  if (!Array.isArray(plan.workloads)) return false;
+  if (plan.workloads.length < VO2_TARGET_WORK_STAGES || plan.workloads.length > VO2_MAX_WORK_STAGES) return false;
+  let previousResolvedWatts = plan.warmup_calibrated_watts_at_70rpm;
   const resistances = new Set<number>([plan.warmup_resistance]);
   for (const workload of plan.workloads) {
     if (!isValidVo2ResolvedWorkload(workload)) return false;
-    if (workload.calibrated_watts_at_70rpm <= lastWatts) return false;
+    if (workload.requested_watts !== previousResolvedWatts + VO2_NOMINAL_WATT_STEP) return false;
+    if (workload.calibrated_watts_at_70rpm <= previousResolvedWatts) return false;
     if (resistances.has(workload.prescribed_resistance)) return false;
     resistances.add(workload.prescribed_resistance);
-    lastWatts = workload.calibrated_watts_at_70rpm;
+    previousResolvedWatts = workload.calibrated_watts_at_70rpm;
   }
   return true;
 }
@@ -721,6 +787,10 @@ export function isValidVo2ProtocolRuntime(value: unknown): value is Vo2ProtocolR
   if (!isValidVo2ProtocolPlan(runtime.plan)) return false;
   if (!["warmup", "work", "cooldown", "complete"].includes(runtime.segment)) return false;
   if (runtime.cooldown_start_sec != null && !isNonNegativeFinite(runtime.cooldown_start_sec)) return false;
+  if (!isBooleanFlag(runtime.start_announced) || !isBooleanFlag(runtime.upcoming_warmup_announced)) return false;
+  if (runtime.termination != null) {
+    if (typeof runtime.termination !== "object" || !isTerminationReason(runtime.termination.reason)) return false;
+  }
   if (!Array.isArray(runtime.stages)) return false;
   for (const stage of runtime.stages) {
     if (!stage || typeof stage !== "object") return false;
@@ -730,6 +800,11 @@ export function isValidVo2ProtocolRuntime(value: unknown): value is Vo2ProtocolR
     if (!isNonNegativeFinite(stage.active_start_sec)) return false;
     if (stage.active_end_sec != null && !isNonNegativeFinite(stage.active_end_sec)) return false;
     if (stage.active_end_sec != null && stage.active_end_sec < stage.active_start_sec) return false;
+    if (!Number.isInteger(stage.extensions) || stage.extensions < 0 || stage.extensions > VO2_MAX_EXTENSION_MINUTES) {
+      return false;
+    }
+    if (!isEvalRelativeSec(stage.last_eval_relative_sec)) return false;
+    if (!isBooleanFlag(stage.upcoming_announced) || !isBooleanFlag(stage.extension_announced)) return false;
     if (!["accepted", "unstable_hr", "insufficient_hr", "incomplete", "open"].includes(stage.status)) return false;
   }
   return true;
@@ -754,6 +829,7 @@ export function buildVo2ProtocolEvidence(runtime: Vo2ProtocolRuntime): Vo2Protoc
       actual_duration_sec: Math.max(0, end - stage.active_start_sec),
     };
     if (stage.hr) evidence.hr = stage.hr;
+    if (evidence.prescribed_resistance > VO2_PROTOCOL_MAX_RESISTANCE) return undefined;
     stages.push(evidence);
   }
   return {

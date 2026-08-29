@@ -7,7 +7,10 @@
 - **Standalone VO2 test protocol added.** Workout selector includes
   `VO2 Max Estimation`, a versioned SISU Bike Submax Protocol v1
   (`bike-submax-70rpm` / version 1). The test records protocol evidence on
-  local `vo2_evidence.protocol`. **VO2 estimation is not yet calculated.**
+  local `vo2_evidence.protocol`. Protocol-v1 workloads resolve only within
+  commandable resistance 1–10 so current automatic Bike Bridge transport
+  cannot silently rewrite a prescribed stage. Machine calibration remains
+  1–15. **VO2 estimation is not yet calculated.**
   See `VO2-TEST-PROTOCOL-V1.md`.
 
 ## [0.10.10] - 2026-08-28

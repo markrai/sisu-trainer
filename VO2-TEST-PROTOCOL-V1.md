@@ -118,7 +118,7 @@ Ordinary machine guidance may adapt resistance during a weekly-plan phase. Proto
 
 A stage's workload stays stable so a later estimator can associate HR response with one known workload.
 
-The normal test targets three usable work stages. A fourth stage may run when fewer than three stages have been accepted and another resolved workload remains, without exceeding the calibrated range.
+The normal test targets three usable work stages. A fourth stage may run when fewer than three stages have been accepted and another **commandable** resolved workload remains, without exceeding the protocol-v1 resistance ceiling or the calibrated table.
 
 ## Workload resolution
 
@@ -157,6 +157,18 @@ Requirements:
 The protocol records the **resolved** workload together with the requested target that produced it.
 
 Protocol v1 is bound to the ProForm SMART Power 10.0 calibration (`proform-smart-power-10` / `getEstimatedWattsAt70Rpm`). Another bike profile cannot pass preflight and silently inherit that table.
+
+## Commandable resistance range
+
+Machine calibration exists through resistance **1..15**. Ordinary weekly-workout machine guidance still uses that full range.
+
+Protocol v1 currently restricts resolved workloads to resistance **1..10**. That is the current end-to-end commandable ceiling (`VO2_PROTOCOL_MAX_RESISTANCE`), not a claim that the ProForm itself only has levels 1–10.
+
+This restriction exists so protocol evidence remains truthful in both manual operation and current automatic Bike Bridge control. SISU must not record a prescribed resistance that the existing automatic-control transport would silently change.
+
+A future validated Bike Bridge range expansion may permit a later protocol version, or an explicitly reviewed protocol-v1 change, to use resistances 11–15. Until then, protocol v1 does not fabricate a fourth stage merely to fill a four-stage target if the commandable table cannot support it.
+
+The future estimator may reject an attempt that accepts fewer than three stages.
 
 ## Steady-state HR
 
@@ -259,8 +271,10 @@ Invariants:
 - `calibrated_watts_at_70rpm` is a calibration estimate, not measured power
 - `prescribed_resistance` is a command/prescription, not necessarily observed resistance
 - 70 RPM is prescribed cadence, not measured cadence
+- cadence coaching is not an HR prescription
 - raw HR remains in `hr_samples`; protocol evidence does not duplicate the full HR trace
 - no measured cadence or measured watts are invented
+- prescribed resistance is never above the protocol-v1 commandable ceiling of 10
 
 ## Reproducibility / snapshot behavior
 
@@ -281,10 +295,15 @@ Stage HR evaluation reads the canonical IndexedDB `hr_samples` store. The protoc
 - Not a clinical CPET
 - Not an official YMCA, Astrand-Ryhming, ACSM, or clinical exercise test
 - Cadence is prescribed, not measured
+- 70 RPM is coaching text and machine-guidance cadence, not an HR target
 - Watts are calibrated 70-RPM estimates, not measured power
 - No authoritative HRmax / automatic 85% ceiling
 - Automatic Bike Bridge control is optional
+- Manual resistance remains supported
+- No VO2 estimate exists yet
 - Pause-safe timing uses the existing active workout clock; resistance-command time is not proof the bike physically reached that resistance
+- machine calibration: resistance 1..15
+- current VO2 protocol v1 commandable range: resistance 1..10
 
 ## Deferred estimator
 

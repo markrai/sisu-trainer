@@ -10,12 +10,15 @@ import {
   VO2_WORKOUT_INTENT,
   VO2_PRESCRIBED_CADENCE_RPM,
   VO2_WARMUP_DURATION_SEC,
+  VO2_COOLDOWN_DURATION_SEC,
   VO2_NOMINAL_STAGE_DURATION_SEC,
   VO2_MAX_STAGE_DURATION_SEC,
   VO2_MIN_HR_SAMPLES_PER_WINDOW,
   VO2_STEADY_STATE_DELTA_BPM,
   VO2_MAX_WORK_STAGES,
   VO2_TARGET_WORK_STAGES,
+  VO2_PROTOCOL_MAX_RESISTANCE,
+  VO2_MAX_EXTENSION_MINUTES,
   advanceVo2Protocol,
   authoritativeHrMaxBpm,
   buildVo2ProtocolEvidence,
@@ -30,18 +33,29 @@ import {
   resolveProtocolWorkloads,
   vo2PlanBlocks,
   vo2ProtocolDisplayName,
+  vo2ProtocolHoldForPhase,
+  vo2ProtocolUiTargets,
   vo2WorkoutMetadata,
   parseVo2ProtocolRuntime,
   isValidVo2ProtocolRuntime,
+  isValidVo2ProtocolPlan,
 } from "../dist/vo2Protocol.js";
 import { installStandaloneVo2Workout as installVo2Workout, getPlan, getWorkoutMetadata } from "../dist/workoutData.js";
-import { getPhase, markVo2ProtocolCancelled, requestEarlyCooldown, tickVo2ProtocolWithCanonicalHr } from "../dist/workoutLogic.js";
+import {
+  getPhase,
+  markVo2ProtocolCancelled,
+  parseHrTargetRange,
+  requestEarlyCooldown,
+  tickVo2Protocol,
+  tickVo2ProtocolWithCanonicalHr,
+} from "../dist/workoutLogic.js";
 import {
   getSession,
   persistVo2ProtocolRuntime,
   startSession,
 } from "../dist/sessionStore.js";
-import { getEstimatedWattsAt70Rpm } from "../dist/machines/proformSmartPower10.js";
+import { getEstimatedWattsAt70Rpm, AUTOMATIC_RESISTANCE_MAX } from "../dist/machines/proformSmartPower10.js";
+import { toBridgeResistanceLevel } from "../dist/platform/bikeBridgeClient.js";
 import { createMachineGuidanceState, getMachineGuidance } from "../dist/machines/guidance.js";
 import { updateMachineGuidanceRuntime, resetMachineGuidanceRuntime } from "../dist/machines/runtime.js";
 import { setSelectedMachine } from "../dist/machines/selection.js";
@@ -112,6 +126,9 @@ test("protocol id and version are stable and not tied to app version", async () 
   assert.equal(VO2_MIN_HR_SAMPLES_PER_WINDOW, 45);
   assert.equal(VO2_STEADY_STATE_DELTA_BPM, 5);
   assert.equal(VO2_MAX_WORK_STAGES, 4);
+  assert.equal(VO2_COOLDOWN_DURATION_SEC, 300);
+  assert.equal(VO2_PROTOCOL_MAX_RESISTANCE, 10);
+  assert.equal(VO2_MAX_EXTENSION_MINUTES, 2);
 });
 
 test("standalone selector maps to the versioned bike protocol", () => {
@@ -741,4 +758,197 @@ test("session stores one frozen protocol plan on the runtime", () => {
   assert.equal(Object.prototype.hasOwnProperty.call(session, "vo2ProtocolPlan"), false);
   assert.ok(session.vo2ProtocolRuntime.plan);
   assert.equal(session.vo2ProtocolRuntime.plan.protocol_id, "bike-submax-70rpm");
+});
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+test("protocol workloads never exceed resistance 10 and current calibration still has 15", () => {
+  assert.equal(AUTOMATIC_RESISTANCE_MAX, 15);
+  assert.equal(getEstimatedWattsAt70Rpm(11), 134);
+  assert.equal(getEstimatedWattsAt70Rpm(15), 201);
+  const plan = buildVo2ProtocolPlan();
+  assert.ok(plan);
+  assert.ok(plan.workloads.length >= VO2_TARGET_WORK_STAGES);
+  assert.ok(plan.workloads.length <= VO2_MAX_WORK_STAGES);
+  assert.ok(plan.warmup_resistance <= VO2_PROTOCOL_MAX_RESISTANCE);
+  assert.ok(plan.workloads[0].calibrated_watts_at_70rpm > plan.warmup_calibrated_watts_at_70rpm);
+  const rows = [plan.warmup_resistance, ...plan.workloads.map((row) => row.prescribed_resistance)];
+  assert.ok(rows.every((resistance) => resistance <= VO2_PROTOCOL_MAX_RESISTANCE));
+  let lastWatts = plan.warmup_calibrated_watts_at_70rpm;
+  for (const row of plan.workloads) {
+    assert.ok(row.calibrated_watts_at_70rpm > lastWatts);
+    lastWatts = row.calibrated_watts_at_70rpm;
+  }
+  assert.equal(plan.workloads.some((row) => row.prescribed_resistance >= 11), false);
+  const evidenceRuntime = createVo2ProtocolRuntime(plan);
+  const started = advanceVo2Protocol(evidenceRuntime, { elapsedSec: 300, paused: false, samples: [] });
+  const evidence = buildVo2ProtocolEvidence(started);
+  assert.ok(evidence);
+  assert.equal(evidence.stages.some((stage) => stage.prescribed_resistance >= 11), false);
+});
+
+test("each resolved protocol resistance survives Bike Bridge conversion unchanged", async () => {
+  const src = await readFile(new URL("../src/vo2Protocol.ts", import.meta.url), "utf8");
+  assert.equal(src.includes("bikeBridgeClient"), false);
+  assert.equal(src.includes("toBridgeResistanceLevel"), false);
+  const plan = buildVo2ProtocolPlan();
+  assert.ok(plan);
+  const resistances = [plan.warmup_resistance, ...plan.workloads.map((row) => row.prescribed_resistance)];
+  for (const resistance of resistances) {
+    assert.equal(toBridgeResistanceLevel(resistance), resistance);
+  }
+});
+
+test("VO2 cadence text does not become an HR target", async () => {
+  const parsedTrap = parseHrTargetRange("70 RPM prescribed");
+  assert.ok(parsedTrap);
+  assert.equal(parsedTrap.min, 65);
+  assert.equal(parsedTrap.max, 75);
+
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  const projected = vo2ProtocolUiTargets(runtime, "vo2-stage:1");
+  assert.equal(projected.hrTargetTextValue, "");
+  assert.equal(projected.targetHeartRateMin, undefined);
+  assert.equal(projected.targetHeartRateMax, undefined);
+  assert.equal(projected.holdCadenceRpm, 70);
+  assert.equal(parseHrTargetRange(projected.hrTargetTextValue), null);
+
+  const hold = vo2ProtocolHoldForPhase(runtime, "vo2-stage:1");
+  assert.equal(hold.cadenceRpm, 70);
+  assert.equal(hold.resistance, plan.workloads[0].prescribed_resistance);
+
+  const ui = await readFile(new URL("../src/uiControls.ts", import.meta.url), "utf8");
+  assert.equal(ui.includes("70 RPM prescribed"), false);
+  const voice = await readFile(new URL("../src/vo2Protocol.ts", import.meta.url), "utf8");
+  assert.match(voice, /Maintain 70 RPM/);
+
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  resetMachineGuidanceRuntime("vo2-no-fake-hr");
+  const update = updateMachineGuidanceRuntime(
+    {
+      sessionId: "vo2-no-fake-hr",
+      activity: "bike",
+      phaseKind: "work",
+      phaseId: "vo2-stage:1",
+      phaseDisplayName: "VO2 stage 1",
+      phaseElapsedSeconds: 20,
+      phaseDurationSeconds: 180,
+      workoutElapsedSeconds: 320,
+      targetHeartRateMin: projected.targetHeartRateMin,
+      targetHeartRateMax: projected.targetHeartRateMax,
+      holdResistance: projected.holdResistance,
+      holdCadenceRpm: projected.holdCadenceRpm,
+      intent: "vo2_estimation",
+    },
+    storage
+  );
+  assert.ok(update);
+  assert.equal(update.guidance.cadenceRpm, 70);
+  assert.equal(update.guidance.resistance, projected.holdResistance);
+});
+
+test("malformed protocol semantic fields and v1 constants are rejected", () => {
+  const plan = buildVo2ProtocolPlan();
+  assert.ok(isValidVo2ProtocolPlan(plan));
+  let runtime = createVo2ProtocolRuntime(plan);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  assert.equal(isValidVo2ProtocolRuntime(runtime), true);
+
+  const badExtensions = cloneJson(runtime);
+  badExtensions.stages[0].extensions = 3;
+  assert.equal(isValidVo2ProtocolRuntime(badExtensions), false);
+
+  const badEval = cloneJson(runtime);
+  badEval.stages[0].last_eval_relative_sec = 90;
+  assert.equal(isValidVo2ProtocolRuntime(badEval), false);
+
+  const badFlag = cloneJson(runtime);
+  badFlag.start_announced = 1;
+  assert.equal(isValidVo2ProtocolRuntime(badFlag), false);
+  badFlag.start_announced = true;
+  badFlag.stages[0].upcoming_announced = "true";
+  assert.equal(isValidVo2ProtocolRuntime(badFlag), false);
+
+  const badReason = cloneJson(runtime);
+  badReason.termination = { reason: "not-a-reason" };
+  assert.equal(isValidVo2ProtocolRuntime(badReason), false);
+
+  const badDuration = cloneJson(runtime);
+  badDuration.plan.warmup_duration_sec = 299;
+  assert.equal(isValidVo2ProtocolPlan(badDuration.plan), false);
+  assert.equal(isValidVo2ProtocolRuntime(badDuration), false);
+  assert.equal(parseVo2ProtocolRuntime(badDuration), null);
+
+  const r11 = cloneJson(runtime);
+  r11.plan.workloads[0].prescribed_resistance = 11;
+  assert.equal(isValidVo2ProtocolRuntime(r11), false);
+  assert.equal(buildVo2ProtocolEvidence(r11), undefined);
+});
+
+test("frozen old calibration still restores successfully", () => {
+  const calibrationA = (resistance) => {
+    if (resistance === 1) return 70;
+    if (resistance === 2) return 95;
+    if (resistance === 3) return 120;
+    if (resistance === 4) return 145;
+    return undefined;
+  };
+  const plan = buildVo2ProtocolPlan(calibrationA);
+  assert.ok(plan);
+  assert.notEqual(plan.workloads[0].calibrated_watts_at_70rpm, getEstimatedWattsAt70Rpm(plan.workloads[0].prescribed_resistance));
+  let runtime = createVo2ProtocolRuntime(plan);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  const restored = parseVo2ProtocolRuntime(cloneJson(runtime));
+  assert.ok(restored);
+  assert.equal(isValidVo2ProtocolRuntime(restored), true);
+  assert.equal(restored.plan.workloads[0].calibrated_watts_at_70rpm, plan.workloads[0].calibrated_watts_at_70rpm);
+  assert.equal(restored.plan.workloads[0].requested_watts, plan.warmup_calibrated_watts_at_70rpm + 25);
+});
+
+test("overlapping evaluation does not duplicate a stage or rewind a newer runtime", async () => {
+  const plan = buildVo2ProtocolPlan();
+  let later = createVo2ProtocolRuntime(plan);
+  later = advanceVo2Protocol(later, { elapsedSec: 300, paused: false, samples: [] });
+  later = advanceVo2Protocol(later, {
+    elapsedSec: 497,
+    paused: false,
+    samples: stageHr(300, 120, 121),
+  });
+  assert.equal(later.stages[1].active_start_sec, 497);
+  const storage = memoryStorage();
+  startSession(VO2_WORKOUT_SELECTOR_ID, Date.now(), "vo2-overlap", "bike", storage, {
+    blocks: vo2PlanBlocks(),
+    hrTargets: null,
+  });
+  persistVo2ProtocolRuntime(VO2_WORKOUT_SELECTOR_ID, later, storage);
+  const earlier = tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 480, false, storage, []);
+  assert.equal(earlier.runtime.stages.length, 2);
+  assert.equal(earlier.runtime.stages.filter((stage) => stage.stage_id === "vo2-stage:1").length, 1);
+  assert.equal(earlier.runtime.stages[1].active_start_sec, 497);
+  const asyncEarlier = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 480, false, storage);
+  assert.equal(asyncEarlier.runtime.stages[1].active_start_sec, 497);
+
+  await resetWorkoutStorageForTests();
+  const sessionId = "vo2-double-eval";
+  const doubleStorage = memoryStorage();
+  startSession(VO2_WORKOUT_SELECTOR_ID, Date.now(), sessionId, "bike", doubleStorage, {
+    blocks: vo2PlanBlocks(),
+    hrTargets: null,
+  });
+  let open = createVo2ProtocolRuntime(plan);
+  open = advanceVo2Protocol(open, { elapsedSec: 300, paused: false, samples: [] });
+  persistVo2ProtocolRuntime(VO2_WORKOUT_SELECTOR_ID, open, doubleStorage);
+  await persistRange(sessionId, 360, 479, 122);
+  const first = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 480, false, doubleStorage);
+  const second = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 480, false, doubleStorage);
+  assert.equal(first.runtime.stages[0].status, "accepted");
+  assert.equal(second.runtime.stages[0].status, "accepted");
+  assert.equal(second.runtime.stages.filter((stage) => stage.stage_id === "vo2-stage:1").length, 1);
+  assert.equal(second.runtime.stages.length, 2);
+  await resetWorkoutStorageForTests();
 });

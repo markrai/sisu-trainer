@@ -5,7 +5,7 @@ import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
 import { getSession } from "./sessionStore.js";
-import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, VO2_WORKOUT_LABEL, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
+import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, vo2ProtocolUiTargets, VO2_WORKOUT_LABEL, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
 import { formatBikeBridgeControl, formatBikeBridgeNumber, formatBikeBridgeReadiness, getBikeBridgeSession, } from "./platform/bikeBridgeRuntime.js";
@@ -440,7 +440,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         phaseDisplayName = "Workout";
     }
     const hrTargetTextValue = isVo2WorkoutSelector(day)
-        ? "70 RPM prescribed"
+        ? ""
         : hrTargetText(phase.phase, day, elapsedSec, blocks, session.phasePlan ? session.phasePlan.hrTargets : undefined);
     const nowTime = Date.now();
     const liveBpmStale = lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
@@ -746,8 +746,13 @@ function renderWorkout(state) {
         updateHeartColor(null, active.hrTargetTextValue);
     }
     const session = getSession(active.day);
-    const hold = vo2ProtocolHoldForPhase(session.vo2ProtocolRuntime, active.phase.phaseId);
-    const targetRange = parseHrTargetRange(active.hrTargetTextValue);
+    const vo2Targets = isVo2WorkoutSelector(active.day)
+        ? vo2ProtocolUiTargets(session.vo2ProtocolRuntime, active.phase.phaseId)
+        : null;
+    const hold = vo2Targets
+        ? { resistance: vo2Targets.holdResistance, cadenceRpm: vo2Targets.holdCadenceRpm }
+        : vo2ProtocolHoldForPhase(session.vo2ProtocolRuntime, active.phase.phaseId);
+    const targetRange = vo2Targets ? null : parseHrTargetRange(active.hrTargetTextValue);
     const machineUpdate = session.sessionId && active.activity
         ? updateMachineGuidanceRuntime({
             sessionId: session.sessionId,
@@ -760,8 +765,8 @@ function renderWorkout(state) {
             workoutElapsedSeconds: active.elapsedSec,
             intervalIndex: active.phase.intervalIndex,
             heartRateBpm: (_a = active.liveBpm) !== null && _a !== void 0 ? _a : undefined,
-            targetHeartRateMin: targetRange === null || targetRange === void 0 ? void 0 : targetRange.min,
-            targetHeartRateMax: targetRange === null || targetRange === void 0 ? void 0 : targetRange.max,
+            targetHeartRateMin: vo2Targets ? vo2Targets.targetHeartRateMin : targetRange === null || targetRange === void 0 ? void 0 : targetRange.min,
+            targetHeartRateMax: vo2Targets ? vo2Targets.targetHeartRateMax : targetRange === null || targetRange === void 0 ? void 0 : targetRange.max,
             intent: (_b = active.workoutMetadata[active.day]) === null || _b === void 0 ? void 0 : _b.intent,
             holdResistance: hold === null || hold === void 0 ? void 0 : hold.resistance,
             holdCadenceRpm: hold === null || hold === void 0 ? void 0 : hold.cadenceRpm,

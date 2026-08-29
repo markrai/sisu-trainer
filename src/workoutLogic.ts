@@ -25,6 +25,7 @@ import {
   isVo2WorkoutSelector,
   vo2ProtocolNeedsHrEvaluation,
   vo2ProtocolVoiceCues,
+  isStaleVo2ProtocolTick,
   type Vo2ProtocolRuntime,
 } from "./vo2Protocol.js";
 import { getHrSamples } from "./workoutStorage.js";
@@ -447,6 +448,9 @@ function tickVo2Protocol(
   const session = getSession(day, storage);
   if (!session.vo2ProtocolRuntime) return null;
   const before = session.vo2ProtocolRuntime;
+  if (isStaleVo2ProtocolTick(before, elapsedSec)) {
+    return { runtime: before, cues: [] };
+  }
   const next = advanceVo2Protocol(before, {
     elapsedSec,
     paused,

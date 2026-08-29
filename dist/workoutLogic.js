@@ -4,7 +4,7 @@ import { getSession, startSession, pauseSession, resumeSession, clearSession, ge
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
-import { advanceVo2Protocol, createVo2ProtocolRuntime, evaluateVo2PreflightForUi, getVo2ProtocolPhase, isVo2WorkoutSelector, vo2ProtocolNeedsHrEvaluation, vo2ProtocolVoiceCues, } from "./vo2Protocol.js";
+import { advanceVo2Protocol, createVo2ProtocolRuntime, evaluateVo2PreflightForUi, getVo2ProtocolPhase, isVo2WorkoutSelector, vo2ProtocolNeedsHrEvaluation, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, } from "./vo2Protocol.js";
 import { getHrSamples } from "./workoutStorage.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
@@ -371,6 +371,9 @@ function tickVo2Protocol(day, elapsedSec, paused, storage, samples = []) {
     if (!session.vo2ProtocolRuntime)
         return null;
     const before = session.vo2ProtocolRuntime;
+    if (isStaleVo2ProtocolTick(before, elapsedSec)) {
+        return { runtime: before, cues: [] };
+    }
     const next = advanceVo2Protocol(before, {
         elapsedSec,
         paused,
