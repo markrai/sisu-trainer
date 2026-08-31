@@ -347,7 +347,7 @@ function updateHeartColor(liveBpm, hrTargetText) {
     if (liveBpm > range.max)
         hueRotate = 270;
     else if (liveBpm < range.min)
-        hueRotate = 240;
+        hueRotate = 45;
     setHeartColored(`brightness(0) saturate(100%) invert(27%) sepia(100%) saturate(10000%) hue-rotate(${hueRotate}deg)`);
 }
 function updateHeartPulse(bpmValue) {
