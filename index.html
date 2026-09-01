@@ -119,6 +119,7 @@
       </div>
 
       <button class="button" onclick="saveProfile()">Save Profile</button>
+      <div class="label" style="margin-top: 12px; text-align: left;">Age and weight are required for the VO₂ Max Estimation workout.</div>
     </div>
     
     <!-- Preferences Tab -->
@@ -252,12 +253,26 @@
 <div class="modal-bg" id="cancelModalBg">
   <div class="modal">
     <div class="close-btn" onclick="closeCancelModal()">×</div>
-    <div class="modal-title">End workout?</div>
-    <div class="label" style="text-align:center;">You can cool down first, end and save now, or keep going.</div>
+    <div class="modal-title" id="cancelModalTitle">End workout?</div>
+    <div class="label" id="cancelModalBody" style="text-align:center;">You can cool down first, end and save now, or keep going.</div>
     <div class="modal-actions modal-actions-stack">
       <button class="button" id="earlyCooldownButton" onclick="confirmEarlyCooldownWorkout()">Cooldown</button>
-      <button class="button" onclick="confirmCancelWorkout()">Yes, end and save</button>
+      <button class="button" id="vo2LimitReachedButton" onclick="confirmVo2LimitReached()" style="display: none;">Reached my limit</button>
+      <button class="button" id="endWorkoutConfirmButton" onclick="confirmCancelWorkout()">Yes, end and save</button>
       <button class="button secondary" onclick="closeCancelModal()">Keep going</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="vo2AssessmentModalBg">
+  <div class="modal">
+    <div class="close-btn" onclick="closeVo2AssessmentModal()">×</div>
+    <div class="modal-title" id="vo2AssessmentTitle">VO₂ Max Estimate</div>
+    <div id="vo2AssessmentValue" class="vo2-assessment-value"></div>
+    <div id="vo2AssessmentBody" class="label" style="text-align:center;"></div>
+    <div id="vo2AssessmentDetail" class="label" style="text-align:center; margin-top: 8px;"></div>
+    <div class="modal-actions">
+      <button class="button" onclick="closeVo2AssessmentModal()">OK</button>
     </div>
   </div>
 </div>
@@ -266,6 +281,7 @@
   <div class="modal" style="max-width: 90%; max-height: 90vh; overflow-y: auto;">
     <div class="close-btn" onclick="closeWorkoutSummaryModal()">✕</div>
     <div class="modal-title">Workout Summary</div>
+    <div id="workoutSummaryVo2" class="vo2-summary-block" style="display: none; margin-top: 12px;"></div>
     <div id="workoutSummaryContent" style="margin-top: 20px;">
       <pre id="workoutSummaryJson" style="background: #232323; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.85rem; white-space: pre-wrap; word-wrap: break-word;"></pre>
     </div>

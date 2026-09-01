@@ -44,8 +44,10 @@ import { installStandaloneVo2Workout as installVo2Workout, getPlan, getWorkoutMe
 import {
   getPhase,
   markVo2ProtocolCancelled,
+  markVo2ProtocolLimitReached,
   parseHrTargetRange,
   requestEarlyCooldown,
+  requestVo2LimitReached,
   tickVo2Protocol,
   tickVo2ProtocolWithCanonicalHr,
 } from "../dist/workoutLogic.js";
@@ -497,12 +499,27 @@ test("protocol evidence survives IndexedDB; historical and ordinary vo2_evidence
     hr_trace: { sampling_interval_seconds: 60, samples: [] },
     day: VO2_WORKOUT_SELECTOR_ID,
     vo2_evidence: evidence,
+    vo2_assessment: {
+      schema_version: 1,
+      estimator_id: "bike-submax-linear-hr-workload",
+      estimator_version: 1,
+      status: "estimated",
+      termination_reason: "protocol_complete",
+      estimate_ml_kg_min: 40.75,
+      reason_codes: [],
+      accepted_stage_count: 1,
+      stages_used: ["vo2-stage:1"],
+      input_snapshot: { age_years: 40, weight_kg: 80 },
+      diagnostics: { accepted_points: [], min_r_squared: 0.7 },
+    },
   };
   await storeWorkoutSummary(summary);
   const loadedRows = await getAllWorkoutSummaries();
   const loaded = loadedRows.find((row) => row.summary?.external_session_id === "vo2-idb");
   assert.ok(loaded);
   assert.deepEqual(loaded.summary.vo2_evidence.protocol, protocol);
+  assert.equal(loaded.summary.vo2_assessment.status, "estimated");
+  assert.equal(loaded.summary.vo2_assessment.estimate_ml_kg_min, 40.75);
 
   const ordinary = buildVo2Evidence({
     day: "Monday",
@@ -544,7 +561,9 @@ test("protocol evidence survives IndexedDB; historical and ordinary vo2_evidence
 
   const payload = buildSisuWorkoutPayload(summary);
   assert.equal(payload.vo2_evidence, undefined);
+  assert.equal(payload.vo2_assessment, undefined);
   assert.ok(summary.vo2_evidence.protocol);
+  assert.ok(summary.vo2_assessment);
   await resetWorkoutStorageForTests();
 });
 
@@ -742,6 +761,7 @@ test("VO2 stage name reaches UI/display projection", () => {
 test("changelog headings are preserved", async () => {
   const changelog = await readFile(new URL("../CHANGELOG.md", import.meta.url), "utf8");
   assert.match(changelog, /^# Changelog\r?\n/);
+  assert.match(changelog, /## \[0\.10\.12\] - 2026-08-31/);
   assert.match(changelog, /## \[0\.10\.11\] - 2026-08-28/);
   assert.match(changelog, /## \[0\.10\.10\] - 2026-08-28/);
 });
@@ -951,4 +971,88 @@ test("overlapping evaluation does not duplicate a stage or rewind a newer runtim
   assert.equal(second.runtime.stages.filter((stage) => stage.stage_id === "vo2-stage:1").length, 1);
   assert.equal(second.runtime.stages.length, 2);
   await resetWorkoutStorageForTests();
+});
+
+test("limit_reached closes the open stage as incomplete and enters cooldown", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = advanceVo2Protocol(runtime, {
+    elapsedSec: 480,
+    paused: false,
+    samples: stageHr(300, 118, 119),
+  });
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 520, paused: false, samples: [], limitReached: true });
+  assert.equal(runtime.termination.reason, "limit_reached");
+  assert.equal(runtime.segment, "cooldown");
+  assert.equal(runtime.stages[0].status, "accepted");
+  assert.equal(runtime.stages[1].status, "incomplete");
+  const evidence = buildVo2ProtocolEvidence(runtime);
+  assert.equal(evidence.stages[1].status, "incomplete");
+  assert.equal(evidence.termination.reason, "limit_reached");
+});
+
+test("cancel during cooldown does not overwrite limit_reached or early_cooldown", () => {
+  const plan = buildVo2ProtocolPlan();
+  let limited = createVo2ProtocolRuntime(plan);
+  limited = advanceVo2Protocol(limited, { elapsedSec: 300, paused: false, samples: [] });
+  limited = advanceVo2Protocol(limited, { elapsedSec: 400, paused: false, samples: [], limitReached: true });
+  limited = advanceVo2Protocol(limited, { elapsedSec: 450, paused: false, samples: [], cancelled: true });
+  assert.equal(limited.termination.reason, "limit_reached");
+  assert.equal(limited.segment, "cooldown");
+
+  let early = createVo2ProtocolRuntime(plan);
+  early = advanceVo2Protocol(early, { elapsedSec: 300, paused: false, samples: [] });
+  early = advanceVo2Protocol(early, { elapsedSec: 400, paused: false, samples: [], earlyCooldownElapsed: 400 });
+  early = advanceVo2Protocol(early, { elapsedSec: 450, paused: false, samples: [], cancelled: true });
+  assert.equal(early.termination.reason, "early_cooldown");
+  assert.equal(early.segment, "cooldown");
+});
+
+test("ordinary early end records user_cancelled and does not promote incomplete stages", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 360, paused: false, samples: [], cancelled: true });
+  assert.equal(runtime.termination.reason, "user_cancelled");
+  assert.equal(runtime.segment, "complete");
+  assert.equal(runtime.stages[0].status, "incomplete");
+  const evidence = buildVo2ProtocolEvidence(runtime);
+  assert.equal(evidence.stages[0].status, "incomplete");
+  assert.equal(evidence.stages.every((stage) => stage.status !== "accepted"), true);
+});
+
+test("requestVo2LimitReached is VO2-only and does not set early_cooldown elapsed", () => {
+  const plan = buildVo2ProtocolPlan();
+  const storage = memoryStorage();
+  const start = Date.now();
+  startSession("Monday", start, "not-vo2", "bike", storage, {
+    blocks: vo2PlanBlocks(),
+    hrTargets: null,
+  });
+  const previousDay = globalThis.window.getSelectedDay;
+  globalThis.window.getSelectedDay = () => "Monday";
+  assert.equal(requestVo2LimitReached("Monday", { storage, now: start + 400_000, blocks: vo2PlanBlocks() }).type, "unavailable");
+
+  startSession(VO2_WORKOUT_SELECTOR_ID, start, "vo2-limit", "bike", storage, {
+    blocks: vo2PlanBlocks(),
+    hrTargets: null,
+  });
+  let live = createVo2ProtocolRuntime(plan);
+  live = advanceVo2Protocol(live, { elapsedSec: 300, paused: false, samples: [] });
+  persistVo2ProtocolRuntime(VO2_WORKOUT_SELECTOR_ID, live, storage);
+  globalThis.window.getSelectedDay = () => VO2_WORKOUT_SELECTOR_ID;
+  const decision = requestVo2LimitReached(VO2_WORKOUT_SELECTOR_ID, {
+    storage,
+    now: start + 400_000,
+    blocks: vo2PlanBlocks(),
+  });
+  globalThis.window.getSelectedDay = previousDay;
+  assert.equal(decision.type, "enter-limit-reached");
+  const session = getSession(VO2_WORKOUT_SELECTOR_ID, storage);
+  assert.equal(session.vo2ProtocolRuntime.termination.reason, "limit_reached");
+  assert.equal(session.earlyCooldownElapsed, null);
+
+  markVo2ProtocolLimitReached(VO2_WORKOUT_SELECTOR_ID, 400, storage);
+  assert.equal(getSession(VO2_WORKOUT_SELECTOR_ID, storage).vo2ProtocolRuntime.termination.reason, "limit_reached");
 });

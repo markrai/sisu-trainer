@@ -10,7 +10,10 @@ import { learnShadowPredictionsFromCompletedWorkout } from "./machines/predictio
 import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
 import { actualElapsedSeconds, adjustedBlockLengths } from "./workoutLogic.js";
 import { attachVo2Evidence, buildVo2Evidence } from "./vo2Evidence.js";
-import { buildVo2ProtocolEvidence } from "./vo2Protocol.js";
+import { buildVo2ProtocolEvidence, isVo2WorkoutSelector } from "./vo2Protocol.js";
+import { assessVo2 } from "./vo2Estimator.js";
+import { readExplicitVo2ProfileInputs } from "./profile.js";
+import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -102,7 +105,7 @@ function validateSummary(summary) {
         console.error("Workout summary validation errors:", errors);
 }
 async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, options) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const durationMs = endedAt - startedAt;
     const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
     const MAX_DURATION_MINUTES = 1440;
@@ -162,9 +165,13 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         machineGuidanceTraceEntryCount: (_e = summary.machine_guidance_trace) === null || _e === void 0 ? void 0 : _e.length,
         vo2Protocol: session.vo2ProtocolRuntime,
         protocol: session.vo2ProtocolRuntime
-            ? buildVo2ProtocolEvidence(session.vo2ProtocolRuntime)
+            ? buildVo2ProtocolEvidence(session.vo2ProtocolRuntime, session.sessionId || sessionId ? getBikeTelemetrySamples(session.sessionId || sessionId) : [])
             : undefined,
     }));
+    if (isVo2WorkoutSelector(day)) {
+        const profile = (_f = options === null || options === void 0 ? void 0 : options.vo2Profile) !== null && _f !== void 0 ? _f : readExplicitVo2ProfileInputs();
+        summary.vo2_assessment = assessVo2(summary.vo2_evidence, profile);
+    }
     validateSummary(summary);
     const zoneSum = summary.zone_minutes.z1 +
         summary.zone_minutes.z2 +

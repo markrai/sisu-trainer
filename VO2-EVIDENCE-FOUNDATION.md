@@ -2,7 +2,7 @@
 
 Internal contract for pause-safe, stage-aware physiological evidence recorded from ordinary workouts.
 
-This is **evidence**, not a VO2 result. SISU still does not calculate VO2.
+This is **evidence**, not a VO2 result. The standalone VO2 Max Estimation workout attaches a separate `vo2_assessment` produced by the versioned estimator. See `VO2-TEST-PROTOCOL-V1.md`.
 
 Also mirrored under `docs/vo2-evidence-foundation.md` (that folder is gitignored for LLM prompt drafts).
 
@@ -156,19 +156,8 @@ existing IndexedDB workout persistence
 
 The evidence builder observes / finalizes from canonical runtime state. It is not a second controller, clock, HR recorder, or persistence system.
 
-## Future dedicated VO2 test identity
+## Standalone VO2 test identity
 
-The repository does not yet have a stable workout protocol id/version field beyond day metadata (`type`, `intent`). When the dedicated VO2 test workout is added, that workout definition must carry a stable `protocol_id` and `protocol_version` (or reuse an equally authoritative existing workout-definition identity if one is introduced first). Do not invent that schema in the evidence-foundation phase.
+The dedicated workout uses `protocol_id: bike-submax-70rpm` / `protocol_version: 1`. See `VO2-TEST-PROTOCOL-V1.md`.
 
-## Deferred to standalone VO2 test phase
-
-- Protocol
-- VO2 formula
-- HRmax / RHR inputs
-- Estimator
-- Confidence model
-- Dedicated VO2 test workout definition
-- Dropdown exposure
-- Results / history UI
-- Generalized post-workout VO2 awareness
-- Final `protocol_id` / `protocol_version` schema
+Ordinary workouts may still have `vo2_evidence` without `protocol` and without `vo2_assessment`.

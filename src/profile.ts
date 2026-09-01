@@ -1,20 +1,75 @@
 import { Profile } from "./types.js";
+import type { Vo2ProfileInputs } from "./vo2Estimator.js";
 
-const defaultProfile: Profile = {
-  weight: 150,
-  height: 70,
-  age: 25,
-  sex: "male",
+/** Unset physiological fields. Placeholders must not become VO2 estimator inputs. */
+export const BLANK_PROFILE: Profile = {
+  weight: "",
+  height: "",
+  age: "",
+  sex: "",
   vo2: "",
 };
+
+/** Profile weight is entered in pounds. Estimator snapshots kilograms. */
+export const PROFILE_WEIGHT_LBS_TO_KG = 0.45359237;
+
+export interface ProfileStorage {
+  getItem(key: string): string | null;
+}
+
+function parseFiniteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+/**
+ * Explicit stored age/weight only. Does not use unsaved profile defaults.
+ * Weight in the profile form is pounds; returned weight is kilograms.
+ */
+export function parseExplicitVo2ProfileInputs(profile: unknown): Vo2ProfileInputs {
+  if (!profile || typeof profile !== "object") return {};
+  const row = profile as Profile;
+  const inputs: Vo2ProfileInputs = {};
+  const age = parseFiniteNumber(row.age);
+  if (age != null && age > 0) inputs.age_years = age;
+  const weightLbs = parseFiniteNumber(row.weight);
+  if (weightLbs != null && weightLbs > 0) {
+    inputs.weight_kg = weightLbs * PROFILE_WEIGHT_LBS_TO_KG;
+  }
+  return inputs;
+}
+
+export function readExplicitVo2ProfileInputs(storage?: ProfileStorage): Vo2ProfileInputs {
+  const store = storage ?? (typeof localStorage !== "undefined" ? localStorage : undefined);
+  if (!store) return {};
+  const raw = store.getItem("profile");
+  if (!raw) return {};
+  try {
+    return parseExplicitVo2ProfileInputs(JSON.parse(raw));
+  } catch {
+    return {};
+  }
+}
 
 function getProfile(): Profile {
   try {
     const raw = localStorage.getItem("profile");
-    if (!raw) return defaultProfile;
-    return JSON.parse(raw);
+    if (!raw) return { ...BLANK_PROFILE };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return { ...BLANK_PROFILE };
+    return {
+      weight: parsed.weight ?? "",
+      height: parsed.height ?? "",
+      age: parsed.age ?? "",
+      sex: parsed.sex ?? "",
+      vo2: parsed.vo2 ?? "",
+    };
   } catch {
-    return defaultProfile;
+    return { ...BLANK_PROFILE };
   }
 }
 

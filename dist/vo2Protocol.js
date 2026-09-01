@@ -3,10 +3,11 @@ export { VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION } from "./types.js";
 import { getEstimatedWattsAt70Rpm, AUTOMATIC_RESISTANCE_MIN, AUTOMATIC_RESISTANCE_MAX } from "./machines/proformSmartPower10.js";
 import { getMachineDefinition } from "./machines/registry.js";
 import { getSelectedMachineId } from "./machines/selection.js";
+import { summarizeVo2StageWorkload, VO2_PRESCRIBED_CADENCE_RPM } from "./vo2Workload.js";
+export { VO2_PRESCRIBED_CADENCE_RPM };
 export const VO2_WORKOUT_SELECTOR_ID = "VO2MaxEstimation";
 export const VO2_WORKOUT_LABEL = "VO2 Max Estimation";
 export const VO2_WORKOUT_INTENT = "vo2_estimation";
-export const VO2_PRESCRIBED_CADENCE_RPM = 70;
 export const VO2_WARMUP_DURATION_SEC = 300;
 export const VO2_COOLDOWN_DURATION_SEC = 300;
 export const VO2_NOMINAL_STAGE_DURATION_SEC = 180;
@@ -27,6 +28,7 @@ const VO2_TERMINATION_REASONS = [
     "protocol_complete",
     "submax_hr_ceiling",
     "early_cooldown",
+    "limit_reached",
     "user_cancelled",
     "hr_lost",
     "insufficient_calibrated_workloads",
@@ -336,13 +338,19 @@ export function advanceVo2Protocol(runtime, input) {
             const open = openStage(next);
             if (open && open.active_end_sec == null) {
                 open.active_end_sec = Math.max(open.active_start_sec, elapsed);
-                open.status = "incomplete";
+                if (open.status === "open")
+                    open.status = "incomplete";
             }
-            next.termination = { reason: "user_cancelled" };
+            if (!next.termination)
+                next.termination = { reason: "user_cancelled" };
             if (next.segment === "warmup" || next.segment === "work") {
                 next.segment = "complete";
             }
         }
+        return next;
+    }
+    if (input.limitReached && next.segment !== "cooldown" && next.segment !== "complete") {
+        enterCooldown(next, elapsed, "limit_reached");
         return next;
     }
     if (input.earlyCooldownElapsed != null &&
@@ -679,7 +687,7 @@ export function isValidVo2ProtocolRuntime(value) {
     }
     return true;
 }
-export function buildVo2ProtocolEvidence(runtime) {
+export function buildVo2ProtocolEvidence(runtime, telemetrySamples = []) {
     var _a, _b, _c;
     if (!isValidVo2ProtocolRuntime(runtime))
         return undefined;
@@ -702,6 +710,7 @@ export function buildVo2ProtocolEvidence(runtime) {
         };
         if (stage.hr)
             evidence.hr = stage.hr;
+        evidence.workload = summarizeVo2StageWorkload(evidence, telemetrySamples, runtime.plan.prescribed_cadence_rpm);
         if (evidence.prescribed_resistance > VO2_PROTOCOL_MAX_RESISTANCE)
             return undefined;
         stages.push(evidence);

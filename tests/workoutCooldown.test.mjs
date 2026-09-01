@@ -66,11 +66,13 @@ test("End workout modal exposes Cooldown, Yes end and save, and Keep going", asy
   const buttons = modalActionButtons(html);
   assert.deepEqual(
     buttons.map((button) => button.label),
-    ["Cooldown", "Yes, end and save", "Keep going"]
+    ["Cooldown", "Reached my limit", "Yes, end and save", "Keep going"]
   );
   assert.match(buttons[0].attrs, /confirmEarlyCooldownWorkout\(\)/);
-  assert.match(buttons[1].attrs, /confirmCancelWorkout\(\)/);
-  assert.match(buttons[2].attrs, /closeCancelModal\(\)/);
+  assert.match(buttons[1].attrs, /confirmVo2LimitReached\(\)/);
+  assert.match(buttons[1].attrs, /display:\s*none/);
+  assert.match(buttons[2].attrs, /confirmCancelWorkout\(\)/);
+  assert.match(buttons[3].attrs, /closeCancelModal\(\)/);
   assert.match(html, /You can cool down first, end and save now, or keep going\./);
   assert.doesNotMatch(html, /marked as cancelled/);
 
@@ -80,6 +82,8 @@ test("End workout modal exposes Cooldown, Yes end and save, and Keep going", asy
   assert.doesNotMatch(functionBody(ui, "closeCancelModal"), /requestEarlyCooldown/);
   assert.match(functionBody(ui, "confirmEarlyCooldownWorkout"), /requestEarlyCooldown\(\)/);
   assert.doesNotMatch(functionBody(ui, "confirmEarlyCooldownWorkout"), /restartWorkout/);
+  assert.match(functionBody(ui, "confirmVo2LimitReached"), /requestVo2LimitReached\(\)/);
+  assert.doesNotMatch(functionBody(ui, "confirmVo2LimitReached"), /restartWorkout/);
 });
 
 test("paused Early Cooldown persists actual elapsed and resumes without seeking", () => {

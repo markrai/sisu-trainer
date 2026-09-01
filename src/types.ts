@@ -91,8 +91,9 @@ export interface ZoneMinutes {
   z5: number;
 }
 
-/** Local evidence for a future VO2 estimator. Not a VO2 result. */
+/** Local evidence for the VO2 estimator. Not itself a VO2 result. */
 export const VO2_EVIDENCE_SCHEMA_VERSION = 1 as const;
+export const VO2_ASSESSMENT_SCHEMA_VERSION = 1 as const;
 
 export interface Vo2EvidencePhasePrescription {
   /** Prescribed HR target text or number from the workout plan (not measured). */
@@ -141,6 +142,7 @@ export type Vo2ProtocolTerminationReason =
   | "protocol_complete"
   | "submax_hr_ceiling"
   | "early_cooldown"
+  | "limit_reached"
   | "user_cancelled"
   | "hr_lost"
   | "insufficient_calibrated_workloads"
@@ -165,11 +167,14 @@ export interface Vo2ProtocolStageEvidence {
   nominal_duration_sec: number;
   actual_duration_sec: number;
   hr?: Vo2ProtocolStageHrEvidence;
+  workload?: Vo2ProtocolStageWorkloadEvidence;
 }
 
 export interface Vo2ProtocolEvidence {
-  protocol_id: Vo2ProtocolId;
-  protocol_version: Vo2ProtocolVersion;
+  /** Observed protocol id. Estimator v1 requires `bike-submax-70rpm`. */
+  protocol_id: string;
+  /** Observed protocol version. Estimator v1 requires version 1. */
+  protocol_version: number;
   prescribed_cadence_rpm: number;
   stages: Vo2ProtocolStageEvidence[];
   termination: {
@@ -201,6 +206,111 @@ export interface Vo2Evidence {
   protocol?: Vo2ProtocolEvidence;
 }
 
+export type Vo2AssessmentStatus = "estimated" | "insufficient_evidence";
+
+export type Vo2AssessmentReasonCode =
+  | "missing_protocol_evidence"
+  | "unsupported_protocol_id"
+  | "unsupported_protocol_version"
+  | "missing_profile_age"
+  | "missing_profile_weight"
+  | "invalid_profile_age"
+  | "invalid_profile_weight"
+  | "too_few_accepted_stages"
+  | "too_few_eligible_stages"
+  | "missing_stage_hr"
+  | "invalid_workload"
+  | "unverified_performed_workload"
+  | "invalid_workload_progression"
+  | "invalid_hr_progression"
+  | "hr_below_estimator_range"
+  | "hr_above_submax_ceiling"
+  | "nonpositive_slope"
+  | "unstable_regression"
+  | "invalid_extrapolation"
+  | "invalid_estimate";
+
+export type Vo2AssessmentFitQuality = "high" | "moderate" | "low";
+
+export type Vo2WorkloadSource =
+  | "measured_watts"
+  | "calibrated_at_verified_cadence"
+  | "prescribed_only";
+
+export interface Vo2ProtocolStageWorkloadEvidence {
+  source: Vo2WorkloadSource;
+  /** Watts the estimator may use when this stage is eligible. */
+  estimator_watts?: number;
+  calibrated_watts_at_70rpm: number;
+  measured_watts_median?: number;
+  measured_watts_sample_count: number;
+  measured_cadence_median_rpm?: number;
+  measured_cadence_sample_count: number;
+  cadence_in_band_ratio?: number;
+  cadence_measured: boolean;
+  watts_measured: boolean;
+}
+
+export interface Vo2AssessmentPoint {
+  stage_id: string;
+  protocol_accepted: boolean;
+  estimator_eligible: boolean;
+  ineligibility_reasons: Vo2AssessmentReasonCode[];
+  workload_source?: Vo2WorkloadSource;
+  watts?: number;
+  calibrated_watts_at_70rpm?: number;
+  steady_state_bpm?: number;
+  cadence_measured?: boolean;
+  watts_measured?: boolean;
+  measured_cadence_median_rpm?: number;
+  measured_watts_median?: number;
+  measured_watts_sample_count?: number;
+  measured_cadence_sample_count?: number;
+  cadence_in_band_ratio?: number;
+}
+
+export interface Vo2AssessmentInputSnapshot {
+  age_years?: number;
+  weight_kg?: number;
+  predicted_hr_max?: number;
+  protocol_id?: string;
+  protocol_version?: number;
+}
+
+export interface Vo2AssessmentDiagnostics {
+  accepted_points: Vo2AssessmentPoint[];
+  eligible_points: Vo2AssessmentPoint[];
+  slope?: number;
+  intercept?: number;
+  r_squared?: number;
+  predicted_hr_max?: number;
+  predicted_max_watts?: number;
+  min_r_squared: number;
+  estimator_min_hr_bpm: number;
+  estimator_submax_hrmax_fraction: number;
+  expected_protocol_id: string;
+  expected_protocol_version: number;
+  observed_protocol_id?: string;
+  observed_protocol_version?: number;
+}
+
+export interface Vo2AssessmentResult {
+  schema_version: typeof VO2_ASSESSMENT_SCHEMA_VERSION;
+  estimator_id: string;
+  estimator_version: number;
+  status: Vo2AssessmentStatus;
+  termination_reason: Vo2ProtocolTerminationReason;
+  estimate_ml_kg_min?: number;
+  fit_quality?: Vo2AssessmentFitQuality;
+  reason_codes: Vo2AssessmentReasonCode[];
+  accepted_stage_count: number;
+  eligible_stage_count: number;
+  stages_used: string[];
+  highest_accepted_workload_watts?: number;
+  input_snapshot: Vo2AssessmentInputSnapshot;
+  diagnostics: Vo2AssessmentDiagnostics;
+}
+
 export interface WorkoutSummary {
   external_session_id: string;
   startedAt: string;
@@ -224,10 +334,15 @@ export interface WorkoutSummary {
   machine_guidance_trace?: MachineGuidanceTraceEntry[];
   machine_decision_audit?: MachineDecisionAuditEntry[];
   /**
-   * Pause-safe stage-aware physiological evidence for a future VO2 estimator.
+   * Pause-safe stage-aware physiological evidence for the VO2 estimator.
    * Absent on historical workouts that predate this format.
    */
   vo2_evidence?: Vo2Evidence;
+  /**
+   * Versioned VO2 assessment for the standalone VO2 Max Estimation workout.
+   * Local-only; stripped from SISU ingest. Absent on ordinary workouts.
+   */
+  vo2_assessment?: Vo2AssessmentResult;
 }
 
 export interface SisuSettings {

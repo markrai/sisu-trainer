@@ -1,11 +1,12 @@
-import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, tickVo2ProtocolWithCanonicalHr, } from "./workoutLogic.js";
+import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, tickVo2ProtocolWithCanonicalHr, requestVo2LimitReached, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
 import { getSession } from "./sessionStore.js";
-import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, vo2ProtocolUiTargets, VO2_WORKOUT_LABEL, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
+import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, vo2ProtocolUiTargets, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
+import { genericWorkoutBlocksText, vo2AssessmentPresentation, vo2CancelModalBody, vo2CancelModalTitle, vo2EndWorkoutButtonLabel, vo2HistoryOutcomeText, vo2LimitReachedButtonVisible, vo2SelectorOptionText, vo2WorkoutBlocksText, } from "./vo2AssessmentView.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
 import { formatBikeBridgeControl, formatBikeBridgeNumber, formatBikeBridgeReadiness, getBikeBridgeSession, } from "./platform/bikeBridgeRuntime.js";
@@ -69,7 +70,7 @@ function ensureWorkoutDayDropdown() {
         });
         const vo2Opt = document.createElement("option");
         vo2Opt.value = VO2_WORKOUT_SELECTOR_ID;
-        vo2Opt.textContent = VO2_WORKOUT_LABEL;
+        vo2Opt.textContent = vo2SelectorOptionText();
         select.appendChild(vo2Opt);
         const downregOpt = document.createElement("option");
         downregOpt.value = "Downregulation";
@@ -84,7 +85,7 @@ function ensureWorkoutDayDropdown() {
     if (!hasVo2) {
         const vo2Opt = document.createElement("option");
         vo2Opt.value = VO2_WORKOUT_SELECTOR_ID;
-        vo2Opt.textContent = VO2_WORKOUT_LABEL;
+        vo2Opt.textContent = vo2SelectorOptionText();
         const downreg = Array.from(select.options).find((o) => o.value === "Downregulation");
         if (downreg)
             select.insertBefore(vo2Opt, downreg);
@@ -227,30 +228,46 @@ function closeModal() {
 }
 function openCancelModal() {
     var _a, _b;
+    const day = getSelectedDay();
+    const isVo2 = isVo2WorkoutSelector(day);
+    const session = getSession(day);
+    const plan = getPlan();
+    const base = plan[day];
+    const blocks = (_b = (_a = session.phasePlan) === null || _a === void 0 ? void 0 : _a.blocks) !== null && _b !== void 0 ? _b : (base ? adjustedBlockLengths(base, null) : null);
+    const elapsedSec = session.paused
+        ? session.pausedElapsed
+        : session.startTime
+            ? Math.floor((Date.now() - parseInt(session.startTime, 10)) / 1000)
+            : 0;
+    const decision = planEarlyCooldownTransition({
+        blocks,
+        hasSession: Boolean(session.startTime),
+        elapsedSec,
+        paused: session.paused,
+        earlyCooldownElapsed: session.earlyCooldownElapsed,
+        vo2Protocol: session.vo2ProtocolRuntime,
+    });
+    const workStillActive = decision.type === "enter-early-cooldown";
     const cooldownBtn = document.getElementById("earlyCooldownButton");
     if (cooldownBtn) {
-        const day = getSelectedDay();
-        const session = getSession(day);
-        const plan = getPlan();
-        const base = plan[day];
-        const blocks = (_b = (_a = session.phasePlan) === null || _a === void 0 ? void 0 : _a.blocks) !== null && _b !== void 0 ? _b : (base ? adjustedBlockLengths(base, null) : null);
-        const elapsedSec = session.paused
-            ? session.pausedElapsed
-            : session.startTime
-                ? Math.floor((Date.now() - parseInt(session.startTime, 10)) / 1000)
-                : 0;
-        const decision = planEarlyCooldownTransition({
-            blocks,
-            hasSession: Boolean(session.startTime),
-            elapsedSec,
-            paused: session.paused,
-            earlyCooldownElapsed: session.earlyCooldownElapsed,
-            vo2Protocol: session.vo2ProtocolRuntime,
-        });
-        const available = decision.type === "enter-early-cooldown";
-        cooldownBtn.style.display = available ? "" : "none";
-        cooldownBtn.disabled = !available;
+        cooldownBtn.style.display = workStillActive ? "" : "none";
+        cooldownBtn.disabled = !workStillActive;
     }
+    const limitBtn = document.getElementById("vo2LimitReachedButton");
+    if (limitBtn) {
+        const showLimit = vo2LimitReachedButtonVisible(isVo2, workStillActive);
+        limitBtn.style.display = showLimit ? "" : "none";
+        limitBtn.disabled = !showLimit;
+    }
+    const endBtn = document.getElementById("endWorkoutConfirmButton");
+    if (endBtn)
+        endBtn.textContent = vo2EndWorkoutButtonLabel(isVo2);
+    const titleEl = document.getElementById("cancelModalTitle");
+    if (titleEl)
+        titleEl.textContent = vo2CancelModalTitle(isVo2);
+    const bodyEl = document.getElementById("cancelModalBody");
+    if (bodyEl)
+        bodyEl.textContent = vo2CancelModalBody(isVo2);
     const bg = document.getElementById("cancelModalBg");
     if (bg)
         bg.style.display = "flex";
@@ -307,6 +324,17 @@ function confirmEarlyCooldownWorkout() {
     closeCancelModal();
     const decision = requestEarlyCooldown();
     if (decision.type === "unavailable" && btn)
+        btn.disabled = false;
+}
+function confirmVo2LimitReached() {
+    const btn = document.getElementById("vo2LimitReachedButton");
+    if (btn === null || btn === void 0 ? void 0 : btn.disabled)
+        return;
+    if (btn)
+        btn.disabled = true;
+    closeCancelModal();
+    const decision = requestVo2LimitReached();
+    if (decision.type !== "enter-limit-reached" && btn)
         btn.disabled = false;
 }
 function promptCancelWorkout() {
@@ -411,7 +439,9 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
     }
     const session = getSession(day);
     const blocks = (_b = (_a = session.phasePlan) === null || _a === void 0 ? void 0 : _a.blocks) !== null && _b !== void 0 ? _b : adjustedBlockLengths(base, null);
-    const workoutBlocksText = "Warm-Up: " + blocks.warm + " min · Workout: " + blocks.sustain + " min · Cool-Down: " + blocks.cool + " min";
+    const workoutBlocksText = isVo2WorkoutSelector(day)
+        ? vo2WorkoutBlocksText(blocks)
+        : genericWorkoutBlocksText(blocks);
     if (!startTime) {
         return { screen: "idle", day, plan, workoutMetadata, base, blocks, workoutBlocksText };
     }
@@ -513,6 +543,29 @@ function renderBikeBridgeHud() {
     const watts = formatBikeBridgeNumber(state.watts);
     const stale = state.telemetryStale ? " (stale)" : "";
     live.textContent = `Bike observed ${observed} · ${rpm} RPM · ${watts} W${stale}`;
+}
+function recordVo2BikeTelemetryIfActive() {
+    const day = getSelectedDay();
+    if (!isVo2WorkoutSelector(day))
+        return;
+    const session = getSession(day);
+    if (!session.sessionId || !session.startTime)
+        return;
+    const state = getBikeBridgeSession().getViewState();
+    if (state.telemetryStale)
+        return;
+    const metrics = {};
+    if (typeof state.rpm === "number" && Number.isFinite(state.rpm) && state.rpm > 0)
+        metrics.rpm = state.rpm;
+    if (typeof state.watts === "number" && Number.isFinite(state.watts) && state.watts > 0) {
+        metrics.watts = state.watts;
+    }
+    if (typeof state.observedResistance === "number" &&
+        Number.isFinite(state.observedResistance) &&
+        state.observedResistance > 0) {
+        metrics.observed_resistance = state.observedResistance;
+    }
+    recordVo2ActiveBikeTelemetry(session, metrics);
 }
 function renderBikeBridgeSettingsStatus() {
     var _a, _b;
@@ -1420,9 +1473,52 @@ function showWorkoutSummaryModal(summary) {
     const jsonElement = document.getElementById("workoutSummaryJson");
     if (jsonElement)
         jsonElement.textContent = JSON.stringify(summary, null, 2);
+    const vo2El = document.getElementById("workoutSummaryVo2");
+    if (vo2El) {
+        const view = (summary === null || summary === void 0 ? void 0 : summary.vo2_assessment) ? vo2AssessmentPresentation(summary.vo2_assessment) : null;
+        if (view) {
+            vo2El.style.display = "";
+            vo2El.innerHTML =
+                `<div class="vo2-summary-title">${view.title}</div>` +
+                    (view.valueText ? `<div class="vo2-assessment-value">${view.valueText}</div>` : "") +
+                    `<div class="label">${view.body}</div>` +
+                    (view.detail ? `<div class="label" style="margin-top:8px;">${view.detail}</div>` : "");
+        }
+        else {
+            vo2El.style.display = "none";
+            vo2El.innerHTML = "";
+        }
+    }
     const bg = document.getElementById("workoutSummaryModalBg");
     if (bg)
         bg.style.display = "flex";
+}
+function presentVo2Assessment(summary) {
+    const view = vo2AssessmentPresentation(summary === null || summary === void 0 ? void 0 : summary.vo2_assessment);
+    const titleEl = document.getElementById("vo2AssessmentTitle");
+    const valueEl = document.getElementById("vo2AssessmentValue");
+    const bodyEl = document.getElementById("vo2AssessmentBody");
+    const detailEl = document.getElementById("vo2AssessmentDetail");
+    if (titleEl)
+        titleEl.textContent = view.title;
+    if (valueEl) {
+        valueEl.textContent = view.valueText;
+        valueEl.style.display = view.valueText ? "" : "none";
+    }
+    if (bodyEl)
+        bodyEl.textContent = view.body;
+    if (detailEl) {
+        detailEl.textContent = view.detail;
+        detailEl.style.display = view.detail ? "" : "none";
+    }
+    const bg = document.getElementById("vo2AssessmentModalBg");
+    if (bg)
+        bg.style.display = "flex";
+}
+function closeVo2AssessmentModal() {
+    const bg = document.getElementById("vo2AssessmentModalBg");
+    if (bg)
+        bg.style.display = "none";
 }
 function closeWorkoutSummaryModal() {
     const bg = document.getElementById("workoutSummaryModalBg");
@@ -1488,6 +1584,10 @@ function displayWorkoutSummaries(workouts) {
         const date = new Date(summary.startedAt);
         const dateStr = date.toLocaleDateString() + " " + date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
         const cancelledLabel = summary.cancelled ? '<span class="workout-item-cancelled">cancelled</span>' : "";
+        const vo2Outcome = vo2HistoryOutcomeText(summary.vo2_assessment);
+        const vo2Detail = vo2Outcome
+            ? `<div class="workout-item-detail workout-item-vo2">${vo2Outcome}</div>`
+            : "";
         workoutItem.innerHTML = `
       <div class="swipe-left-indicator"></div>
       <div class="swipe-right-indicator"></div>
@@ -1502,6 +1602,7 @@ function displayWorkoutSummaries(workouts) {
         <div class="workout-item-detail">Duration: ${summary.duration_minutes} min</div>
         <div class="workout-item-detail">Primary Zone: ${summary.primary_zone}</div>
         <div class="workout-item-detail">Stress: ${summary.stress_profile}</div>
+        ${vo2Detail}
       </div>
       <div class="workout-item-actions">
         <button class="button" onclick="viewWorkoutSummary('${summary.external_session_id}')">View</button>
@@ -1643,6 +1744,7 @@ function registerUiGlobals(phaseBoxEl) {
     window.promptWorkoutActivitySelection = promptWorkoutActivitySelection;
     window.confirmCancelWorkout = confirmCancelWorkout;
     window.confirmEarlyCooldownWorkout = confirmEarlyCooldownWorkout;
+    window.confirmVo2LimitReached = confirmVo2LimitReached;
     window.promptCancelWorkout = promptCancelWorkout;
     window.switchTab = switchTab;
     window.getShowSecondsCountdown = getShowSecondsCountdown;
@@ -1667,6 +1769,8 @@ function registerUiGlobals(phaseBoxEl) {
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;
     window.closeWorkoutSummaryModal = closeWorkoutSummaryModal;
+    window.presentVo2Assessment = presentVo2Assessment;
+    window.closeVo2AssessmentModal = closeVo2AssessmentModal;
     window.downloadWorkoutSummaryJson = downloadWorkoutSummaryJson;
     window.showToast = showToast;
     window.openDeleteWorkoutModal = openDeleteWorkoutModal;
@@ -1678,6 +1782,7 @@ function registerUiGlobals(phaseBoxEl) {
     window.updateDisplay = updateDisplay;
     getBikeBridgeSession().subscribe(() => {
         renderBikeBridgeHud();
+        recordVo2BikeTelemetryIfActive();
         const equipmentTab = document.getElementById("equipmentTab");
         if (equipmentTab === null || equipmentTab === void 0 ? void 0 : equipmentTab.classList.contains("active"))
             renderBikeBridgeSettingsStatus();

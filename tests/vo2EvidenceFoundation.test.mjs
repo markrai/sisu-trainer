@@ -359,12 +359,15 @@ test("SISU payload strips vo2_evidence without changing local summary shape", as
     activity: "bike",
     machine_id: "proform-smart-power-10",
     vo2_evidence: evidence,
+    vo2_assessment: { status: "estimated", estimate_ml_kg_min: 40.75 },
   };
   const payload = buildSisuWorkoutPayload(summary);
   assert.equal(payload.vo2_evidence, undefined);
+  assert.equal(payload.vo2_assessment, undefined);
   assert.equal(payload.activity, undefined);
   assert.equal(payload.machine_id, undefined);
   assert.equal(summary.vo2_evidence.schema_version, VO2_EVIDENCE_SCHEMA_VERSION);
+  assert.equal(summary.vo2_assessment.status, "estimated");
 });
 
 test("adjustedBlockLengths is currently identity for live runtime HRV input", () => {

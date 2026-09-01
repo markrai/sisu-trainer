@@ -1,9 +1,32 @@
-import { getSession, clearSession, markSummaryEmitted } from "./sessionStore.js";
-import { isVo2WorkoutSelector } from "./vo2Protocol.js";
+import { getSession, clearSession, markSummaryEmitted, type SessionStorage } from "./sessionStore.js";
+import { clearBikeTelemetrySamples, type TelemetryTraceStorage } from "./bikeTelemetryTrace.js";
+import type { WorkoutSummary } from "./types.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
-export function handleWorkoutCompletion(day: string): void {
+function presentVo2AssessmentIfAny(summary: WorkoutSummary | undefined): void {
+  if (!summary?.vo2_assessment) return;
+  if (typeof (window as any).presentVo2Assessment === "function") {
+    (window as any).presentVo2Assessment(summary);
+  }
+}
+
+export function releaseTransientSessionTelemetry(
+  sessionId: string | null | undefined,
+  storage?: TelemetryTraceStorage
+): void {
+  if (!sessionId) return;
+  clearBikeTelemetrySamples(sessionId, storage);
+}
+
+/** Discard a session that will never be finalized. Clears transient bike telemetry. */
+export function discardWorkoutSession(day: string, storage?: SessionStorage): void {
+  const sessionId = getSession(day, storage).sessionId;
+  clearSession(day, storage);
+  releaseTransientSessionTelemetry(sessionId, storage);
+}
+
+export function handleWorkoutCompletion(day: string): Promise<void> | void {
   const session = getSession(day);
   if (session.summaryEmitted !== "false" || typeof (window as any).generateWorkoutSummary !== "function") return;
   const sessionId = session.sessionId;
@@ -13,24 +36,25 @@ export function handleWorkoutCompletion(day: string): void {
   const sessionAge = Date.now() - sessionStartTime;
   if (sessionAge > MAX_SESSION_AGE_MS) {
     console.warn(`Skipping stale workout session for ${day} on completion (age: ${Math.round(sessionAge / (1000 * 60 * 60))} hours)`);
-    clearSession(day);
+    discardWorkoutSession(day);
     return;
   }
   const endedAt = Date.now();
-  if (isVo2WorkoutSelector(day) && typeof (window as any).showToast === "function") {
-    (window as any).showToast("VO2 test evidence recorded. Estimation is not enabled yet.", "success");
-  }
-  (window as any)
+  return (window as any)
     .generateWorkoutSummary(sessionId, sessionStartTime, endedAt, day)
-    .then((summary: any) => (window as any).emitWorkoutSummary(summary))
-    .then(() => {
+    .then((summary: WorkoutSummary) =>
+      (window as any).emitWorkoutSummary(summary).then(() => summary)
+    )
+    .then((summary: WorkoutSummary) => {
       markSummaryEmitted(day);
+      presentVo2AssessmentIfAny(summary);
+      releaseTransientSessionTelemetry(sessionId);
     })
     .catch((error: any) => {
       console.error("Error emitting workout summary on completion:", error);
       if (error.message && error.message.includes("exceeds maximum")) {
         console.warn("Stale session detected on completion, cleaning up...");
-        clearSession(day);
+        discardWorkoutSession(day);
       }
     });
 }
@@ -62,6 +86,8 @@ export async function handleWorkoutCancellation(day: string): Promise<void> {
       { cancelled: true }
     );
     await (window as any).emitWorkoutSummary(summary);
+    presentVo2AssessmentIfAny(summary);
+    releaseTransientSessionTelemetry(session.sessionId);
   } catch (error: any) {
     console.error("Error emitting workout summary on cancel:", error);
     if (error.message && error.message.includes("exceeds maximum")) {

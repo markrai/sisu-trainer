@@ -6,13 +6,16 @@ This document is the tracked protocol contract. `docs/` may contain an optional 
 
 This is **not** a clinical CPET and is **not** an official YMCA or Astrand-Ryhming implementation.
 
-SISU still does **not** calculate VO2. This protocol produces versioned evidence for a future estimator.
+Protocol v1 records versioned evidence. A separate versioned estimator may produce a **VO₂ max estimate** from that evidence. Protocol completion and estimator eligibility are independent.
 
 ## Purpose
 
-Run a reproducible, versioned submaximal staged bike test inside the existing SISU workout runtime, and persist enough protocol-specific evidence for a later estimator to validate.
+Run a reproducible, versioned submaximal staged bike test inside the existing SISU workout runtime, persist protocol-specific evidence, and (when evidence and profile inputs are sufficient) attach a local `vo2_assessment` produced by the versioned submax cycle estimator.
 
-The workout may complete even if a future estimator would reject the attempt.
+The workout may complete even if the estimator reports `insufficient_evidence`.
+The estimator may produce an estimate even if the user ended the test before the scheduled upper-bound duration.
+
+Thirty minutes is an **upper bound** of the plan composition (5 min warmup + up to 20 min work + 5 min cooldown), not an eligibility requirement.
 
 ## Protocol identity
 
@@ -40,15 +43,31 @@ This is a dedicated workout definition, not a Monday/Friday weekly-plan day.
 
 The current ProForm SMART Power 10.0 workload calibration is trustworthy at 70 RPM. Protocol v1 therefore **prescribes** 70 RPM.
 
-## Why cadence is prescribed rather than measured
+## Cadence and watts: prescription vs measurement
 
-SISU does not have a measured cadence sensor in this phase. 70 RPM is a coaching/prescription target. Protocol evidence must not claim the rider maintained 70 RPM and must not invent measured cadence.
+70 RPM in protocol evidence is a coaching/prescription target. Prescribing 70 RPM is **not** proof the rider held 70 RPM.
 
-## Why watts are calibrated estimates rather than measured power
+Bike Bridge already polls observed RPM, observed watts, and observed resistance at 1 Hz. The VO₂ path reuses that existing poll; it does not run a second telemetry recorder. Requested/commanded resistance is never treated as observed resistance.
 
-The bike does not provide trusted measured watts for estimator use. Protocol v1 resolves a nominal watt target through the existing calibrated 70-RPM machine profile to a discrete resistance and the canonical estimated watts for that resistance.
+Estimator v1 workload sources, in order:
 
-`calibrated_watts_at_70rpm` is an estimate from that table, not measured power.
+```text
+measured_watts
+  reliable observed watts in the stage steady-state window
+  → estimator uses the median measured watts
+
+calibrated_at_verified_cadence
+  watts must come from the 70-RPM calibration table
+  → only when observed cadence has enough coverage and stays within ±5 RPM of 70 for at least 75% of window samples, and the median is also in-band
+
+prescribed_only
+  prescribed resistance + prescribed 70 RPM + calibrated 70-RPM watts
+  → not estimator-eligible
+```
+
+Without Bike Bridge telemetry (manual/PWA resistance coaching still works), performed workload cannot be validated. Estimator v1 then reports `insufficient_evidence` with `unverified_performed_workload`. That is policy A: do not treat a prescribed 70 RPM / calibrated table row as laboratory-grade performed work.
+
+Compact per-stage `workload` provenance is persisted on protocol evidence so a historical estimate can still name its watts, cadence coverage, and source after raw telemetry is cleared.
 
 ## Architecture
 
@@ -71,11 +90,15 @@ Bike Bridge automatically, when enabled
   ->
 manual resistance coaching otherwise
   ->
-existing completion
+existing completion / cancel / limit-reached
   ->
 vo2_evidence.protocol
   ->
-IndexedDB
+sufficiency evaluator + versioned estimator
+  ->
+vo2_assessment on WorkoutSummary
+  ->
+IndexedDB (local). Stripped from SISU ingest.
 ```
 
 The protocol module does not own the workout clock, HR recorder, machine controller, BLE stack, Bike Bridge client, or persistence system.
@@ -168,7 +191,7 @@ This restriction exists so protocol evidence remains truthful in both manual ope
 
 A future validated Bike Bridge range expansion may permit a later protocol version, or an explicitly reviewed protocol-v1 change, to use resistances 11–15. Until then, protocol v1 does not fabricate a fourth stage merely to fill a four-stage target if the commandable table cannot support it.
 
-The future estimator may reject an attempt that accepts fewer than three stages.
+The estimator requires three `accepted` stages. That is an estimator rule, not a requirement to ride all 30 plan minutes.
 
 ## Steady-state HR
 
@@ -204,13 +227,22 @@ If HR is still not steady after five minutes:
 protocol_complete
 submax_hr_ceiling
 early_cooldown
+limit_reached
 user_cancelled
 hr_lost
 insufficient_calibrated_workloads
 other
 ```
 
-Protocol completion and estimator eligibility are separate. Counts of `accepted`, `unstable_hr`, and `insufficient_hr` stages are recorded so a later estimator can require three accepted increasing workloads.
+These describe **why the protocol stopped**. They are not the VO₂ assessment outcome.
+
+Protocol completion and estimator eligibility are separate. Counts of `accepted`, `unstable_hr`, and `insufficient_hr` stages are recorded so the estimator can require three accepted increasing workloads.
+
+`limit_reached` means the user indicated they physically could not continue. It is not itself a VO₂ value. Open stages close as `incomplete`. The session moves into cooldown when the lifecycle allows it. Later ending the cooldown must **not** overwrite this reason with `user_cancelled`.
+
+`early_cooldown` remains a distinct user choice to skip remaining work and cool down. It is not synonymous with `limit_reached`.
+
+`user_cancelled` is an ordinary End test / cancel-and-save while work is still in progress and no prior protocol termination was recorded. The estimator still runs on whatever accepted evidence exists.
 
 ## Physiological ceiling
 
@@ -224,11 +256,15 @@ If an authoritative HRmax is added later, protocol v1's `submax_hr_ceiling` reas
 
 ## Early Cooldown
 
-Early Cooldown remains available. The current work stage ends as `incomplete` unless already closed, protocol termination is `early_cooldown`, and the existing Early Cooldown transition starts cooldown. No VO2 estimate is produced. Evidence remains valid as an attempted/incomplete test.
+Early Cooldown remains available. The current work stage ends as `incomplete` unless already closed, protocol termination is `early_cooldown`, and the existing Early Cooldown transition starts cooldown. Evidence remains valid as an attempted test. The estimator still runs; it may return `estimated` or `insufficient_evidence`.
+
+## Limit reached
+
+VO₂-specific stop action. Termination reason is `limit_reached`. Open stages close as `incomplete`. Cooldown starts. The workout is not treated as a VO₂-assessment failure merely because work ended here. The estimator still uses only `accepted` stages.
 
 ## Cancel
 
-Existing cancellation remains authoritative. Termination reason is `user_cancelled`. Open stages close as `incomplete`. No phantom accepted stage continues beyond cancellation.
+Existing cancellation remains authoritative for **workout lifecycle** (`summary.cancelled`). If the protocol has not already recorded a termination reason, that reason is `user_cancelled`. Open stages close as `incomplete`. If the protocol already recorded `limit_reached` or `early_cooldown` (for example the user ends cooldown early), that protocol reason is preserved. No phantom accepted stage continues beyond cancellation. The estimator still runs.
 
 ## Manual vs automatic resistance
 
@@ -260,6 +296,18 @@ protocol?: {
     nominal_duration_sec
     actual_duration_sec
     hr?: { sample_count, minute_2_mean_bpm?, minute_3_mean_bpm?, final_two_window_delta_bpm?, steady_state_bpm? }
+    workload?: {
+      source: measured_watts | calibrated_at_verified_cadence | prescribed_only
+      estimator_watts?
+      calibrated_watts_at_70rpm
+      measured_watts_median?
+      measured_watts_sample_count
+      measured_cadence_median_rpm?
+      measured_cadence_sample_count
+      cadence_in_band_ratio?
+      cadence_measured
+      watts_measured
+    }
   }]
   termination: { reason }
   automatic_submax_hr_ceiling_available: boolean
@@ -270,10 +318,11 @@ Invariants:
 
 - `calibrated_watts_at_70rpm` is a calibration estimate, not measured power
 - `prescribed_resistance` is a command/prescription, not necessarily observed resistance
-- 70 RPM is prescribed cadence, not measured cadence
+- 70 RPM is prescribed cadence, not measured cadence unless `cadence_measured` is true
 - cadence coaching is not an HR prescription
 - raw HR remains in `hr_samples`; protocol evidence does not duplicate the full HR trace
-- no measured cadence or measured watts are invented
+- compact stage `workload` may include measured RPM/watts summaries from the existing Bike Bridge poll; raw 1 Hz telemetry is not retained indefinitely
+- no measured cadence or measured watts are invented from prescription alone
 - prescribed resistance is never above the protocol-v1 commandable ceiling of 10
 
 ## Reproducibility / snapshot behavior
@@ -294,19 +343,105 @@ Stage HR evaluation reads the canonical IndexedDB `hr_samples` store. The protoc
 
 - Not a clinical CPET
 - Not an official YMCA, Astrand-Ryhming, ACSM, or clinical exercise test
-- Cadence is prescribed, not measured
+- Protocol cadence is prescribed; measured cadence is used only when Bike Bridge RPM is present
 - 70 RPM is coaching text and machine-guidance cadence, not an HR target
-- Watts are calibrated 70-RPM estimates, not measured power
-- No authoritative HRmax / automatic 85% ceiling
+- Calibrated 70-RPM watts are table estimates; estimator v1 uses them only after cadence is verified, or uses measured watts when those are available
+- Predicted HRmax uses Tanaka 2001 (`208 − 0.7 × age`), not a measured HRmax
+- Automatic 85% HRmax protocol termination remains unavailable (`automatic_submax_hr_ceiling_available: false`)
+- Estimator v1 still applies its own HR operating envelope: ≥ 110 bpm and strictly below 85% of predicted HRmax. That envelope is a submaximal validity constraint, not a claim that this workout is an official YMCA test.
 - Automatic Bike Bridge control is optional
 - Manual resistance remains supported
-- No VO2 estimate exists yet
+- Without measured watts or verified cadence, estimator v1 does not produce a number
+- The displayed VO₂ value is a **submaximal cycling estimate**, not gas-analysis VO₂ max
 - Pause-safe timing uses the existing active workout clock; resistance-command time is not proof the bike physically reached that resistance
 - machine calibration: resistance 1..15
 - current VO2 protocol v1 commandable range: resistance 1..10
 
-## Deferred estimator
+## Estimator
 
-This phase does not implement VO2max formulas, regression, extrapolation to HRmax, Astrand nomogram, YMCA equations, ml/kg/min or L/min results, confidence scores, percentiles, fitness categories, or generalized/passive VO2 inference.
+```text
+VO₂ Protocol v1
+        ↓
+accepted steady-state stages
+        ↓
+evidence sufficiency
+        ↓
+versioned submax cycle estimator (`bike-submax-linear-hr-workload` / version 1)
+        ↓
+Vo2AssessmentResult (`vo2_assessment`)
+```
 
-No VO2 score, percentile, trend chart, history page, or recommendation engine is shown. Successful completion may toast that evidence was recorded and estimation is not enabled yet.
+Independent concepts:
+
+```text
+workout lifecycle     (completed vs cancelled)
+protocol termination  (protocol_complete, limit_reached, early_cooldown, user_cancelled, ...)
+VO₂ assessment        (estimated vs insufficient_evidence)
+```
+
+These combinations are all valid:
+
+```text
+protocol completed + estimate produced
+protocol completed + insufficient evidence
+limit reached + estimate produced
+limit reached + insufficient evidence
+early end + estimate produced
+early end + insufficient evidence
+```
+
+### Sufficiency
+
+An estimate requires all of:
+
+1. valid protocol evidence: `protocol_id` `bike-submax-70rpm` **and** `protocol_version` 1 (a future v2 must not flow through estimator v1)
+2. explicit stored profile **age** and **body weight** (weight is entered in pounds and snapshotted as kilograms; form placeholders/defaults are not inferred)
+3. at least 3 `accepted` work stages
+4. at least 3 of those stages estimator-eligible
+5. valid steady-state HR on every stage used
+6. valid **performed** workload on every stage used (`measured_watts` or `calibrated_at_verified_cadence`)
+7. each used HR in the estimator-v1 envelope: ≥ 110 bpm and < 85% of predicted HRmax
+8. strictly increasing workloads
+9. strictly increasing HR with workload
+10. a stable linear HR-vs-watts fit with slope > 0 and R² ≥ 0.70 (`fit_quality` classifies that R² as high / moderate / low; it is not overall VO₂ confidence)
+11. a finite extrapolation to predicted HRmax that yields a VO₂ inside 10–100 ml/kg/min
+
+`incomplete`, `unstable_hr`, and `insufficient_hr` stages are never estimator points. Protocol-accepted stages that fail the HR envelope or lack performed-workload evidence remain in diagnostics as ineligible; they are not silently dropped to manufacture an estimate from leftovers unless at least three other stages are independently eligible.
+
+Thirty-minute plan completion is **not** a sufficiency rule. Cooldown completion is **not** required. `limit_reached` is **not** itself sufficient evidence.
+
+Unsupported protocol version is `unsupported_protocol_version`, not `missing_protocol_evidence`. Diagnostics persist `expected_protocol_id`, `expected_protocol_version`, `observed_protocol_id`, and `observed_protocol_version`.
+
+### Formulas (estimator version 1)
+
+Predicted HRmax (Tanaka 2001):
+
+```text
+HRmax = 208 − (0.7 × age_years)
+```
+
+HR / workload fit on accepted stages:
+
+```text
+HR = slope × watts + intercept
+predicted_max_watts = (HRmax − intercept) / slope
+```
+
+ACSM leg-cycle conversion:
+
+```text
+VO2 ml/kg/min = (10.8 × predicted_max_watts / weight_kg) + 7
+```
+
+Absurd or non-finite results are rejected as `insufficient_evidence` with an explicit reason code. They are never clamped into a plausible range.
+
+### Assessment statuses
+
+- `estimated` — a VO₂ max estimate was produced from accepted evidence
+- `insufficient_evidence` — the test was recorded, but the estimator could not produce a reliable value
+
+### Versioning
+
+A change to the HR/workload model, HRmax formula, ACSM constants, sufficiency rules, HR envelope, workload-source policy, or R² threshold must increment `estimator_version` (or introduce a new `estimator_id`). Historical `vo2_assessment` rows keep the snapshot of protocol id/version, estimator id/version, accepted vs eligible stages, per-point workload source, HR, watts, cadence measured vs prescribed, age/weight/HRmax, and regression diagnostics used at finalization. Later profile edits do not rewrite old estimates.
+
+`vo2_assessment` and `vo2_evidence` remain local. SISU ingest strips both.

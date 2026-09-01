@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.12] - 2026-08-31
+
+### Added
+
+- **VO2 submax estimator.** The standalone VO2 Max Estimation workout now
+  evaluates protocol evidence at finalization and persists a local
+  `vo2_assessment` (`bike-submax-linear-hr-workload` / version 1). Estimator v1
+  consumes only `bike-submax-70rpm` / version 1, requires an explicit saved
+  age and weight, and uses performed workload (`measured_watts` or cadence-
+  verified calibration) plus a 110 bpm / <85% predicted-HRmax envelope.
+  Regression R² is stored as `fit_quality`, not overall confidence.
+  `limit_reached` is a distinct protocol termination from cancel / Early
+  Cooldown. Historical assessments snapshot inputs and workload provenance so
+  later profile edits do not rewrite them. Assessment and evidence remain
+  stripped from SISU ingest. New VO2 runtime modules are included in the PWA
+  precache list.
+
 ## [0.10.11] - 2026-08-28
 
 ### Added

@@ -1,19 +1,74 @@
-const defaultProfile = {
-    weight: 150,
-    height: 70,
-    age: 25,
-    sex: "male",
+/** Unset physiological fields. Placeholders must not become VO2 estimator inputs. */
+export const BLANK_PROFILE = {
+    weight: "",
+    height: "",
+    age: "",
+    sex: "",
     vo2: "",
 };
+/** Profile weight is entered in pounds. Estimator snapshots kilograms. */
+export const PROFILE_WEIGHT_LBS_TO_KG = 0.45359237;
+function parseFiniteNumber(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+        return value;
+    if (typeof value === "string" && value.trim() !== "") {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed))
+            return parsed;
+    }
+    return undefined;
+}
+/**
+ * Explicit stored age/weight only. Does not use unsaved profile defaults.
+ * Weight in the profile form is pounds; returned weight is kilograms.
+ */
+export function parseExplicitVo2ProfileInputs(profile) {
+    if (!profile || typeof profile !== "object")
+        return {};
+    const row = profile;
+    const inputs = {};
+    const age = parseFiniteNumber(row.age);
+    if (age != null && age > 0)
+        inputs.age_years = age;
+    const weightLbs = parseFiniteNumber(row.weight);
+    if (weightLbs != null && weightLbs > 0) {
+        inputs.weight_kg = weightLbs * PROFILE_WEIGHT_LBS_TO_KG;
+    }
+    return inputs;
+}
+export function readExplicitVo2ProfileInputs(storage) {
+    const store = storage !== null && storage !== void 0 ? storage : (typeof localStorage !== "undefined" ? localStorage : undefined);
+    if (!store)
+        return {};
+    const raw = store.getItem("profile");
+    if (!raw)
+        return {};
+    try {
+        return parseExplicitVo2ProfileInputs(JSON.parse(raw));
+    }
+    catch {
+        return {};
+    }
+}
 function getProfile() {
+    var _a, _b, _c, _d, _e;
     try {
         const raw = localStorage.getItem("profile");
         if (!raw)
-            return defaultProfile;
-        return JSON.parse(raw);
+            return { ...BLANK_PROFILE };
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object")
+            return { ...BLANK_PROFILE };
+        return {
+            weight: (_a = parsed.weight) !== null && _a !== void 0 ? _a : "",
+            height: (_b = parsed.height) !== null && _b !== void 0 ? _b : "",
+            age: (_c = parsed.age) !== null && _c !== void 0 ? _c : "",
+            sex: (_d = parsed.sex) !== null && _d !== void 0 ? _d : "",
+            vo2: (_e = parsed.vo2) !== null && _e !== void 0 ? _e : "",
+        };
     }
     catch {
-        return defaultProfile;
+        return { ...BLANK_PROFILE };
     }
 }
 function saveProfile() {

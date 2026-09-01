@@ -11,7 +11,8 @@ import { registerSisuGlobals } from "./sisuSync.js";
 import "./hrMonitor.js";
 import { registerUiGlobals, updateDisplay } from "./uiControls.js";
 import { registerPwaGlobals } from "./pwaInstall.js";
-import { getSession, isSessionStale, clearSession } from "./sessionStore.js";
+import { getSession, isSessionStale } from "./sessionStore.js";
+import { discardWorkoutSession } from "./workoutLifecycle.js";
 import { applyRuntimeDocumentState } from "./platform/runtime.js";
 import { startBikeBridgeRuntime } from "./platform/bikeBridgeRuntime.js";
 import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
@@ -36,7 +37,7 @@ function cleanupStaleWorkoutSessions() {
       console.warn(
         `Cleaning up stale workout session for ${day} (age: ${hours} hours)`
       );
-      clearSession(day);
+      discardWorkoutSession(day);
     }
   });
 }
@@ -46,6 +47,7 @@ function setupModalBackgroundHandlers() {
   const cancelModalBg = document.getElementById("cancelModalBg");
   const activitySelectModalBg = document.getElementById("activitySelectModalBg");
   const workoutSummaryModalBg = document.getElementById("workoutSummaryModalBg");
+  const vo2AssessmentModalBg = document.getElementById("vo2AssessmentModalBg");
   const resetLearnedModalBg = document.getElementById("resetLearnedModalBg");
   if (modalBg) {
     modalBg.addEventListener("click", (e) => {
@@ -69,6 +71,13 @@ function setupModalBackgroundHandlers() {
     workoutSummaryModalBg.addEventListener("click", (e) => {
       if (e.target === workoutSummaryModalBg && typeof (window as any).closeWorkoutSummaryModal === "function")
         (window as any).closeWorkoutSummaryModal();
+    });
+  }
+  if (vo2AssessmentModalBg) {
+    vo2AssessmentModalBg.addEventListener("click", (e) => {
+      if (e.target === vo2AssessmentModalBg && typeof (window as any).closeVo2AssessmentModal === "function") {
+        (window as any).closeVo2AssessmentModal();
+      }
     });
   }
   if (resetLearnedModalBg) {
