@@ -5,6 +5,7 @@ import {
   parseBikeTelemetry,
   parseBridgeStatus,
   parseResistanceAccepted,
+  toBridgeHeartRateBpm,
   toBridgeResistanceLevel,
   createBikeBridgeClient,
 } from "../dist/platform/bikeBridgeClient.js";
@@ -57,6 +58,7 @@ function createFakeBikeBridge(initial = {}) {
     postInFlight: 0,
     maxPostInFlight: 0,
     posts: [],
+    heartratePosts: [],
     pollInFlight: 0,
     maxPollInFlight: 0,
     ...initial,
@@ -72,6 +74,7 @@ function createFakeBikeBridge(initial = {}) {
         state.postInFlight += 1;
         state.maxPostInFlight = Math.max(state.maxPostInFlight, state.postInFlight);
         state.posts.push(req.jsonBody);
+        if (path === "/api/v1/heartrate") state.heartratePosts.push(req.jsonBody);
       }
       if (isPoll) {
         state.pollInFlight += 1;
@@ -137,6 +140,10 @@ function createFakeBikeBridge(initial = {}) {
           state.requested = value;
           return { status: 200, text: JSON.stringify({ requested: value }) };
         }
+        if (req.method === "POST" && path === "/api/v1/heartrate") {
+          const value = req.jsonBody.value;
+          return { status: 200, text: JSON.stringify({ requested: value }) };
+        }
         return { status: 404, text: JSON.stringify({ error: "not found" }) };
       } finally {
         if (isPost) state.postInFlight -= 1;
@@ -159,6 +166,7 @@ function readySession(fake, overrides = {}) {
     transport: fake.transport,
     pollIntervalMs: overrides.pollIntervalMs ?? 1000,
     requestTimeoutMs: overrides.requestTimeoutMs ?? 50,
+    getCurrentBpm: overrides.getCurrentBpm,
   });
   const configured = session.configure({
     baseUrl: "http://192.168.1.10:8765",
@@ -539,4 +547,79 @@ test("inactive workout does not send resistance", async () => {
   });
   await delay(20);
   assert.equal(fake.state.posts.length, 0);
+});
+
+test("toBridgeHeartRateBpm accepts 30-250 integers", () => {
+  assert.equal(toBridgeHeartRateBpm(142), 142);
+  assert.equal(toBridgeHeartRateBpm(30), 30);
+  assert.equal(toBridgeHeartRateBpm(250), 250);
+  assert.equal(toBridgeHeartRateBpm(29), undefined);
+  assert.equal(toBridgeHeartRateBpm(251), undefined);
+  assert.equal(toBridgeHeartRateBpm(Number.NaN), undefined);
+});
+
+test("client postHeartRate posts value and parses requested", async () => {
+  const fake = createFakeBikeBridge();
+  const client = createBikeBridgeClient(() => "http://192.168.1.10:8765", fake.transport, 50);
+  const result = await client.postHeartRate(142);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.requested, 142);
+  assert.deepEqual(fake.state.heartratePosts, [{ value: 142 }]);
+});
+
+test("session posts 1 Hz HR heartbeat including unchanged BPM", async () => {
+  const fake = createFakeBikeBridge();
+  let bpm = 142;
+  const session = readySession(fake, {
+    pollIntervalMs: 40,
+    getCurrentBpm: () => bpm,
+  });
+  try {
+    session.start();
+    await waitUntil(() => fake.state.heartratePosts.length >= 3, 500);
+    assert.ok(fake.state.heartratePosts.every((body) => body.value === 142));
+    bpm = 150;
+    const before = fake.state.heartratePosts.length;
+    await waitUntil(() => fake.state.heartratePosts.some((body, i) => i >= before && body.value === 150), 500);
+  } finally {
+    session.stop();
+  }
+});
+
+test("session does not post HR when bridge URL is missing", async () => {
+  const fake = createFakeBikeBridge();
+  const session = createBikeBridgeSession({
+    storage: memoryStorage(),
+    transport: fake.transport,
+    pollIntervalMs: 40,
+    requestTimeoutMs: 50,
+    getCurrentBpm: () => 142,
+  });
+  try {
+    session.start();
+    await delay(120);
+    assert.equal(fake.state.heartratePosts.length, 0);
+  } finally {
+    session.stop();
+  }
+});
+
+test("HR POST failure does not mark session unhealthy or stop polling", async () => {
+  const fake = createFakeBikeBridge();
+  fake.state.failNext = { path: "/api/v1/heartrate", status: 500, error: "hr failed", once: false };
+  const session = readySession(fake, {
+    pollIntervalMs: 40,
+    getCurrentBpm: () => 142,
+  });
+  try {
+    session.start();
+    await waitUntil(() => session.getViewState().readiness === "control_ready", 500);
+    await waitUntil(() => fake.state.heartratePosts.length >= 2, 500);
+    const view = session.getViewState();
+    assert.equal(view.readiness, "control_ready");
+    assert.equal(view.lastError, null);
+    assert.equal(view.rpm, 56);
+  } finally {
+    session.stop();
+  }
 });

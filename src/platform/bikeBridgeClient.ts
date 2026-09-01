@@ -43,6 +43,15 @@ export interface ResistanceAcceptedResponse {
   requested: number;
 }
 
+export interface HeartRateRequest {
+  value: number;
+}
+
+export type HeartRateAcceptedResponse = ResistanceAcceptedResponse;
+
+export const BRIDGE_HEART_RATE_MIN_BPM = 30;
+export const BRIDGE_HEART_RATE_MAX_BPM = 250;
+
 export type BikeBridgeClientErrorKind =
   | "not_configured"
   | "timeout"
@@ -75,6 +84,13 @@ export function toBridgeResistanceLevel(desired: number): number | undefined {
   const rounded = Math.round(desired);
   if (rounded < AUTOMATIC_RESISTANCE_MIN) return undefined;
   return clampAutomaticResistance(rounded);
+}
+
+export function toBridgeHeartRateBpm(bpm: number): number | undefined {
+  if (!Number.isFinite(bpm)) return undefined;
+  const rounded = Math.round(bpm);
+  if (rounded < BRIDGE_HEART_RATE_MIN_BPM || rounded > BRIDGE_HEART_RATE_MAX_BPM) return undefined;
+  return rounded;
 }
 
 export function createWebBikeBridgeTransport(): BikeBridgeHttpTransport {
@@ -190,6 +206,22 @@ export function createBikeBridgeClient(
       }
       const body: ResistanceRequest = { value: level };
       return send("POST", "/api/v1/resistance", parseResistanceAccepted, body);
+    },
+    postHeartRate(value: number): Promise<BikeBridgeClientResult<HeartRateAcceptedResponse>> {
+      const bpm = toBridgeHeartRateBpm(value);
+      if (bpm === undefined) {
+        return Promise.resolve({
+          ok: false,
+          kind: "malformed",
+          message:
+            "value must be an integer from " +
+            BRIDGE_HEART_RATE_MIN_BPM +
+            " to " +
+            BRIDGE_HEART_RATE_MAX_BPM,
+        });
+      }
+      const body: HeartRateRequest = { value: bpm };
+      return send("POST", "/api/v1/heartrate", parseResistanceAccepted, body);
     },
   };
 }

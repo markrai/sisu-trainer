@@ -12,12 +12,14 @@ import {
   createDefaultBikeBridgeTransport,
   isBikeBridgeClientOk,
   isBikeBridgeUrlOk,
+  toBridgeHeartRateBpm,
   toBridgeResistanceLevel,
   type BikeBridgeClient,
   type BikeBridgeHttpTransport,
   type BikeTelemetry,
   type BridgeStatus,
 } from "./bikeBridgeClient.js";
+import { getCurrentBpm } from "../hrMonitor.js";
 
 export const BIKE_BRIDGE_POLL_INTERVAL_MS = 1000;
 
@@ -66,6 +68,8 @@ export interface BikeBridgeSessionOptions {
   pollIntervalMs?: number;
   requestTimeoutMs?: number;
   now?: () => number;
+  /** Override live BPM source (defaults to hrMonitor.getCurrentBpm). */
+  getCurrentBpm?: () => number | null;
 }
 
 export interface BikeBridgeSession {
@@ -102,11 +106,17 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
   const storage = options.storage ?? defaultBikeBridgeStorage();
   const timeoutMs = options.requestTimeoutMs ?? BIKE_BRIDGE_REQUEST_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? BIKE_BRIDGE_POLL_INTERVAL_MS;
+  const readBpm = options.getCurrentBpm ?? getCurrentBpm;
   const postedBodies: string[] = [];
   const baseTransport = options.transport ?? createDefaultBikeBridgeTransport();
   const transport: BikeBridgeHttpTransport = {
     async request(request) {
-      if (request.method === "POST" && request.jsonBody !== undefined) {
+      if (
+        request.method === "POST" &&
+        request.jsonBody !== undefined &&
+        typeof request.url === "string" &&
+        request.url.includes("/api/v1/resistance")
+      ) {
         postedBodies.push(JSON.stringify(request.jsonBody));
       }
       return baseTransport.request(request);
@@ -250,6 +260,20 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
     }
   }
 
+  async function mirrorHeartRate(): Promise<void> {
+    // Presentation-only: never touches lastError, resistance, guidance, or poll kind.
+    if (!configured()) return;
+    const raw = readBpm();
+    if (raw === null || raw === undefined) return;
+    const bpm = toBridgeHeartRateBpm(raw);
+    if (bpm === undefined) return;
+    try {
+      await client.postHeartRate(bpm);
+    } catch {
+      // ignore
+    }
+  }
+
   async function tick(): Promise<void> {
     if (pollInFlight) return;
     if (!configured()) {
@@ -307,6 +331,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       }
     } finally {
       pollInFlight = false;
+      void mirrorHeartRate();
       notify();
     }
   }

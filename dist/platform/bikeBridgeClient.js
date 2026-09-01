@@ -2,6 +2,8 @@ import { isNativeRuntime } from "./runtime.js";
 import { joinBikeBridgeUrl, parseBikeBridgeBaseUrl } from "./bikeBridgeConfig.js";
 import { AUTOMATIC_RESISTANCE_MAX, AUTOMATIC_RESISTANCE_MIN, clampAutomaticResistance } from "../machines/proformSmartPower10.js";
 export const BIKE_BRIDGE_REQUEST_TIMEOUT_MS = 4000;
+export const BRIDGE_HEART_RATE_MIN_BPM = 30;
+export const BRIDGE_HEART_RATE_MAX_BPM = 250;
 export function toBridgeResistanceLevel(desired) {
     if (!Number.isFinite(desired))
         return undefined;
@@ -9,6 +11,14 @@ export function toBridgeResistanceLevel(desired) {
     if (rounded < AUTOMATIC_RESISTANCE_MIN)
         return undefined;
     return clampAutomaticResistance(rounded);
+}
+export function toBridgeHeartRateBpm(bpm) {
+    if (!Number.isFinite(bpm))
+        return undefined;
+    const rounded = Math.round(bpm);
+    if (rounded < BRIDGE_HEART_RATE_MIN_BPM || rounded > BRIDGE_HEART_RATE_MAX_BPM)
+        return undefined;
+    return rounded;
 }
 export function createWebBikeBridgeTransport() {
     return {
@@ -106,6 +116,21 @@ export function createBikeBridgeClient(getBaseUrl, transport, timeoutMs = BIKE_B
             }
             const body = { value: level };
             return send("POST", "/api/v1/resistance", parseResistanceAccepted, body);
+        },
+        postHeartRate(value) {
+            const bpm = toBridgeHeartRateBpm(value);
+            if (bpm === undefined) {
+                return Promise.resolve({
+                    ok: false,
+                    kind: "malformed",
+                    message: "value must be an integer from " +
+                        BRIDGE_HEART_RATE_MIN_BPM +
+                        " to " +
+                        BRIDGE_HEART_RATE_MAX_BPM,
+                });
+            }
+            const body = { value: bpm };
+            return send("POST", "/api/v1/heartrate", parseResistanceAccepted, body);
         },
     };
 }

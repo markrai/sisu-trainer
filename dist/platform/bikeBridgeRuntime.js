@@ -1,5 +1,6 @@
 import { defaultBikeBridgeStorage, loadBikeBridgeSettings, parseBikeBridgeBaseUrl, saveBikeBridgeSettings, } from "./bikeBridgeConfig.js";
-import { BIKE_BRIDGE_REQUEST_TIMEOUT_MS, createBikeBridgeClient, createDefaultBikeBridgeTransport, isBikeBridgeClientOk, isBikeBridgeUrlOk, toBridgeResistanceLevel, } from "./bikeBridgeClient.js";
+import { BIKE_BRIDGE_REQUEST_TIMEOUT_MS, createBikeBridgeClient, createDefaultBikeBridgeTransport, isBikeBridgeClientOk, isBikeBridgeUrlOk, toBridgeHeartRateBpm, toBridgeResistanceLevel, } from "./bikeBridgeClient.js";
+import { getCurrentBpm } from "../hrMonitor.js";
 export const BIKE_BRIDGE_POLL_INTERVAL_MS = 1000;
 function classifyReadiness(configured, status, pollKind) {
     if (!configured)
@@ -22,15 +23,19 @@ function formatMetric(value) {
     return value === undefined ? null : value;
 }
 export function createBikeBridgeSession(options = {}) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     const storage = (_a = options.storage) !== null && _a !== void 0 ? _a : defaultBikeBridgeStorage();
     const timeoutMs = (_b = options.requestTimeoutMs) !== null && _b !== void 0 ? _b : BIKE_BRIDGE_REQUEST_TIMEOUT_MS;
     const pollIntervalMs = (_c = options.pollIntervalMs) !== null && _c !== void 0 ? _c : BIKE_BRIDGE_POLL_INTERVAL_MS;
+    const readBpm = (_d = options.getCurrentBpm) !== null && _d !== void 0 ? _d : getCurrentBpm;
     const postedBodies = [];
-    const baseTransport = (_d = options.transport) !== null && _d !== void 0 ? _d : createDefaultBikeBridgeTransport();
+    const baseTransport = (_e = options.transport) !== null && _e !== void 0 ? _e : createDefaultBikeBridgeTransport();
     const transport = {
         async request(request) {
-            if (request.method === "POST" && request.jsonBody !== undefined) {
+            if (request.method === "POST" &&
+                request.jsonBody !== undefined &&
+                typeof request.url === "string" &&
+                request.url.includes("/api/v1/resistance")) {
                 postedBodies.push(JSON.stringify(request.jsonBody));
             }
             return baseTransport.request(request);
@@ -167,6 +172,23 @@ export function createBikeBridgeSession(options = {}) {
             }
         }
     }
+    async function mirrorHeartRate() {
+        // Presentation-only: never touches lastError, resistance, guidance, or poll kind.
+        if (!configured())
+            return;
+        const raw = readBpm();
+        if (raw === null || raw === undefined)
+            return;
+        const bpm = toBridgeHeartRateBpm(raw);
+        if (bpm === undefined)
+            return;
+        try {
+            await client.postHeartRate(bpm);
+        }
+        catch {
+            // ignore
+        }
+    }
     async function tick() {
         if (pollInFlight)
             return;
@@ -228,6 +250,7 @@ export function createBikeBridgeSession(options = {}) {
         }
         finally {
             pollInFlight = false;
+            void mirrorHeartRate();
             notify();
         }
     }
