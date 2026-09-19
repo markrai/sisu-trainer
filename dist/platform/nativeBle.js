@@ -1,5 +1,5 @@
 import { BleClient, numberToUUID } from "@capacitor-community/bluetooth-le";
-import { parseHeartRateMeasurement } from "./heartRateMeasurement.js";
+import { dispatchHeartRateMeasurement } from "./heartRateDispatch.js";
 const HEART_RATE_SERVICE = numberToUUID(0x180d);
 const HEART_RATE_MEASUREMENT = numberToUUID(0x2a37);
 const BATTERY_SERVICE = numberToUUID(0x180f);
@@ -33,6 +33,18 @@ function handleDisconnect(deviceId) {
     clearBatteryPolling();
     handlers === null || handlers === void 0 ? void 0 : handlers.onDisconnected();
 }
+function dispatchMeasurement(value) {
+    const handlers = activeHandlers;
+    if (!handlers)
+        return;
+    dispatchHeartRateMeasurement(value, {
+        onBpm: handlers.onBpm,
+        onRrIntervals: handlers.onRrIntervals,
+        onOptionalFieldError: handlers.onOptionalFieldError,
+        onOptionalFieldsOk: handlers.onOptionalFieldsOk,
+        onClearOptionalFieldError: handlers.onClearOptionalFieldError,
+    });
+}
 async function readBattery(deviceId) {
     try {
         const value = await BleClient.read(deviceId, BATTERY_SERVICE, BATTERY_LEVEL);
@@ -64,7 +76,14 @@ export async function connectNativeBle(handlers) {
     try {
         await BleClient.connect(device.deviceId, handleDisconnect);
         handlers.onConnected(device.name || "Heart rate sensor");
-        await BleClient.startNotifications(device.deviceId, HEART_RATE_SERVICE, HEART_RATE_MEASUREMENT, (value) => handlers.onBpm(parseHeartRateMeasurement(value)));
+        await BleClient.startNotifications(device.deviceId, HEART_RATE_SERVICE, HEART_RATE_MEASUREMENT, (value) => {
+            try {
+                dispatchMeasurement(value);
+            }
+            catch (error) {
+                console.error("Native BLE Heart Rate Measurement parse error:", error);
+            }
+        });
         if (await updateBattery(device.deviceId)) {
             batteryPollIntervalId = setInterval(() => {
                 void updateBattery(device.deviceId);

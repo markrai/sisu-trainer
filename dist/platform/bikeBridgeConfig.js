@@ -1,8 +1,22 @@
 export const BIKE_BRIDGE_STORAGE_KEY = "sisu_trainer_bike_bridge";
+export const DEFAULT_CONSOLE_BRIGHTNESS = 80;
+export const CONSOLE_BRIGHTNESS_MIN = 0;
+export const CONSOLE_BRIGHTNESS_MAX = 100;
 const DEFAULT_SETTINGS = {
     baseUrl: "",
     automaticControlEnabled: false,
+    consoleBrightness: DEFAULT_CONSOLE_BRIGHTNESS,
 };
+export function clampConsoleBrightness(value) {
+    if (typeof value !== "number" || !Number.isFinite(value))
+        return DEFAULT_CONSOLE_BRIGHTNESS;
+    const rounded = Math.round(value);
+    if (rounded < CONSOLE_BRIGHTNESS_MIN)
+        return CONSOLE_BRIGHTNESS_MIN;
+    if (rounded > CONSOLE_BRIGHTNESS_MAX)
+        return CONSOLE_BRIGHTNESS_MAX;
+    return rounded;
+}
 export function defaultBikeBridgeStorage() {
     if (typeof localStorage !== "undefined")
         return localStorage;
@@ -55,6 +69,7 @@ export function loadBikeBridgeSettings(storage) {
         return {
             baseUrl,
             automaticControlEnabled: parsed.automaticControlEnabled === true,
+            consoleBrightness: clampConsoleBrightness(parsed.consoleBrightness),
         };
     }
     catch {
@@ -66,6 +81,7 @@ export function saveBikeBridgeSettings(settings, storage) {
     const clean = {
         baseUrl,
         automaticControlEnabled: settings.automaticControlEnabled === true,
+        consoleBrightness: clampConsoleBrightness(settings.consoleBrightness),
     };
     (storage !== null && storage !== void 0 ? storage : defaultBikeBridgeStorage()).setItem(BIKE_BRIDGE_STORAGE_KEY, JSON.stringify(clean));
     return clean;

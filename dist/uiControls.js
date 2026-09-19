@@ -3,7 +3,8 @@ import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
-import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
+import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
+import { formatHrvDisplay } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
 import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, vo2ProtocolUiTargets, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
 import { genericWorkoutBlocksText, vo2AssessmentPresentation, vo2CancelModalBody, vo2CancelModalTitle, vo2EndWorkoutButtonLabel, vo2HistoryOutcomeText, vo2LimitReachedButtonVisible, vo2SelectorOptionText, vo2WorkoutBlocksText, } from "./vo2AssessmentView.js";
@@ -177,6 +178,19 @@ function updateHrDisplay(hr) {
             hrNowEl.textContent = "";
         }
     }
+}
+let lastHrvDisplayKey = "";
+function renderHrvDisplay(model) {
+    const key = `${model.state}|${model.primary}|${model.secondary}`;
+    if (key === lastHrvDisplayKey)
+        return;
+    lastHrvDisplayKey = key;
+    const primaryEl = document.getElementById("hrvPrimary");
+    const secondaryEl = document.getElementById("hrvSecondary");
+    if (primaryEl)
+        primaryEl.textContent = model.primary;
+    if (secondaryEl)
+        secondaryEl.textContent = model.secondary;
 }
 const PHASE_STYLE_MAP = {
     "Warm-Up": { stroke: "#ffad5c", background: "rgba(255,173,92,0.18)", text: "#ffe9cc" },
@@ -1216,7 +1230,25 @@ function loadBikeBridgeSettingsForm() {
     const control = document.getElementById("bikeBridgeAutomaticControl");
     if (control)
         control.checked = state.automaticControlEnabled;
+    const slider = document.getElementById("bikeBridgeBrightness");
+    if (slider && document.activeElement !== slider) {
+        slider.value = String(state.consoleBrightness);
+        slider.setAttribute("aria-valuenow", slider.value);
+    }
+    updateBikeBridgeBrightnessLabel(state.consoleBrightness);
     renderBikeBridgeSettingsStatus();
+}
+function updateBikeBridgeBrightnessLabel(value) {
+    const label = document.getElementById("bikeBridgeBrightnessValue");
+    if (label)
+        label.textContent = String(value);
+    const slider = document.getElementById("bikeBridgeBrightness");
+    if (slider)
+        slider.setAttribute("aria-valuenow", String(value));
+}
+function saveBikeBridgeBrightness(value) {
+    updateBikeBridgeBrightnessLabel(value);
+    void getBikeBridgeSession().setConsoleBrightness(Number(value));
 }
 function saveBikeBridgeUrl(value) {
     const result = getBikeBridgeSession().configure({ baseUrl: value });
@@ -1719,6 +1751,20 @@ function registerUiGlobals(phaseBoxEl) {
         const session = getSession(day);
         void persistWorkoutRelativeHr(session, bpm);
     });
+    onHrvUpdate((snapshot) => {
+        renderHrvDisplay(formatHrvDisplay(snapshot));
+    });
+    renderHrvDisplay(formatHrvDisplay({
+        connected: false,
+        connectedDurationMs: 0,
+        cleanMeasurementCountThisSession: 0,
+        rrSeenThisSession: false,
+        readiness: "collecting",
+        ready: false,
+        reliable: false,
+        rmssdMs: null,
+        physiologicalDurationMs: 0,
+    }));
     if (phaseDisplayEl) {
         phaseDisplayEl.dataset.phaseState = "idle";
         phaseDisplayEl.addEventListener("click", promptCancelWorkout);
@@ -1755,6 +1801,8 @@ function registerUiGlobals(phaseBoxEl) {
     window.saveBikeEquipmentSelection = saveBikeEquipmentSelection;
     window.saveBikeBridgeUrl = saveBikeBridgeUrl;
     window.saveBikeBridgeAutomaticControl = saveBikeBridgeAutomaticControl;
+    window.saveBikeBridgeBrightness = saveBikeBridgeBrightness;
+    window.updateBikeBridgeBrightnessLabel = updateBikeBridgeBrightnessLabel;
     window.promptResetLearnedGuidance = promptResetLearnedGuidance;
     window.closeResetLearnedModal = closeResetLearnedModal;
     window.confirmResetLearnedGuidance = confirmResetLearnedGuidance;

@@ -1,8 +1,12 @@
 export const BIKE_BRIDGE_STORAGE_KEY = "sisu_trainer_bike_bridge";
+export const DEFAULT_CONSOLE_BRIGHTNESS = 80;
+export const CONSOLE_BRIGHTNESS_MIN = 0;
+export const CONSOLE_BRIGHTNESS_MAX = 100;
 
 export interface BikeBridgeSettings {
   baseUrl: string;
   automaticControlEnabled: boolean;
+  consoleBrightness: number;
 }
 
 export interface BikeBridgeStorage {
@@ -24,7 +28,16 @@ export interface BikeBridgeUrlParseError {
 const DEFAULT_SETTINGS: BikeBridgeSettings = {
   baseUrl: "",
   automaticControlEnabled: false,
+  consoleBrightness: DEFAULT_CONSOLE_BRIGHTNESS,
 };
+
+export function clampConsoleBrightness(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_CONSOLE_BRIGHTNESS;
+  const rounded = Math.round(value);
+  if (rounded < CONSOLE_BRIGHTNESS_MIN) return CONSOLE_BRIGHTNESS_MIN;
+  if (rounded > CONSOLE_BRIGHTNESS_MAX) return CONSOLE_BRIGHTNESS_MAX;
+  return rounded;
+}
 
 export function defaultBikeBridgeStorage(): BikeBridgeStorage {
   if (typeof localStorage !== "undefined") return localStorage;
@@ -77,6 +90,7 @@ export function loadBikeBridgeSettings(storage?: BikeBridgeStorage): BikeBridgeS
     return {
       baseUrl,
       automaticControlEnabled: parsed.automaticControlEnabled === true,
+      consoleBrightness: clampConsoleBrightness(parsed.consoleBrightness),
     };
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -91,6 +105,7 @@ export function saveBikeBridgeSettings(
   const clean: BikeBridgeSettings = {
     baseUrl,
     automaticControlEnabled: settings.automaticControlEnabled === true,
+    consoleBrightness: clampConsoleBrightness(settings.consoleBrightness),
   };
   (storage ?? defaultBikeBridgeStorage()).setItem(BIKE_BRIDGE_STORAGE_KEY, JSON.stringify(clean));
   return clean;

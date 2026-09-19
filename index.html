@@ -153,6 +153,15 @@
           <label class="modal-label" for="bikeBridgeAutomaticControl">Automatic resistance control</label>
           <input type="checkbox" id="bikeBridgeAutomaticControl" class="preference-toggle" onchange="saveBikeBridgeAutomaticControl(this.checked)">
         </div>
+        <div class="modal-field modal-field-column">
+          <label class="modal-label" for="bikeBridgeBrightness">Console brightness</label>
+          <div class="bike-bridge-brightness">
+            <input type="range" id="bikeBridgeBrightness" min="0" max="100" step="1" value="80" aria-valuemin="0" aria-valuemax="100" aria-valuenow="80"
+              oninput="updateBikeBridgeBrightnessLabel(this.value)"
+              onchange="saveBikeBridgeBrightness(this.value)">
+            <span id="bikeBridgeBrightnessValue" class="bike-bridge-brightness-value">80</span>
+          </div>
+        </div>
         <div id="bikeBridgeStatus" class="bike-bridge-status label" style="opacity: 0.85;"></div>
       </div>
       <div id="learnedGuidanceSection" class="modal-section" hidden>
@@ -386,6 +395,10 @@
     <div id="heartContainer" class="heart-container">
       <img id="heartIcon" src="heart.png" alt="">
       <div id="hrNow" class="hr-now"></div>
+      <div id="hrvDisplay" class="hrv-display" aria-hidden="true">
+        <div id="hrvPrimary">HRV —</div>
+        <div id="hrvSecondary"></div>
+      </div>
       <div id="hrTarget" class="hr-target"></div>
     </div>
     <img id="activityIcon" src="" alt="" style="display: none;">

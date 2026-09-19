@@ -27,7 +27,8 @@ import { getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
-import { connect as hrConnect, disconnect as hrDisconnect, onBpm } from "./hrMonitor.js";
+import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
+import { formatHrvDisplay, type HrvDisplayModel } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
 import {
   isVo2WorkoutSelector,
@@ -244,6 +245,18 @@ function updateHrDisplay(hr: number | null) {
       hrNowEl.textContent = "";
     }
   }
+}
+
+let lastHrvDisplayKey = "";
+
+function renderHrvDisplay(model: HrvDisplayModel): void {
+  const key = `${model.state}|${model.primary}|${model.secondary}`;
+  if (key === lastHrvDisplayKey) return;
+  lastHrvDisplayKey = key;
+  const primaryEl = document.getElementById("hrvPrimary");
+  const secondaryEl = document.getElementById("hrvSecondary");
+  if (primaryEl) primaryEl.textContent = model.primary;
+  if (secondaryEl) secondaryEl.textContent = model.secondary;
 }
 const PHASE_STYLE_MAP: Record<string, { stroke: string; background: string; text: string }> = {
   "Warm-Up": { stroke: "#ffad5c", background: "rgba(255,173,92,0.18)", text: "#ffe9cc" },
@@ -1359,7 +1372,25 @@ function loadBikeBridgeSettingsForm() {
   if (urlInput && document.activeElement !== urlInput) urlInput.value = state.configuredUrl;
   const control = document.getElementById("bikeBridgeAutomaticControl") as HTMLInputElement | null;
   if (control) control.checked = state.automaticControlEnabled;
+  const slider = document.getElementById("bikeBridgeBrightness") as HTMLInputElement | null;
+  if (slider && document.activeElement !== slider) {
+    slider.value = String(state.consoleBrightness);
+    slider.setAttribute("aria-valuenow", slider.value);
+  }
+  updateBikeBridgeBrightnessLabel(state.consoleBrightness);
   renderBikeBridgeSettingsStatus();
+}
+
+function updateBikeBridgeBrightnessLabel(value: string | number) {
+  const label = document.getElementById("bikeBridgeBrightnessValue");
+  if (label) label.textContent = String(value);
+  const slider = document.getElementById("bikeBridgeBrightness") as HTMLInputElement | null;
+  if (slider) slider.setAttribute("aria-valuenow", String(value));
+}
+
+function saveBikeBridgeBrightness(value: string | number) {
+  updateBikeBridgeBrightnessLabel(value);
+  void getBikeBridgeSession().setConsoleBrightness(Number(value));
 }
 
 function saveBikeBridgeUrl(value: string) {
@@ -1845,6 +1876,21 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
     void persistWorkoutRelativeHr(session, bpm);
   });
 
+  onHrvUpdate((snapshot) => {
+    renderHrvDisplay(formatHrvDisplay(snapshot));
+  });
+  renderHrvDisplay(formatHrvDisplay({
+    connected: false,
+    connectedDurationMs: 0,
+    cleanMeasurementCountThisSession: 0,
+    rrSeenThisSession: false,
+    readiness: "collecting",
+    ready: false,
+    reliable: false,
+    rmssdMs: null,
+    physiologicalDurationMs: 0,
+  }));
+
   if (phaseDisplayEl) {
     phaseDisplayEl.dataset.phaseState = "idle";
     phaseDisplayEl.addEventListener("click", promptCancelWorkout);
@@ -1881,6 +1927,8 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).saveBikeEquipmentSelection = saveBikeEquipmentSelection;
   (window as any).saveBikeBridgeUrl = saveBikeBridgeUrl;
   (window as any).saveBikeBridgeAutomaticControl = saveBikeBridgeAutomaticControl;
+  (window as any).saveBikeBridgeBrightness = saveBikeBridgeBrightness;
+  (window as any).updateBikeBridgeBrightnessLabel = updateBikeBridgeBrightnessLabel;
   (window as any).promptResetLearnedGuidance = promptResetLearnedGuidance;
   (window as any).closeResetLearnedModal = closeResetLearnedModal;
   (window as any).confirmResetLearnedGuidance = confirmResetLearnedGuidance;

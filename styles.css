@@ -89,6 +89,11 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .modal-field-toggle { align-items: center; }
 .modal-field-toggle .modal-label { margin-bottom: 0; }
 .preference-toggle { width: 20px; height: 20px; accent-color: #3d7cff; cursor: pointer; flex-shrink: 0; }
+.modal-field-column { flex-direction: column; align-items: stretch; gap: 8px; }
+.modal-field-column .modal-label { min-width: 0; }
+.bike-bridge-brightness { display: flex; align-items: center; gap: 12px; }
+.bike-bridge-brightness input[type="range"] { flex: 1; min-width: 0; }
+.bike-bridge-brightness-value { min-width: 2.5rem; text-align: right; opacity: 0.8; font-variant-numeric: tabular-nums; }
 
 /* Workout summary list */
 .workout-summary-list { max-height: 60vh; overflow-y: auto; min-height: 350px; }
@@ -339,6 +344,33 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   width: 100%;
 }
 
+/* HRV - compact secondary metric below heart, above target range */
+#hrvDisplay {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  text-align: center;
+  margin-top: 0.2rem;
+  font-size: 0.65rem;
+  line-height: 1.25;
+  opacity: 0.85;
+  white-space: nowrap;
+  z-index: 6;
+  color: inherit;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+}
+
+#hrvPrimary {
+  font-weight: 600;
+}
+
+#hrvSecondary {
+  opacity: 0.8;
+  font-size: 0.6rem;
+}
+
 /* HR range - directly below heart icon, anchored to heart container */
 #hrTarget {
   position: absolute;
@@ -346,7 +378,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   top: 100%;
   transform: translateX(-50%);
   text-align: center;
-  margin-top: 0.5rem;
+  margin-top: 1.85rem;
   font-size: 0.7rem;
   opacity: 0.9;
   white-space: nowrap;
@@ -528,6 +560,17 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
   }
   
   /* HR target below heart icon - anchored to heart container */
+  #hrvDisplay {
+    position: absolute !important;
+    left: 50% !important;
+    top: 100% !important;
+    transform: translateX(-50%) !important;
+    margin-top: 0.2rem !important;
+    font-size: 0.65rem !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+  }
+
   #hrTarget {
     position: absolute !important;
     left: 50% !important;
@@ -536,7 +579,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
     transform: translateX(-50%) !important;
     font-size: 0.75rem !important;
     text-align: center !important;
-    margin-top: 0.5rem !important;
+    margin-top: 1.85rem !important;
     white-space: nowrap !important;
     overflow: hidden !important;
     text-overflow: ellipsis !important;

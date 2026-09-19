@@ -1,4 +1,5 @@
-import { parseHeartRateMeasurement } from "./platform/heartRateMeasurement.js";
+import { dispatchHeartRateMeasurement } from "./platform/heartRateDispatch.js";
+import { HrvSession } from "./platform/hrvSession.js";
 import { isNativeRuntime } from "./platform/runtime.js";
 let currentHrDevice = null;
 let currentHrCharacteristic = null;
@@ -7,6 +8,9 @@ let batteryPollIntervalId = null;
 let currentBpm = null;
 let connectInProgress = false;
 const bpmCallbacks = [];
+const rrCallbacks = [];
+const hrvCallbacks = [];
+const hrvSession = new HrvSession();
 function bleDebugEnabled() {
     try {
         return localStorage.getItem("bleDebug") === "true";
@@ -24,6 +28,32 @@ function updateBattery(percent) {
     window.hrBatteryPercent = percent;
     updateHrStatus();
 }
+function buildHrvSnapshot() {
+    return hrvSession.getSnapshot();
+}
+function clearHrSessionForConnectAttempt() {
+    hrvSession.prepareConnectAttempt();
+    notifyHrv();
+}
+function activateHrSession() {
+    hrvSession.activateConnected();
+    notifyHrv();
+}
+function endHrSession() {
+    hrvSession.deactivate();
+    notifyHrv();
+}
+function notifyHrv() {
+    const snapshot = buildHrvSnapshot();
+    for (const cb of hrvCallbacks) {
+        try {
+            cb(snapshot);
+        }
+        catch (error) {
+            console.error("hrMonitor onHrvUpdate callback error:", error);
+        }
+    }
+}
 function handleBpm(hr) {
     currentBpm = hr;
     for (const cb of bpmCallbacks) {
@@ -35,6 +65,54 @@ function handleBpm(hr) {
         }
     }
 }
+function emitRrIntervals(rrIntervalsMs) {
+    for (const rrMs of rrIntervalsMs) {
+        for (const cb of rrCallbacks) {
+            try {
+                cb(rrMs);
+            }
+            catch (error) {
+                console.error("hrMonitor onRrInterval callback error:", error);
+            }
+        }
+    }
+}
+function noteOptionalFieldError(message) {
+    hrvSession.noteOptionalFieldError(message);
+    if (bleDebugEnabled()) {
+        console.log("[BLE] Optional HR field parse error:", message);
+    }
+    notifyHrv();
+}
+function clearOptionalFieldErrorSilent() {
+    hrvSession.clearOptionalFieldErrorSilent();
+}
+function noteOptionalFieldsOk() {
+    const { shouldNotify } = hrvSession.noteOptionalFieldsOk();
+    if (shouldNotify)
+        notifyHrv();
+}
+/**
+ * Ingest all RR values from one Heart Rate Measurement notification so the
+ * accumulator can assign physiological end-times (not identical JS now()).
+ * rrSeenThisSession is set only when the accumulator accepts at least one RR.
+ */
+function handleRrPacket(rrIntervalsMs) {
+    if (rrIntervalsMs.length === 0)
+        return;
+    hrvSession.ingestRrPacket(rrIntervalsMs);
+    emitRrIntervals(rrIntervalsMs);
+    notifyHrv();
+}
+function handleMeasurement(value) {
+    dispatchHeartRateMeasurement(value, {
+        onBpm: handleBpm,
+        onRrIntervals: handleRrPacket,
+        onOptionalFieldError: noteOptionalFieldError,
+        onOptionalFieldsOk: noteOptionalFieldsOk,
+        onClearOptionalFieldError: clearOptionalFieldErrorSilent,
+    });
+}
 function onHrDisconnect() {
     if (batteryPollIntervalId !== null) {
         clearInterval(batteryPollIntervalId);
@@ -44,6 +122,7 @@ function onHrDisconnect() {
     currentHrCharacteristic = null;
     currentBpm = null;
     connectInProgress = false;
+    endHrSession();
     window.hrDeviceName = null;
     window.hrBatteryPercent = null;
     window.liveBpm = null;
@@ -158,17 +237,28 @@ async function readBatteryPercentWithProbes(server, device) {
     return null;
 }
 function handleCharacteristicValueChanged(event) {
-    handleBpm(parseHeartRateMeasurement(dataViewFromValue(event.target.value)));
+    try {
+        handleMeasurement(dataViewFromValue(event.target.value));
+    }
+    catch (error) {
+        console.error("Web Bluetooth Heart Rate Measurement parse error:", error);
+    }
 }
 async function connectNative() {
     const { connectNativeBle } = await import("./platform/nativeBle.js");
+    clearHrSessionForConnectAttempt();
     await connectNativeBle({
         onConnected: (name) => {
+            activateHrSession();
             window.hrDeviceName = name;
             updateHrStatus();
         },
         onDisconnected: onHrDisconnect,
         onBpm: handleBpm,
+        onRrIntervals: handleRrPacket,
+        onOptionalFieldError: noteOptionalFieldError,
+        onOptionalFieldsOk: noteOptionalFieldsOk,
+        onClearOptionalFieldError: clearOptionalFieldErrorSilent,
         onBattery: updateBattery,
     });
 }
@@ -182,6 +272,7 @@ function connectWeb() {
         connectInProgress = false;
         return;
     }
+    clearHrSessionForConnectAttempt();
     bluetooth
         .requestDevice({
         filters: [{ services: ["heart_rate"] }],
@@ -204,6 +295,7 @@ function connectWeb() {
         .then(({ device, server, characteristic }) => {
         currentHrCharacteristic = characteristic;
         characteristic.addEventListener("characteristicvaluechanged", handleCharacteristicValueChanged);
+        activateHrSession();
         return characteristic.startNotifications().then(() => ({ device, server }));
     })
         .then(({ device, server }) => readBatteryPercentWithProbes(server, device).catch(() => null))
@@ -243,8 +335,17 @@ export function connect() {
 export function onBpm(callback) {
     bpmCallbacks.push(callback);
 }
+export function onRrInterval(callback) {
+    rrCallbacks.push(callback);
+}
+export function onHrvUpdate(callback) {
+    hrvCallbacks.push(callback);
+}
 export function getCurrentBpm() {
     return currentBpm;
+}
+export function getHrvSnapshot() {
+    return buildHrvSnapshot();
 }
 export function disconnect() {
     var _a;
@@ -257,4 +358,8 @@ export function disconnect() {
     if ((_a = currentHrDevice === null || currentHrDevice === void 0 ? void 0 : currentHrDevice.gatt) === null || _a === void 0 ? void 0 : _a.connected) {
         currentHrDevice.gatt.disconnect();
     }
+}
+// Dev/validation hook — no UI; lets CDP or console inspect live HRV state.
+if (typeof window !== "undefined") {
+    window.getHrvSnapshot = getHrvSnapshot;
 }

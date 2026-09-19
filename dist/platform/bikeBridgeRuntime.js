@@ -1,5 +1,5 @@
 import { defaultBikeBridgeStorage, loadBikeBridgeSettings, parseBikeBridgeBaseUrl, saveBikeBridgeSettings, } from "./bikeBridgeConfig.js";
-import { BIKE_BRIDGE_REQUEST_TIMEOUT_MS, createBikeBridgeClient, createDefaultBikeBridgeTransport, isBikeBridgeClientOk, isBikeBridgeUrlOk, toBridgeHeartRateBpm, toBridgeResistanceLevel, } from "./bikeBridgeClient.js";
+import { BIKE_BRIDGE_REQUEST_TIMEOUT_MS, createBikeBridgeClient, createDefaultBikeBridgeTransport, isBikeBridgeClientOk, isBikeBridgeUrlOk, toBridgeBrightness, toBridgeHeartRateBpm, toBridgeResistanceLevel, } from "./bikeBridgeClient.js";
 import { getCurrentBpm } from "../hrMonitor.js";
 export const BIKE_BRIDGE_POLL_INTERVAL_MS = 1000;
 function classifyReadiness(configured, status, pollKind) {
@@ -95,6 +95,7 @@ export function createBikeBridgeSession(options = {}) {
             readiness,
             configuredUrl: current.baseUrl,
             automaticControlEnabled: current.automaticControlEnabled,
+            consoleBrightness: current.consoleBrightness,
             controlAvailable: controlAvailable(),
             desiredResistance,
             commandedResistance,
@@ -187,6 +188,21 @@ export function createBikeBridgeSession(options = {}) {
         }
         catch {
             // ignore
+        }
+    }
+    async function pushConsoleBrightness(value) {
+        const level = toBridgeBrightness(value !== null && value !== void 0 ? value : settings().consoleBrightness);
+        if (level === undefined) {
+            return { ok: false, kind: "malformed", message: "value must be an integer from 0 to 100" };
+        }
+        if (!configured()) {
+            return { ok: false, kind: "not_configured", message: "missing url" };
+        }
+        try {
+            return await client.setBrightness(level);
+        }
+        catch {
+            return { ok: false, kind: "unreachable", message: "unreachable" };
         }
     }
     async function tick() {
@@ -284,6 +300,7 @@ export function createBikeBridgeSession(options = {}) {
         configure(partial) {
             const current = settings();
             let baseUrl = current.baseUrl;
+            const nextBrightness = partial.consoleBrightness !== undefined ? partial.consoleBrightness : current.consoleBrightness;
             if (partial.baseUrl !== undefined) {
                 const trimmed = partial.baseUrl.trim();
                 if (!trimmed) {
@@ -292,6 +309,7 @@ export function createBikeBridgeSession(options = {}) {
                         automaticControlEnabled: partial.automaticControlEnabled !== undefined
                             ? partial.automaticControlEnabled
                             : current.automaticControlEnabled,
+                        consoleBrightness: nextBrightness,
                     }, storage);
                     lastStatus = null;
                     lastTelemetry = null;
@@ -309,7 +327,8 @@ export function createBikeBridgeSession(options = {}) {
                 ? partial.automaticControlEnabled
                 : current.automaticControlEnabled;
             const enabledChanged = nextEnabled !== current.automaticControlEnabled;
-            if (baseUrl !== current.baseUrl) {
+            const urlChanged = baseUrl !== current.baseUrl;
+            if (urlChanged) {
                 lastStatus = null;
                 lastTelemetry = null;
                 lastAccepted = undefined;
@@ -321,6 +340,7 @@ export function createBikeBridgeSession(options = {}) {
             saveBikeBridgeSettings({
                 baseUrl,
                 automaticControlEnabled: nextEnabled,
+                consoleBrightness: nextBrightness,
             }, storage);
             if (enabledChanged && !nextEnabled)
                 pendingLevel = undefined;
@@ -331,6 +351,24 @@ export function createBikeBridgeSession(options = {}) {
             }
             notify();
             return { ok: true };
+        },
+        async setConsoleBrightness(value) {
+            const level = toBridgeBrightness(value);
+            if (level === undefined) {
+                return {
+                    ok: false,
+                    kind: "malformed",
+                    message: "value must be an integer from 0 to 100",
+                };
+            }
+            const current = settings();
+            saveBikeBridgeSettings({
+                baseUrl: current.baseUrl,
+                automaticControlEnabled: current.automaticControlEnabled,
+                consoleBrightness: level,
+            }, storage);
+            notify();
+            return pushConsoleBrightness(level);
         },
         onGuidance(input) {
             const wasActive = workoutActive;

@@ -1,5 +1,5 @@
 import { BleClient, numberToUUID } from "@capacitor-community/bluetooth-le";
-import { parseHeartRateMeasurement } from "./heartRateMeasurement.js";
+import { dispatchHeartRateMeasurement } from "./heartRateDispatch.js";
 
 const HEART_RATE_SERVICE = numberToUUID(0x180d);
 const HEART_RATE_MEASUREMENT = numberToUUID(0x2a37);
@@ -11,6 +11,17 @@ export interface NativeBleHandlers {
   onConnected: (name: string) => void;
   onDisconnected: () => void;
   onBpm: (bpm: number) => void;
+  /**
+   * All RR intervals from one 0x2A37 notification, in chronological order.
+   * Prefer this over per-interval callbacks so HRV can reconstruct beat timing.
+   */
+  onRrIntervals?: (rrIntervalsMs: readonly number[]) => void;
+  /** Optional EE/RR bytes were malformed; BPM was still delivered. */
+  onOptionalFieldError?: (message: string) => void;
+  /** Clean BPM-only measurement (optional fields OK, no RR). */
+  onOptionalFieldsOk?: () => void;
+  /** Silent clear of a stale optional-field diagnostic before RR ingest. */
+  onClearOptionalFieldError?: () => void;
   onBattery: (percent: number | null) => void;
 }
 
@@ -43,6 +54,18 @@ function handleDisconnect(deviceId: string): void {
   activeHandlers = null;
   clearBatteryPolling();
   handlers?.onDisconnected();
+}
+
+function dispatchMeasurement(value: DataView): void {
+  const handlers = activeHandlers;
+  if (!handlers) return;
+  dispatchHeartRateMeasurement(value, {
+    onBpm: handlers.onBpm,
+    onRrIntervals: handlers.onRrIntervals,
+    onOptionalFieldError: handlers.onOptionalFieldError,
+    onOptionalFieldsOk: handlers.onOptionalFieldsOk,
+    onClearOptionalFieldError: handlers.onClearOptionalFieldError,
+  });
 }
 
 async function readBattery(deviceId: string): Promise<number | null> {
@@ -82,7 +105,13 @@ export async function connectNativeBle(handlers: NativeBleHandlers): Promise<voi
       device.deviceId,
       HEART_RATE_SERVICE,
       HEART_RATE_MEASUREMENT,
-      (value) => handlers.onBpm(parseHeartRateMeasurement(value))
+      (value) => {
+        try {
+          dispatchMeasurement(value);
+        } catch (error) {
+          console.error("Native BLE Heart Rate Measurement parse error:", error);
+        }
+      }
     );
     if (await updateBattery(device.deviceId)) {
       batteryPollIntervalId = setInterval(() => {

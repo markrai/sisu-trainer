@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseBikeBridgeBaseUrl, joinBikeBridgeUrl } from "../dist/platform/bikeBridgeConfig.js";
+import { parseBikeBridgeBaseUrl, joinBikeBridgeUrl, loadBikeBridgeSettings, saveBikeBridgeSettings } from "../dist/platform/bikeBridgeConfig.js";
 import {
   parseBikeTelemetry,
   parseBridgeStatus,
   parseResistanceAccepted,
+  toBridgeBrightness,
   toBridgeHeartRateBpm,
   toBridgeResistanceLevel,
   createBikeBridgeClient,
@@ -59,6 +60,7 @@ function createFakeBikeBridge(initial = {}) {
     maxPostInFlight: 0,
     posts: [],
     heartratePosts: [],
+    brightnessPosts: [],
     pollInFlight: 0,
     maxPollInFlight: 0,
     ...initial,
@@ -71,10 +73,13 @@ function createFakeBikeBridge(initial = {}) {
       const isPost = req.method === "POST";
       const isPoll = req.method === "GET";
       if (isPost) {
-        state.postInFlight += 1;
-        state.maxPostInFlight = Math.max(state.maxPostInFlight, state.postInFlight);
-        state.posts.push(req.jsonBody);
+        if (path === "/api/v1/resistance") {
+          state.postInFlight += 1;
+          state.maxPostInFlight = Math.max(state.maxPostInFlight, state.postInFlight);
+          state.posts.push(req.jsonBody);
+        }
         if (path === "/api/v1/heartrate") state.heartratePosts.push(req.jsonBody);
+        if (path === "/api/v1/brightness") state.brightnessPosts.push(req.jsonBody);
       }
       if (isPoll) {
         state.pollInFlight += 1;
@@ -144,9 +149,13 @@ function createFakeBikeBridge(initial = {}) {
           const value = req.jsonBody.value;
           return { status: 200, text: JSON.stringify({ requested: value }) };
         }
+        if (req.method === "POST" && path === "/api/v1/brightness") {
+          const value = req.jsonBody.value;
+          return { status: 200, text: JSON.stringify({ requested: value }) };
+        }
         return { status: 404, text: JSON.stringify({ error: "not found" }) };
       } finally {
-        if (isPost) state.postInFlight -= 1;
+        if (isPost && path === "/api/v1/resistance") state.postInFlight -= 1;
         if (isPoll) state.pollInFlight -= 1;
       }
     },
@@ -623,3 +632,69 @@ test("HR POST failure does not mark session unhealthy or stop polling", async ()
     session.stop();
   }
 });
+
+test("settings persist consoleBrightness with default 80", () => {
+  const storage = memoryStorage();
+  const loaded = loadBikeBridgeSettings(storage);
+  assert.equal(loaded.consoleBrightness, 80);
+  const saved = saveBikeBridgeSettings(
+    { baseUrl: "", automaticControlEnabled: false, consoleBrightness: 12 },
+    storage
+  );
+  assert.equal(saved.consoleBrightness, 12);
+  assert.equal(loadBikeBridgeSettings(storage).consoleBrightness, 12);
+  assert.equal(
+    saveBikeBridgeSettings({ baseUrl: "", automaticControlEnabled: false, consoleBrightness: 140 }, storage)
+      .consoleBrightness,
+    100
+  );
+});
+
+test("toBridgeBrightness accepts 0-100 integers", () => {
+  assert.equal(toBridgeBrightness(0), 0);
+  assert.equal(toBridgeBrightness(80), 80);
+  assert.equal(toBridgeBrightness(100), 100);
+  assert.equal(toBridgeBrightness(-1), undefined);
+  assert.equal(toBridgeBrightness(101), undefined);
+  assert.equal(toBridgeBrightness(Number.NaN), undefined);
+});
+
+test("client setBrightness posts value and parses requested", async () => {
+  const fake = createFakeBikeBridge();
+  const client = createBikeBridgeClient(() => "http://192.168.1.10:8765", fake.transport, 50);
+  const result = await client.setBrightness(42);
+  assert.equal(result.ok, true);
+  assert.equal(result.value.requested, 42);
+  assert.deepEqual(fake.state.brightnessPosts, [{ value: 42 }]);
+});
+
+test("session setConsoleBrightness persists and posts without automatic control", async () => {
+  const fake = createFakeBikeBridge();
+  const session = readySession(fake, { automaticControlEnabled: false });
+  const result = await session.setConsoleBrightness(25);
+  assert.equal(result.ok, true);
+  assert.equal(session.getViewState().consoleBrightness, 25);
+  assert.equal(session.getViewState().automaticControlEnabled, false);
+  assert.deepEqual(fake.state.brightnessPosts, [{ value: 25 }]);
+});
+
+test("configure preserves brightness and URL change does not post it", async () => {
+  const fake = createFakeBikeBridge();
+  const session = createBikeBridgeSession({
+    storage: memoryStorage(),
+    transport: fake.transport,
+    requestTimeoutMs: 50,
+  });
+  session.configure({ consoleBrightness: 33 });
+  assert.equal(session.getViewState().consoleBrightness, 33);
+  assert.equal(fake.state.brightnessPosts.length, 0);
+  const configured = session.configure({ baseUrl: "http://192.168.1.10:8765" });
+  assert.equal(configured.ok, true);
+  await delay(30);
+  assert.equal(fake.state.brightnessPosts.length, 0);
+  assert.equal(session.getViewState().consoleBrightness, 33);
+  const posted = await session.setConsoleBrightness(33);
+  assert.equal(posted.ok, true);
+  assert.deepEqual(fake.state.brightnessPosts, [{ value: 33 }]);
+});
+

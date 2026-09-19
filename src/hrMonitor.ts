@@ -1,5 +1,10 @@
-import { parseHeartRateMeasurement } from "./platform/heartRateMeasurement.js";
+import { dispatchHeartRateMeasurement } from "./platform/heartRateDispatch.js";
+import { HrvSession, type HrvDiagnosticSnapshot } from "./platform/hrvSession.js";
 import { isNativeRuntime } from "./platform/runtime.js";
+
+export type { HrvSnapshot } from "./platform/hrvAccumulator.js";
+export type { HrvReadiness } from "./platform/hrvAccumulator.js";
+export type { HrvDiagnosticSnapshot } from "./platform/hrvSession.js";
 
 type BluetoothDevice = any;
 
@@ -10,6 +15,10 @@ let batteryPollIntervalId: ReturnType<typeof setInterval> | null = null;
 let currentBpm: number | null = null;
 let connectInProgress = false;
 const bpmCallbacks: Array<(bpm: number) => void> = [];
+const rrCallbacks: Array<(rrMs: number) => void> = [];
+const hrvCallbacks: Array<(snapshot: HrvDiagnosticSnapshot) => void> = [];
+
+const hrvSession = new HrvSession();
 
 function bleDebugEnabled() {
   try {
@@ -30,6 +39,36 @@ function updateBattery(percent: number | null) {
   updateHrStatus();
 }
 
+function buildHrvSnapshot(): HrvDiagnosticSnapshot {
+  return hrvSession.getSnapshot();
+}
+
+function clearHrSessionForConnectAttempt(): void {
+  hrvSession.prepareConnectAttempt();
+  notifyHrv();
+}
+
+function activateHrSession(): void {
+  hrvSession.activateConnected();
+  notifyHrv();
+}
+
+function endHrSession(): void {
+  hrvSession.deactivate();
+  notifyHrv();
+}
+
+function notifyHrv(): void {
+  const snapshot = buildHrvSnapshot();
+  for (const cb of hrvCallbacks) {
+    try {
+      cb(snapshot);
+    } catch (error) {
+      console.error("hrMonitor onHrvUpdate callback error:", error);
+    }
+  }
+}
+
 function handleBpm(hr: number) {
   currentBpm = hr;
   for (const cb of bpmCallbacks) {
@@ -41,6 +80,57 @@ function handleBpm(hr: number) {
   }
 }
 
+function emitRrIntervals(rrIntervalsMs: readonly number[]): void {
+  for (const rrMs of rrIntervalsMs) {
+    for (const cb of rrCallbacks) {
+      try {
+        cb(rrMs);
+      } catch (error) {
+        console.error("hrMonitor onRrInterval callback error:", error);
+      }
+    }
+  }
+}
+
+function noteOptionalFieldError(message: string): void {
+  hrvSession.noteOptionalFieldError(message);
+  if (bleDebugEnabled()) {
+    console.log("[BLE] Optional HR field parse error:", message);
+  }
+  notifyHrv();
+}
+
+function clearOptionalFieldErrorSilent(): void {
+  hrvSession.clearOptionalFieldErrorSilent();
+}
+
+function noteOptionalFieldsOk(): void {
+  const { shouldNotify } = hrvSession.noteOptionalFieldsOk();
+  if (shouldNotify) notifyHrv();
+}
+
+/**
+ * Ingest all RR values from one Heart Rate Measurement notification so the
+ * accumulator can assign physiological end-times (not identical JS now()).
+ * rrSeenThisSession is set only when the accumulator accepts at least one RR.
+ */
+function handleRrPacket(rrIntervalsMs: readonly number[]): void {
+  if (rrIntervalsMs.length === 0) return;
+  hrvSession.ingestRrPacket(rrIntervalsMs);
+  emitRrIntervals(rrIntervalsMs);
+  notifyHrv();
+}
+
+function handleMeasurement(value: DataView): void {
+  dispatchHeartRateMeasurement(value, {
+    onBpm: handleBpm,
+    onRrIntervals: handleRrPacket,
+    onOptionalFieldError: noteOptionalFieldError,
+    onOptionalFieldsOk: noteOptionalFieldsOk,
+    onClearOptionalFieldError: clearOptionalFieldErrorSilent,
+  });
+}
+
 function onHrDisconnect() {
   if (batteryPollIntervalId !== null) {
     clearInterval(batteryPollIntervalId);
@@ -50,6 +140,7 @@ function onHrDisconnect() {
   currentHrCharacteristic = null;
   currentBpm = null;
   connectInProgress = false;
+  endHrSession();
   (window as any).hrDeviceName = null;
   (window as any).hrBatteryPercent = null;
   (window as any).liveBpm = null;
@@ -159,18 +250,28 @@ async function readBatteryPercentWithProbes(server: any, device?: BluetoothDevic
 }
 
 function handleCharacteristicValueChanged(event: any) {
-  handleBpm(parseHeartRateMeasurement(dataViewFromValue(event.target.value)));
+  try {
+    handleMeasurement(dataViewFromValue(event.target.value));
+  } catch (error) {
+    console.error("Web Bluetooth Heart Rate Measurement parse error:", error);
+  }
 }
 
 async function connectNative() {
   const { connectNativeBle } = await import("./platform/nativeBle.js");
+  clearHrSessionForConnectAttempt();
   await connectNativeBle({
     onConnected: (name) => {
+      activateHrSession();
       (window as any).hrDeviceName = name;
       updateHrStatus();
     },
     onDisconnected: onHrDisconnect,
     onBpm: handleBpm,
+    onRrIntervals: handleRrPacket,
+    onOptionalFieldError: noteOptionalFieldError,
+    onOptionalFieldsOk: noteOptionalFieldsOk,
+    onClearOptionalFieldError: clearOptionalFieldErrorSilent,
     onBattery: updateBattery,
   });
 }
@@ -185,6 +286,8 @@ function connectWeb() {
     connectInProgress = false;
     return;
   }
+
+  clearHrSessionForConnectAttempt();
 
   bluetooth
     .requestDevice({
@@ -210,6 +313,7 @@ function connectWeb() {
     .then(({ device, server, characteristic }: { device: BluetoothDevice; server: any; characteristic: any }) => {
       currentHrCharacteristic = characteristic;
       characteristic.addEventListener("characteristicvaluechanged", handleCharacteristicValueChanged);
+      activateHrSession();
       return characteristic.startNotifications().then(() => ({ device, server }));
     })
     .then(({ device, server }: { device: BluetoothDevice; server: any }) =>
@@ -252,8 +356,20 @@ export function onBpm(callback: (bpm: number) => void): void {
   bpmCallbacks.push(callback);
 }
 
+export function onRrInterval(callback: (rrMs: number) => void): void {
+  rrCallbacks.push(callback);
+}
+
+export function onHrvUpdate(callback: (snapshot: HrvDiagnosticSnapshot) => void): void {
+  hrvCallbacks.push(callback);
+}
+
 export function getCurrentBpm(): number | null {
   return currentBpm;
+}
+
+export function getHrvSnapshot(): HrvDiagnosticSnapshot {
+  return buildHrvSnapshot();
 }
 
 export function disconnect(): void {
@@ -266,4 +382,9 @@ export function disconnect(): void {
   if (currentHrDevice?.gatt?.connected) {
     currentHrDevice.gatt.disconnect();
   }
+}
+
+// Dev/validation hook — no UI; lets CDP or console inspect live HRV state.
+if (typeof window !== "undefined") {
+  (window as any).getHrvSnapshot = getHrvSnapshot;
 }

@@ -4,6 +4,8 @@ import { AUTOMATIC_RESISTANCE_MAX, AUTOMATIC_RESISTANCE_MIN, clampAutomaticResis
 export const BIKE_BRIDGE_REQUEST_TIMEOUT_MS = 4000;
 export const BRIDGE_HEART_RATE_MIN_BPM = 30;
 export const BRIDGE_HEART_RATE_MAX_BPM = 250;
+export const BRIDGE_BRIGHTNESS_MIN = 0;
+export const BRIDGE_BRIGHTNESS_MAX = 100;
 export function toBridgeResistanceLevel(desired) {
     if (!Number.isFinite(desired))
         return undefined;
@@ -17,6 +19,14 @@ export function toBridgeHeartRateBpm(bpm) {
         return undefined;
     const rounded = Math.round(bpm);
     if (rounded < BRIDGE_HEART_RATE_MIN_BPM || rounded > BRIDGE_HEART_RATE_MAX_BPM)
+        return undefined;
+    return rounded;
+}
+export function toBridgeBrightness(value) {
+    if (!Number.isFinite(value))
+        return undefined;
+    const rounded = Math.round(value);
+    if (rounded < BRIDGE_BRIGHTNESS_MIN || rounded > BRIDGE_BRIGHTNESS_MAX)
         return undefined;
     return rounded;
 }
@@ -131,6 +141,18 @@ export function createBikeBridgeClient(getBaseUrl, transport, timeoutMs = BIKE_B
             }
             const body = { value: bpm };
             return send("POST", "/api/v1/heartrate", parseResistanceAccepted, body);
+        },
+        setBrightness(value) {
+            const level = toBridgeBrightness(value);
+            if (level === undefined) {
+                return Promise.resolve({
+                    ok: false,
+                    kind: "malformed",
+                    message: "value must be an integer from " + BRIDGE_BRIGHTNESS_MIN + " to " + BRIDGE_BRIGHTNESS_MAX,
+                });
+            }
+            const body = { value: level };
+            return send("POST", "/api/v1/brightness", parseResistanceAccepted, body);
         },
     };
 }

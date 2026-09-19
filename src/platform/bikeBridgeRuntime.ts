@@ -12,12 +12,15 @@ import {
   createDefaultBikeBridgeTransport,
   isBikeBridgeClientOk,
   isBikeBridgeUrlOk,
+  toBridgeBrightness,
   toBridgeHeartRateBpm,
   toBridgeResistanceLevel,
   type BikeBridgeClient,
+  type BikeBridgeClientResult,
   type BikeBridgeHttpTransport,
   type BikeTelemetry,
   type BridgeStatus,
+  type ResistanceAcceptedResponse,
 } from "./bikeBridgeClient.js";
 import { getCurrentBpm } from "../hrMonitor.js";
 
@@ -43,6 +46,7 @@ export interface BikeBridgeViewState {
   readiness: BikeBridgeReadiness;
   configuredUrl: string;
   automaticControlEnabled: boolean;
+  consoleBrightness: number;
   controlAvailable: boolean;
   desiredResistance?: number;
   commandedResistance?: number;
@@ -79,6 +83,7 @@ export interface BikeBridgeSession {
   getViewState(): BikeBridgeViewState;
   subscribe(listener: () => void): () => void;
   configure(settings: Partial<BikeBridgeSettings> & { baseUrl?: string }): { ok: boolean; error?: string };
+  setConsoleBrightness(value: number): Promise<BikeBridgeClientResult<ResistanceAcceptedResponse>>;
   onGuidance(input: BikeBridgeGuidanceInput): void;
   postedResistanceBodies(): string[];
 }
@@ -187,6 +192,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       readiness,
       configuredUrl: current.baseUrl,
       automaticControlEnabled: current.automaticControlEnabled,
+      consoleBrightness: current.consoleBrightness,
       controlAvailable: controlAvailable(),
       desiredResistance,
       commandedResistance,
@@ -271,6 +277,23 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       await client.postHeartRate(bpm);
     } catch {
       // ignore
+    }
+  }
+
+  async function pushConsoleBrightness(
+    value?: number
+  ): Promise<BikeBridgeClientResult<ResistanceAcceptedResponse>> {
+    const level = toBridgeBrightness(value ?? settings().consoleBrightness);
+    if (level === undefined) {
+      return { ok: false, kind: "malformed", message: "value must be an integer from 0 to 100" };
+    }
+    if (!configured()) {
+      return { ok: false, kind: "not_configured", message: "missing url" };
+    }
+    try {
+      return await client.setBrightness(level);
+    } catch {
+      return { ok: false, kind: "unreachable", message: "unreachable" };
     }
   }
 
@@ -365,6 +388,8 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
     configure(partial) {
       const current = settings();
       let baseUrl = current.baseUrl;
+      const nextBrightness =
+        partial.consoleBrightness !== undefined ? partial.consoleBrightness : current.consoleBrightness;
       if (partial.baseUrl !== undefined) {
         const trimmed = partial.baseUrl.trim();
         if (!trimmed) {
@@ -375,6 +400,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
                 partial.automaticControlEnabled !== undefined
                   ? partial.automaticControlEnabled
                   : current.automaticControlEnabled,
+              consoleBrightness: nextBrightness,
             },
             storage
           );
@@ -394,7 +420,8 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
           ? partial.automaticControlEnabled
           : current.automaticControlEnabled;
       const enabledChanged = nextEnabled !== current.automaticControlEnabled;
-      if (baseUrl !== current.baseUrl) {
+      const urlChanged = baseUrl !== current.baseUrl;
+      if (urlChanged) {
         lastStatus = null;
         lastTelemetry = null;
         lastAccepted = undefined;
@@ -407,6 +434,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
         {
           baseUrl,
           automaticControlEnabled: nextEnabled,
+          consoleBrightness: nextBrightness,
         },
         storage
       );
@@ -418,6 +446,27 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       }
       notify();
       return { ok: true };
+    },
+    async setConsoleBrightness(value) {
+      const level = toBridgeBrightness(value);
+      if (level === undefined) {
+        return {
+          ok: false,
+          kind: "malformed",
+          message: "value must be an integer from 0 to 100",
+        };
+      }
+      const current = settings();
+      saveBikeBridgeSettings(
+        {
+          baseUrl: current.baseUrl,
+          automaticControlEnabled: current.automaticControlEnabled,
+          consoleBrightness: level,
+        },
+        storage
+      );
+      notify();
+      return pushConsoleBrightness(level);
     },
     onGuidance(input) {
       const wasActive = workoutActive;
