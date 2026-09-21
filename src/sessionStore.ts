@@ -1,6 +1,11 @@
-import type { Activity, HrTargetsForDay, PlanBlock } from "./types.js";
+import type { Activity, HrTargetsForDay, PlanBlock, ResolvedWorkoutPrescription } from "./types.js";
 import { isActivity } from "./workoutActivity.js";
 import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime, type Vo2ProtocolRuntime } from "./vo2Protocol.js";
+import {
+  parsePersistedHrTargetsForDay,
+  parseResolvedWorkoutPrescription,
+  persistedHrTargetsFitBlocks,
+} from "./workoutPrescription.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -14,6 +19,8 @@ export interface SessionStorage {
 export interface PhasePlanSnapshot {
   blocks: PlanBlock;
   hrTargets: HrTargetsForDay | null;
+  /** Versioned, frozen target resolution used by UI, guidance, evidence, and summary. */
+  resolvedPrescription?: ResolvedWorkoutPrescription;
 }
 
 export interface SessionData {
@@ -92,9 +99,17 @@ function parsePhasePlan(raw: string | null): PhasePlanSnapshot | null {
     const sustain = Number(parsed?.blocks?.sustain);
     const cool = Number(parsed?.blocks?.cool);
     if (![warm, sustain, cool].every((n) => Number.isFinite(n) && n >= 0)) return null;
+    const blocks = { warm, sustain, cool };
+    const parsedHrTargets = parsed?.hrTargets == null
+      ? null
+      : parsePersistedHrTargetsForDay(parsed.hrTargets);
+    const hrTargets = parsedHrTargets && persistedHrTargetsFitBlocks(parsedHrTargets, blocks)
+      ? parsedHrTargets
+      : null;
     return {
-      blocks: { warm, sustain, cool },
-      hrTargets: parsed?.hrTargets && typeof parsed.hrTargets === "object" ? parsed.hrTargets : null,
+      blocks,
+      hrTargets,
+      resolvedPrescription: parseResolvedWorkoutPrescription(parsed?.resolvedPrescription) ?? undefined,
     };
   } catch {
     return null;
@@ -182,6 +197,7 @@ export function startSession(
       JSON.stringify({
         blocks: phasePlan.blocks,
         hrTargets: phasePlan.hrTargets ?? null,
+        resolvedPrescription: phasePlan.resolvedPrescription,
       })
     );
   }

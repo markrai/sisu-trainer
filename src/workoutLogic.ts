@@ -35,6 +35,7 @@ import {
   type TelemetryTraceStorage,
 } from "./bikeTelemetryTrace.js";
 import type { BikeTelemetrySample } from "./vo2Workload.js";
+import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
 
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
@@ -291,14 +292,22 @@ function startWorkout() {
 }
 
 /** Freeze the plan inputs the live runtime will use for this session. */
-function capturePhasePlanSnapshot(day: string): PhasePlanSnapshot | null {
+function capturePhasePlanSnapshot(day: string, resolvedAt = new Date().toISOString()): PhasePlanSnapshot | null {
   const base = getPlan()[day];
   if (!base) return null;
   const blocks = adjustedBlockLengths(base, null);
   const hrTargets = getHrTargets()[day] ?? null;
+  const frozenTargets = hrTargets ? JSON.parse(JSON.stringify(hrTargets)) : null;
+  const frozenBlocks = { warm: blocks.warm, sustain: blocks.sustain, cool: blocks.cool };
   return {
-    blocks: { warm: blocks.warm, sustain: blocks.sustain, cool: blocks.cool },
-    hrTargets: hrTargets ? JSON.parse(JSON.stringify(hrTargets)) : null,
+    blocks: frozenBlocks,
+    hrTargets: frozenTargets,
+    resolvedPrescription: resolveWorkoutPrescription({
+      workoutSelector: day,
+      blocks: frozenBlocks,
+      hrTargets: frozenTargets,
+      resolvedAt,
+    }),
   };
 }
 
@@ -318,7 +327,7 @@ function beginWorkout(activity?: Activity) {
       : getActiveWorkoutActivity(allowed);
     if (allowed.length > 1 && resolved === undefined) return;
     const startTime = Date.now();
-    const phasePlan = capturePhasePlanSnapshot(day);
+    const phasePlan = capturePhasePlanSnapshot(day, new Date(startTime).toISOString());
     const runtime = createVo2ProtocolRuntime(preflight.plan);
     let sessionId: string | null = null;
     if (typeof (window as any).generateUUID === "function") {
@@ -346,7 +355,7 @@ function beginWorkout(activity?: Activity) {
     : getActiveWorkoutActivity(allowed);
   if (allowed.length > 1 && resolved === undefined) return;
   const startTime = Date.now();
-  const phasePlan = capturePhasePlanSnapshot(day);
+  const phasePlan = capturePhasePlanSnapshot(day, new Date(startTime).toISOString());
   let sessionId: string | null = null;
   if (typeof (window as any).generateUUID === "function") {
     sessionId = (window as any).generateUUID();
@@ -644,24 +653,7 @@ function updateRing(elapsedSec: number, blocks: PlanBlock) {
   if (labelEl) labelEl.textContent = showElapsed ? "total elapsed" : "total remaining";
 }
 
-function parseHrTargetRange(value: string | null | undefined) {
-  if (!value) return null;
-  const greaterThanCapMatch = value.match(/≥(\d+)\s*\(cap\s*(\d+)\)/);
-  if (greaterThanCapMatch) return { min: parseInt(greaterThanCapMatch[1]), max: parseInt(greaterThanCapMatch[2]) };
-  const greaterThanMatch = value.match(/≥(\d+)/);
-  if (greaterThanMatch) {
-    const target = parseInt(greaterThanMatch[1]);
-    return { min: target, max: 200 };
-  }
-  const rangeMatch = value.match(/(\d+)[–-](\d+)/);
-  if (rangeMatch) return { min: parseInt(rangeMatch[1]), max: parseInt(rangeMatch[2]) };
-  const lessThanMatch = value.match(/<(\d+)/);
-  if (lessThanMatch) return { min: 0, max: parseInt(lessThanMatch[1]) - 1 };
-  const singleMatch = value.match(/(\d+)/);
-  if (!singleMatch) return null;
-  const target = parseInt(singleMatch[1]);
-  return { min: target - 5, max: target + 5 };
-}
+const parseHrTargetRange = parseLegacyHeartRateTarget;
 
 function hrTargetText(
   phaseName: string,

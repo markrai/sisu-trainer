@@ -14,6 +14,7 @@ import { buildVo2ProtocolEvidence, isVo2WorkoutSelector } from "./vo2Protocol.js
 import { assessVo2 } from "./vo2Estimator.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
+import { resolveWorkoutPrescription } from "./workoutPrescription.js";
 // Generate stable UUID (v4-ish)
 function generateUUID() {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
@@ -105,7 +106,7 @@ function validateSummary(summary) {
         console.error("Workout summary validation errors:", errors);
 }
 async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, options) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
     const durationMs = endedAt - startedAt;
     const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
     const MAX_DURATION_MINUTES = 1440;
@@ -148,13 +149,27 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
     const liveBlocks = base ? adjustedBlockLengths(base, null) : null;
     const phasePlan = session.phasePlan;
     const blocks = (_c = phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.blocks) !== null && _c !== void 0 ? _c : liveBlocks;
+    const rawPrescriptionTime = Number((_e = (_d = session.sessionStart) !== null && _d !== void 0 ? _d : session.startTime) !== null && _e !== void 0 ? _e : startedAt);
+    const resolvedPrescription = blocks
+        ? (_f = phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.resolvedPrescription) !== null && _f !== void 0 ? _f : resolveWorkoutPrescription({
+            workoutSelector: day,
+            blocks,
+            hrTargets: phasePlan ? phasePlan.hrTargets : (_g = getHrTargets()[day]) !== null && _g !== void 0 ? _g : null,
+            resolvedAt: Number.isFinite(rawPrescriptionTime) && rawPrescriptionTime > 0
+                ? new Date(rawPrescriptionTime).toISOString()
+                : formatISO8601UTC(startedAt),
+        })
+        : undefined;
+    if (resolvedPrescription)
+        summary.resolved_prescription = resolvedPrescription;
     const activeDurationSec = actualElapsedSeconds(session.startTime, session.paused, session.pausedElapsed, endedAt);
     attachVo2Evidence(summary, buildVo2Evidence({
         day,
         activity: summary.activity,
         intent: summary.intent,
         blocks,
-        hrTargets: phasePlan ? phasePlan.hrTargets : (_d = getHrTargets()[day]) !== null && _d !== void 0 ? _d : null,
+        hrTargets: phasePlan ? phasePlan.hrTargets : (_h = getHrTargets()[day]) !== null && _h !== void 0 ? _h : null,
+        resolvedPrescription,
         activeDurationSec,
         pausedDurationSec: totalPausedDurationSec(session, endedAt),
         earlyCooldownElapsed: session.earlyCooldownElapsed,
@@ -162,14 +177,14 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         hrSamples,
         machineId: summary.machine_id,
         machineProfileVersion: summary.machine_profile_version,
-        machineGuidanceTraceEntryCount: (_e = summary.machine_guidance_trace) === null || _e === void 0 ? void 0 : _e.length,
+        machineGuidanceTraceEntryCount: (_j = summary.machine_guidance_trace) === null || _j === void 0 ? void 0 : _j.length,
         vo2Protocol: session.vo2ProtocolRuntime,
         protocol: session.vo2ProtocolRuntime
             ? buildVo2ProtocolEvidence(session.vo2ProtocolRuntime, session.sessionId || sessionId ? getBikeTelemetrySamples(session.sessionId || sessionId) : [])
             : undefined,
     }));
     if (isVo2WorkoutSelector(day)) {
-        const profile = (_f = options === null || options === void 0 ? void 0 : options.vo2Profile) !== null && _f !== void 0 ? _f : readExplicitVo2ProfileInputs();
+        const profile = (_k = options === null || options === void 0 ? void 0 : options.vo2Profile) !== null && _k !== void 0 ? _k : readExplicitVo2ProfileInputs();
         summary.vo2_assessment = assessVo2(summary.vo2_evidence, profile);
     }
     validateSummary(summary);

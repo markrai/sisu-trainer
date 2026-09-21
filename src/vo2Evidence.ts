@@ -11,11 +11,13 @@ import type {
   WorkoutPhaseKind,
   WorkoutSummary,
   Vo2ProtocolEvidence,
+  ResolvedWorkoutPrescription,
 } from "./types.js";
 import { VO2_EVIDENCE_SCHEMA_VERSION } from "./types.js";
 import type { MachineId } from "./machines/trace.js";
-import { getPhase, hrTargetText, parseHrTargetRange, type GetPhaseOptions } from "./workoutLogic.js";
+import { getPhase, type GetPhaseOptions } from "./workoutLogic.js";
 import type { Vo2ProtocolRuntime } from "./vo2Protocol.js";
+import { findResolvedPhaseTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
 
 export interface Vo2EvidenceBuildInput {
   day?: string;
@@ -23,6 +25,7 @@ export interface Vo2EvidenceBuildInput {
   intent?: string;
   blocks?: PlanBlock | null;
   hrTargets?: HrTargetsForDay | null;
+  resolvedPrescription?: ResolvedWorkoutPrescription | null;
   activeDurationSec: number;
   pausedDurationSec: number;
   earlyCooldownElapsed?: number | null;
@@ -92,30 +95,20 @@ function cooldownMarkers(input: {
 }
 
 function prescriptionFromPlan(
-  day: string,
-  phaseName: "Warm-Up" | "Sustain" | "Cool-Down",
+  phaseId: string,
   elapsedSec: number,
-  blocks: PlanBlock,
-  hrTargets?: HrTargetsForDay | null
+  prescription: ResolvedWorkoutPrescription
 ): Vo2EvidencePhasePrescription | undefined {
-  const targetText = hrTargetText(phaseName, day, elapsedSec, blocks, hrTargets);
-  if (!targetText) return undefined;
-  const bpmText = targetText.replace(/\s*bpm\s*$/i, "").trim();
-  const range = parseHrTargetRange(targetText);
+  const target = findResolvedPhaseTarget(prescription, phaseId, elapsedSec);
+  if (target?.displayTargetHrBpm === undefined) return undefined;
   const prescribed: Vo2EvidencePhasePrescription = {
-    target_hr_bpm: bpmText,
+    target_hr_bpm: target.displayTargetHrBpm,
   };
-  if (range) {
-    prescribed.target_hr_min = range.min;
-    prescribed.target_hr_max = range.max;
+  if (target.expectedHeartRate) {
+    prescribed.target_hr_min = target.expectedHeartRate.min;
+    prescribed.target_hr_max = target.expectedHeartRate.max;
   }
   return prescribed;
-}
-
-function phaseDisplayName(kind: WorkoutPhaseKind): "Warm-Up" | "Sustain" | "Cool-Down" {
-  if (kind === "warmup") return "Warm-Up";
-  if (kind === "cooldown") return "Cool-Down";
-  return "Sustain";
 }
 
 /**
@@ -128,30 +121,35 @@ export function deriveVo2EvidencePhases(input: {
   activeDurationSec: number;
   earlyCooldownElapsed?: number | null;
   hrTargets?: HrTargetsForDay | null;
+  resolvedPrescription?: ResolvedWorkoutPrescription | null;
   vo2Protocol?: Vo2ProtocolRuntime | null;
 }): Vo2EvidencePhase[] {
   const activeDurationSec = Math.max(0, Math.floor(input.activeDurationSec));
   if (activeDurationSec <= 0) return [];
 
   const phases: Vo2EvidencePhase[] = [];
+  const prescription = input.resolvedPrescription ?? resolveWorkoutPrescription({
+    workoutSelector: input.day,
+    blocks: input.blocks,
+    hrTargets: input.hrTargets ?? null,
+    resolvedAt: "historical-evidence-replay",
+  });
   let open: {
     phase_id: string;
     kind: WorkoutPhaseKind;
     detail_name?: string;
     interval_index?: number;
     active_start_sec: number;
+    resolved_detail_name?: string;
   } | null = null;
 
   const closeOpen = (endSec: number) => {
     if (!open) return;
     const end = Math.max(open.active_start_sec, endSec);
-    const display = phaseDisplayName(open.kind);
     const prescribed = prescriptionFromPlan(
-      input.day,
-      display,
+      open.phase_id,
       open.active_start_sec,
-      input.blocks,
-      input.hrTargets
+      prescription
     );
     phases.push({
       phase_id: open.phase_id,
@@ -175,24 +173,32 @@ export function deriveVo2EvidencePhases(input: {
       closeOpen(t);
       break;
     }
+    const resolvedTarget = findResolvedPhaseTarget(prescription, state.phaseId, t);
+    const detailName = resolvedTarget?.detailName ?? state.detailName;
     if (!open) {
       open = {
         phase_id: state.phaseId,
         kind: state.kind,
-        detail_name: state.detailName,
+        detail_name: detailName,
         interval_index: state.intervalIndex,
         active_start_sec: t,
+        resolved_detail_name: resolvedTarget?.detailName,
       };
       continue;
     }
-    if (open.phase_id !== state.phaseId || open.kind !== state.kind) {
+    if (
+      open.phase_id !== state.phaseId ||
+      open.kind !== state.kind ||
+      open.resolved_detail_name !== resolvedTarget?.detailName
+    ) {
       closeOpen(t);
       open = {
         phase_id: state.phaseId,
         kind: state.kind,
-        detail_name: state.detailName,
+        detail_name: detailName,
         interval_index: state.intervalIndex,
         active_start_sec: t,
+        resolved_detail_name: resolvedTarget?.detailName,
       };
     }
   }
@@ -244,6 +250,7 @@ export function buildVo2Evidence(input: Vo2EvidenceBuildInput): Vo2Evidence {
           activeDurationSec,
           earlyCooldownElapsed: input.earlyCooldownElapsed,
           hrTargets: input.hrTargets,
+          resolvedPrescription: input.resolvedPrescription,
           vo2Protocol: input.vo2Protocol,
         })
       : [];

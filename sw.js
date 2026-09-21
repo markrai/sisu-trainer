@@ -7,6 +7,8 @@ const urlsToCache = [
   '/styles.css',
   '/dist/main.js',
   '/dist/workoutData.js',
+  '/dist/workoutTemplate.js',
+  '/dist/workoutPrescription.js',
   '/dist/workoutLogic.js',
   '/dist/workoutStorage.js',
   '/dist/workoutSummary.js',

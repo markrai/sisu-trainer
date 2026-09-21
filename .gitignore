@@ -20,4 +20,5 @@ deploy-upload.bat
 *.xcuserstate
 
 # Documentation (prompts / specs for LLMs; optional to track in repo)
-docs/
+docs/*
+!docs/adaptive-training-architecture-review.md

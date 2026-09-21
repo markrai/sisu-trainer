@@ -15,6 +15,7 @@ import { buildVo2ProtocolEvidence, isVo2WorkoutSelector } from "./vo2Protocol.js
 import { assessVo2, type Vo2ProfileInputs } from "./vo2Estimator.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
+import { resolveWorkoutPrescription } from "./workoutPrescription.js";
 
 // Generate stable UUID (v4-ish)
 function generateUUID(): string {
@@ -173,6 +174,18 @@ async function generateWorkoutSummary(
   const liveBlocks = base ? adjustedBlockLengths(base, null) : null;
   const phasePlan = session.phasePlan;
   const blocks = phasePlan?.blocks ?? liveBlocks;
+  const rawPrescriptionTime = Number(session.sessionStart ?? session.startTime ?? startedAt);
+  const resolvedPrescription = blocks
+    ? phasePlan?.resolvedPrescription ?? resolveWorkoutPrescription({
+        workoutSelector: day,
+        blocks,
+        hrTargets: phasePlan ? phasePlan.hrTargets : getHrTargets()[day] ?? null,
+        resolvedAt: Number.isFinite(rawPrescriptionTime) && rawPrescriptionTime > 0
+          ? new Date(rawPrescriptionTime).toISOString()
+          : formatISO8601UTC(startedAt),
+      })
+    : undefined;
+  if (resolvedPrescription) summary.resolved_prescription = resolvedPrescription;
   const activeDurationSec = actualElapsedSeconds(
     session.startTime,
     session.paused,
@@ -187,6 +200,7 @@ async function generateWorkoutSummary(
       intent: summary.intent,
       blocks,
       hrTargets: phasePlan ? phasePlan.hrTargets : getHrTargets()[day] ?? null,
+      resolvedPrescription,
       activeDurationSec,
       pausedDurationSec: totalPausedDurationSec(session, endedAt),
       earlyCooldownElapsed: session.earlyCooldownElapsed,

@@ -1,5 +1,5 @@
-import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, startWorkout, todayName, hrTargetText, parseHrTargetRange, updateRing, tickVo2ProtocolWithCanonicalHr, requestVo2LimitReached, } from "./workoutLogic.js";
-import { getPlan, getWorkoutMetadata } from "./workoutData.js";
+import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, startWorkout, todayName, updateRing, tickVo2ProtocolWithCanonicalHr, requestVo2LimitReached, } from "./workoutLogic.js";
+import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
 import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
@@ -18,6 +18,7 @@ import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/
 import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
 import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
+import { findResolvedPhaseTarget, formatResolvedHeartRateTarget, machineHeartRateTargetFromResolved, resolveWorkoutPrescription, } from "./workoutPrescription.js";
 let selectedDay = null;
 let liveBpm = null;
 let lastBpmUpdateTime = null;
@@ -26,6 +27,7 @@ let showElapsedInRing = false;
 let pendingVo2Cues = [];
 let heartPulseTargetBpm = null;
 let heartPulseRafId = null;
+let currentExpectedHeartRate = null;
 const HEART_PULSE_SCALE = 1.15;
 function heartPulseLoop() {
     heartPulseRafId = null;
@@ -357,7 +359,7 @@ function promptCancelWorkout() {
     if (phaseDisplayEl.dataset.phaseState === "active")
         openCancelModal();
 }
-function updateHeartColor(liveBpm, hrTargetText) {
+function updateHeartColor(liveBpm, target) {
     const heartIcon = document.getElementById("heartIcon");
     const hrNowEl = document.getElementById("hrNow");
     if (!heartIcon)
@@ -376,19 +378,14 @@ function updateHeartColor(liveBpm, hrTargetText) {
         setHeartWhite();
         return;
     }
-    if (!hrTargetText || hrTargetText === "") {
-        setHeartWhite();
-        return;
-    }
-    const range = parseHrTargetRange(hrTargetText);
-    if (!range) {
+    if (!target) {
         setHeartWhite();
         return;
     }
     let hueRotate = 0;
-    if (liveBpm > range.max)
+    if (target.max !== undefined && liveBpm > target.max)
         hueRotate = 270;
-    else if (liveBpm < range.min)
+    else if (target.min !== undefined && liveBpm < target.min)
         hueRotate = 45;
     setHeartColored(`brightness(0) saturate(100%) invert(27%) sepia(100%) saturate(10000%) hue-rotate(${hueRotate}deg)`);
 }
@@ -407,8 +404,7 @@ function updateHeartPulse(bpmValue) {
         heartIcon.style.setProperty("transform", "scale(1)", "important");
         window.liveBpm = null;
         updateHrDisplay(null);
-        const hrTargetEl = document.getElementById("hrTarget");
-        updateHeartColor(null, hrTargetEl ? hrTargetEl.textContent : "");
+        updateHeartColor(null, currentExpectedHeartRate);
         return;
     }
     const bpm = bpmValue !== undefined && bpmValue !== null ? bpmValue : currentLiveBpm;
@@ -416,9 +412,7 @@ function updateHeartPulse(bpmValue) {
         heartPulseTargetBpm = bpm;
         if (heartPulseRafId === null)
             heartPulseRafId = requestAnimationFrame(heartPulseLoop);
-        const hrTargetEl = document.getElementById("hrTarget");
-        if (hrTargetEl)
-            updateHeartColor(bpm, hrTargetEl.textContent);
+        updateHeartColor(bpm, currentExpectedHeartRate);
     }
     else {
         heartPulseTargetBpm = null;
@@ -426,22 +420,22 @@ function updateHeartPulse(bpmValue) {
             cancelAnimationFrame(heartPulseRafId);
         heartPulseRafId = null;
         heartIcon.style.setProperty("transform", "scale(1)", "important");
-        const hrTargetEl = document.getElementById("hrTarget");
-        updateHeartColor(null, hrTargetEl ? hrTargetEl.textContent : "");
+        updateHeartColor(null, currentExpectedHeartRate);
     }
 }
-function getWarmupSubsectionName(day, elapsedSec) {
-    const hrTargets = typeof window.getHrTargets === "function" ? window.getHrTargets() : {};
-    const dayHrTargets = hrTargets[day];
-    if (!dayHrTargets || !dayHrTargets.warmup_subsections)
-        return null;
-    for (const subsection of dayHrTargets.warmup_subsections) {
-        const startSec = subsection.start_min * 60;
-        const endSec = subsection.end_min * 60;
-        if (elapsedSec >= startSec && elapsedSec < endSec)
-            return subsection.name;
-    }
-    return null;
+function resolvedPrescriptionForSession(day, blocks, session) {
+    var _a, _b, _c;
+    if ((_a = session.phasePlan) === null || _a === void 0 ? void 0 : _a.resolvedPrescription)
+        return session.phasePlan.resolvedPrescription;
+    const rawResolvedAt = Number((_b = session.sessionStart) !== null && _b !== void 0 ? _b : session.startTime);
+    return resolveWorkoutPrescription({
+        workoutSelector: day,
+        blocks,
+        hrTargets: session.phasePlan ? session.phasePlan.hrTargets : (_c = getHrTargets()[day]) !== null && _c !== void 0 ? _c : null,
+        resolvedAt: Number.isFinite(rawResolvedAt) && rawResolvedAt > 0
+            ? new Date(rawResolvedAt).toISOString()
+            : "historical-session",
+    });
 }
 function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime) {
     var _a, _b, _c, _d;
@@ -468,12 +462,16 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
     if (phase.done) {
         return { screen: "completed", day, plan, workoutMetadata, base, blocks, workoutBlocksText, elapsedSec };
     }
+    const prescription = resolvedPrescriptionForSession(day, blocks, session);
+    const resolvedPhaseTarget = isVo2WorkoutSelector(day)
+        ? undefined
+        : findResolvedPhaseTarget(prescription, phase.phaseId, elapsedSec);
     let phaseDisplayName = phase.phase;
     if (isVo2WorkoutSelector(day)) {
         phaseDisplayName = vo2ProtocolDisplayName(phase);
     }
     else if (phase.kind === "warmup") {
-        const subsectionName = getWarmupSubsectionName(day, elapsedSec);
+        const subsectionName = resolvedPhaseTarget === null || resolvedPhaseTarget === void 0 ? void 0 : resolvedPhaseTarget.detailName;
         if (subsectionName)
             phaseDisplayName = "Warm-Up (" + subsectionName + ")";
     }
@@ -483,9 +481,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
     else if (phase.kind === "work" || phase.kind === "recovery") {
         phaseDisplayName = "Workout";
     }
-    const hrTargetTextValue = isVo2WorkoutSelector(day)
-        ? ""
-        : hrTargetText(phase.phase, day, elapsedSec, blocks, session.phasePlan ? session.phasePlan.hrTargets : undefined);
+    const hrTargetTextValue = formatResolvedHeartRateTarget(resolvedPhaseTarget);
     const nowTime = Date.now();
     const liveBpmStale = lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
     return {
@@ -502,6 +498,7 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         activity: (_d = getActiveWorkoutActivity((_c = workoutMetadata[day]) === null || _c === void 0 ? void 0 : _c.activities, getSession(day).activity)) !== null && _d !== void 0 ? _d : null,
         paused,
         hrTargetTextValue,
+        resolvedPhaseTarget,
         liveBpm: liveBpm !== null && liveBpm !== void 0 ? liveBpm : null,
         liveBpmStale,
     };
@@ -612,7 +609,7 @@ function syncBikeBridgeGuidance(update, workoutActive, paused) {
         renderBikeBridgeSettingsStatus();
 }
 function renderWorkout(state) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d, _e;
     const downregEl = document.getElementById("downregulationContainer");
     const workoutMainContent = document.getElementById("workoutMainContent");
     const workoutBlocksEl = document.getElementById("workoutBlocks");
@@ -695,7 +692,8 @@ function renderWorkout(state) {
         if (hrTargetEl)
             hrTargetEl.textContent = "";
         updateHeartPulse(null);
-        updateHeartColor(null, "");
+        currentExpectedHeartRate = null;
+        updateHeartColor(null, null);
         applyPhaseStyle("Rest");
         return;
     }
@@ -723,7 +721,8 @@ function renderWorkout(state) {
         if (hrTargetEl)
             hrTargetEl.textContent = "";
         updateHeartPulse(null);
-        updateHeartColor(null, "");
+        currentExpectedHeartRate = null;
+        updateHeartColor(null, null);
         applyPhaseStyle("idle");
         return;
     }
@@ -758,7 +757,8 @@ function renderWorkout(state) {
         if (hrTargetEl)
             hrTargetEl.textContent = "";
         updateHeartPulse(null);
-        updateHeartColor(null, "");
+        currentExpectedHeartRate = null;
+        updateHeartColor(null, null);
         applyPhaseStyle("completed");
         return;
     }
@@ -802,15 +802,16 @@ function renderWorkout(state) {
     }
     if (hrTargetEl)
         hrTargetEl.textContent = active.hrTargetTextValue;
+    currentExpectedHeartRate = (_b = (_a = active.resolvedPhaseTarget) === null || _a === void 0 ? void 0 : _a.expectedHeartRate) !== null && _b !== void 0 ? _b : null;
     updateHeartPulse();
     if (active.liveBpmStale) {
         updateHrDisplay(null);
     }
     if (active.liveBpm != null && active.liveBpm > 0 && !active.liveBpmStale) {
-        updateHeartColor(active.liveBpm, active.hrTargetTextValue);
+        updateHeartColor(active.liveBpm, currentExpectedHeartRate);
     }
     else {
-        updateHeartColor(null, active.hrTargetTextValue);
+        updateHeartColor(null, currentExpectedHeartRate);
     }
     const session = getSession(active.day);
     const vo2Targets = isVo2WorkoutSelector(active.day)
@@ -819,7 +820,7 @@ function renderWorkout(state) {
     const hold = vo2Targets
         ? { resistance: vo2Targets.holdResistance, cadenceRpm: vo2Targets.holdCadenceRpm }
         : vo2ProtocolHoldForPhase(session.vo2ProtocolRuntime, active.phase.phaseId);
-    const targetRange = vo2Targets ? null : parseHrTargetRange(active.hrTargetTextValue);
+    const machineHeartRateTarget = machineHeartRateTargetFromResolved(active.resolvedPhaseTarget);
     const machineUpdate = session.sessionId && active.activity
         ? updateMachineGuidanceRuntime({
             sessionId: session.sessionId,
@@ -831,10 +832,10 @@ function renderWorkout(state) {
             phaseDurationSeconds: active.phase.phaseDurationSeconds,
             workoutElapsedSeconds: active.elapsedSec,
             intervalIndex: active.phase.intervalIndex,
-            heartRateBpm: (_a = active.liveBpm) !== null && _a !== void 0 ? _a : undefined,
-            targetHeartRateMin: vo2Targets ? vo2Targets.targetHeartRateMin : targetRange === null || targetRange === void 0 ? void 0 : targetRange.min,
-            targetHeartRateMax: vo2Targets ? vo2Targets.targetHeartRateMax : targetRange === null || targetRange === void 0 ? void 0 : targetRange.max,
-            intent: (_b = active.workoutMetadata[active.day]) === null || _b === void 0 ? void 0 : _b.intent,
+            heartRateBpm: (_c = active.liveBpm) !== null && _c !== void 0 ? _c : undefined,
+            targetHeartRateMin: vo2Targets ? vo2Targets.targetHeartRateMin : machineHeartRateTarget.targetHeartRateMin,
+            targetHeartRateMax: vo2Targets ? vo2Targets.targetHeartRateMax : machineHeartRateTarget.targetHeartRateMax,
+            intent: (_d = active.workoutMetadata[active.day]) === null || _d === void 0 ? void 0 : _d.intent,
             holdResistance: hold === null || hold === void 0 ? void 0 : hold.resistance,
             holdCadenceRpm: hold === null || hold === void 0 ? void 0 : hold.cadenceRpm,
         })
@@ -842,7 +843,7 @@ function renderWorkout(state) {
     syncBikeBridgeGuidance(machineUpdate, true, active.paused);
     renderMachineGuidance(machineUpdate);
     if (typeof window.announceWorkoutGuidance === "function") {
-        window.announceWorkoutGuidance(active.phaseDisplayName, (_c = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _c !== void 0 ? _c : null, pendingVo2Cues);
+        window.announceWorkoutGuidance(active.phaseDisplayName, (_e = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _e !== void 0 ? _e : null, pendingVo2Cues);
     }
     else if (typeof window.announcePhaseIfChanged === "function") {
         window.announcePhaseIfChanged(active.phaseDisplayName);
@@ -1744,9 +1745,8 @@ function registerUiGlobals(phaseBoxEl) {
         window.liveBpm = liveBpm;
         window.lastBpmUpdateTime = lastBpmUpdateTime;
         updateHrDisplay(bpm);
-        const hrTargetEl = document.getElementById("hrTarget");
         updateHeartPulse(bpm);
-        updateHeartColor(bpm, hrTargetEl ? hrTargetEl.textContent : "");
+        updateHeartColor(bpm, currentExpectedHeartRate);
         const day = getSelectedDay();
         const session = getSession(day);
         void persistWorkoutRelativeHr(session, bpm);

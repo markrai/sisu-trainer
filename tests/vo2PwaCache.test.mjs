@@ -11,6 +11,8 @@ const REQUIRED_VO2_RUNTIME_MODULES = [
   "/dist/bikeTelemetryTrace.js",
   "/dist/workoutLifecycle.js",
   "/dist/types.js",
+  "/dist/workoutTemplate.js",
+  "/dist/workoutPrescription.js",
 ];
 
 test("service worker precache includes VO2 runtime modules", async () => {

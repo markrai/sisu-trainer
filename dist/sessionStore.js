@@ -1,5 +1,6 @@
 import { isActivity } from "./workoutActivity.js";
 import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime } from "./vo2Protocol.js";
+import { parsePersistedHrTargetsForDay, parseResolvedWorkoutPrescription, persistedHrTargetsFitBlocks, } from "./workoutPrescription.js";
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
@@ -44,7 +45,7 @@ function parseOptionalWallMs(raw) {
     return Number.isFinite(value) && value > 0 ? value : null;
 }
 function parsePhasePlan(raw) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     if (raw == null || raw === "")
         return null;
     try {
@@ -54,9 +55,17 @@ function parsePhasePlan(raw) {
         const cool = Number((_c = parsed === null || parsed === void 0 ? void 0 : parsed.blocks) === null || _c === void 0 ? void 0 : _c.cool);
         if (![warm, sustain, cool].every((n) => Number.isFinite(n) && n >= 0))
             return null;
+        const blocks = { warm, sustain, cool };
+        const parsedHrTargets = (parsed === null || parsed === void 0 ? void 0 : parsed.hrTargets) == null
+            ? null
+            : parsePersistedHrTargetsForDay(parsed.hrTargets);
+        const hrTargets = parsedHrTargets && persistedHrTargetsFitBlocks(parsedHrTargets, blocks)
+            ? parsedHrTargets
+            : null;
         return {
-            blocks: { warm, sustain, cool },
-            hrTargets: (parsed === null || parsed === void 0 ? void 0 : parsed.hrTargets) && typeof parsed.hrTargets === "object" ? parsed.hrTargets : null,
+            blocks,
+            hrTargets,
+            resolvedPrescription: (_d = parseResolvedWorkoutPrescription(parsed === null || parsed === void 0 ? void 0 : parsed.resolvedPrescription)) !== null && _d !== void 0 ? _d : undefined,
         };
     }
     catch {
@@ -133,6 +142,7 @@ export function startSession(day, startTime, sessionId, activity, storage, phase
         store.setItem(phasePlanKey(day), JSON.stringify({
             blocks: phasePlan.blocks,
             hrTargets: (_a = phasePlan.hrTargets) !== null && _a !== void 0 ? _a : null,
+            resolvedPrescription: phasePlan.resolvedPrescription,
         }));
     }
 }

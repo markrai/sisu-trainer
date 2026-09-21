@@ -2,19 +2,16 @@ import { Activity, DayName, HrTargetsByDay, MetadataByDay, Plan, WorkoutPhaseKin
 import { todayName } from "./utils/dateTime.js";
 import { isActivity } from "./workoutActivity.js";
 import { VO2_WORKOUT_SELECTOR_ID, vo2PlanBlocks, vo2WorkoutMetadata } from "./vo2Protocol.js";
+import {
+  parseWorkoutDuration,
+  parseWorkoutTemplateDocument,
+  type WorkoutTemplate,
+  type WorkoutTemplateDocument,
+} from "./workoutTemplate.js";
 
 let plan: Plan = {};
 let workoutMetadata: MetadataByDay = {};
 let hrTargets: HrTargetsByDay = {};
-
-function parseDuration(duration: any): number {
-  if (typeof duration === "number") return duration;
-  if (typeof duration === "string") {
-    const match = duration.match(/^(\d+)/);
-    if (match) return parseInt(match[1]);
-  }
-  return 0;
-}
 
 function isWorkoutPhaseKind(value: unknown): value is WorkoutPhaseKind {
   return value === "warmup" || value === "work" || value === "recovery" || value === "cooldown";
@@ -25,27 +22,29 @@ function parseActivities(activities: unknown): Activity[] {
   return activities.filter(isActivity);
 }
 
-function getSelectedVariant(day: string, variants: any[]) {
+function getSelectedVariant(variants: WorkoutTemplate[], now = Date.now()) {
   if (!variants || !Array.isArray(variants) || variants.length === 0) return null;
   const epoch = new Date("2024-01-01").getTime();
-  const now = Date.now();
   const msPerWeek = 7 * 24 * 60 * 60 * 1000;
   const weekNumber = Math.floor((now - epoch) / msPerWeek);
   const variantIndex = weekNumber % variants.length;
   return variants[variantIndex];
 }
 
-function processWorkout(workout: any, transformed: Plan) {
+function processWorkout(workout: WorkoutTemplate & { day: string }, transformed: Plan) {
   if (!workout || !workout.day) return;
 
-  const warm = parseDuration(workout.warmup?.duration_min || 0);
-  const cool = parseDuration(workout.cooldown?.duration_min || 0);
+  const warm = parseWorkoutDuration(workout.warmup?.duration_min);
+  const cool = parseWorkoutDuration(workout.cooldown?.duration_min);
 
   hrTargets[workout.day] = {
     warmup: workout.warmup?.target_hr_bpm || "",
+    warmup_intensity_id: workout.warmup?.intensity_id,
     warmup_subsections: workout.warmup?.subsections || null,
     cooldown: workout.cooldown?.target_hr_bpm || "",
+    cooldown_intensity_id: workout.cooldown?.intensity_id,
     main_set: workout.main_set?.target_hr_bpm || "",
+    main_set_intensity_id: workout.main_set?.intensity_id,
     main_set_kind: isWorkoutPhaseKind(workout.main_set?.phase_kind) ? workout.main_set.phase_kind : "work",
     intervals: null,
   };
@@ -53,21 +52,22 @@ function processWorkout(workout: any, transformed: Plan) {
   let sustain = 0;
   if (workout.main_set) {
     if (workout.main_set.duration_min) {
-      sustain = parseDuration(workout.main_set.duration_min);
+      sustain = parseWorkoutDuration(workout.main_set.duration_min);
     } else if (workout.main_set.intervals && Array.isArray(workout.main_set.intervals)) {
       const intervals = workout.main_set.intervals;
       const isSequence = workout.main_set.is_sequence === true;
       let totalDuration = 0;
       const intervalPhases: any[] = [];
-      intervals.forEach((interval: any) => {
+      intervals.forEach((interval) => {
         let intervalDuration = 0;
-        if (interval.duration_min) intervalDuration = parseDuration(interval.duration_min);
+        if (interval.duration_min) intervalDuration = parseWorkoutDuration(interval.duration_min);
         totalDuration += intervalDuration;
         intervalPhases.push({
           phase: interval.phase,
           kind: isWorkoutPhaseKind(interval.kind) ? interval.kind : "work",
           duration: intervalDuration,
           target_hr_bpm: interval.target_hr_bpm || "",
+          intensity_id: interval.intensity_id,
         });
       });
       if (isSequence) {
@@ -93,16 +93,16 @@ function processWorkout(workout: any, transformed: Plan) {
   }
 }
 
-function transformWorkoutData(workoutData: any): Plan {
+function transformWorkoutData(workoutData: WorkoutTemplateDocument, now = Date.now()): Plan {
   const transformed: Plan = {};
   if (!workoutData || !workoutData.weekly_plan) {
     console.error("Invalid workout data structure");
     return transformed;
   }
-  workoutData.weekly_plan.forEach((workout: any) => {
+  workoutData.weekly_plan.forEach((workout) => {
     if (!workout || !workout.day) return;
     if (workout.variants && Array.isArray(workout.variants) && workout.variants.length > 0) {
-      const selectedVariant = getSelectedVariant(workout.day, workout.variants);
+      const selectedVariant = getSelectedVariant(workout.variants, now);
       if (selectedVariant) {
         const variantWorkout = { ...selectedVariant, day: workout.day };
         processWorkout(variantWorkout, transformed);
@@ -111,6 +111,7 @@ function transformWorkoutData(workoutData: any): Plan {
       processWorkout(workout, transformed);
     }
   });
+  plan = transformed;
   return transformed;
 }
 
@@ -120,7 +121,7 @@ async function initializeWorkoutPlan() {
   try {
     const response = await fetch("data.json");
     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const workoutData = await response.json();
+    const workoutData = parseWorkoutTemplateDocument(await response.json());
     plan = transformWorkoutData(workoutData);
   } catch (error) {
     console.error("Failed to load workout data from data.json:", error);
@@ -153,4 +154,12 @@ export function registerWorkoutDataGlobals() {
   (window as any).getHrTargets = getHrTargets;
 }
 
-export { initializeWorkoutPlan, getPlan, getWorkoutMetadata, getHrTargets, installStandaloneVo2Workout };
+export {
+  initializeWorkoutPlan,
+  getPlan,
+  getWorkoutMetadata,
+  getHrTargets,
+  installStandaloneVo2Workout,
+  getSelectedVariant,
+  transformWorkoutData,
+};

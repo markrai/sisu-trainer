@@ -1,5 +1,6 @@
 import { VO2_EVIDENCE_SCHEMA_VERSION } from "./types.js";
-import { getPhase, hrTargetText, parseHrTargetRange } from "./workoutLogic.js";
+import { getPhase } from "./workoutLogic.js";
+import { findResolvedPhaseTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
 function naturalWorkEndSec(blocks) {
     return (blocks.warm + blocks.sustain) * 60;
 }
@@ -40,44 +41,41 @@ function cooldownMarkers(input) {
         early_cooldown: false,
     };
 }
-function prescriptionFromPlan(day, phaseName, elapsedSec, blocks, hrTargets) {
-    const targetText = hrTargetText(phaseName, day, elapsedSec, blocks, hrTargets);
-    if (!targetText)
+function prescriptionFromPlan(phaseId, elapsedSec, prescription) {
+    const target = findResolvedPhaseTarget(prescription, phaseId, elapsedSec);
+    if ((target === null || target === void 0 ? void 0 : target.displayTargetHrBpm) === undefined)
         return undefined;
-    const bpmText = targetText.replace(/\s*bpm\s*$/i, "").trim();
-    const range = parseHrTargetRange(targetText);
     const prescribed = {
-        target_hr_bpm: bpmText,
+        target_hr_bpm: target.displayTargetHrBpm,
     };
-    if (range) {
-        prescribed.target_hr_min = range.min;
-        prescribed.target_hr_max = range.max;
+    if (target.expectedHeartRate) {
+        prescribed.target_hr_min = target.expectedHeartRate.min;
+        prescribed.target_hr_max = target.expectedHeartRate.max;
     }
     return prescribed;
-}
-function phaseDisplayName(kind) {
-    if (kind === "warmup")
-        return "Warm-Up";
-    if (kind === "cooldown")
-        return "Cool-Down";
-    return "Sustain";
 }
 /**
  * Walk the authoritative active clock and record contiguous phase segments.
  * Adjacent transitions share the same active second as end/start.
  */
 export function deriveVo2EvidencePhases(input) {
+    var _a, _b, _c;
     const activeDurationSec = Math.max(0, Math.floor(input.activeDurationSec));
     if (activeDurationSec <= 0)
         return [];
     const phases = [];
+    const prescription = (_a = input.resolvedPrescription) !== null && _a !== void 0 ? _a : resolveWorkoutPrescription({
+        workoutSelector: input.day,
+        blocks: input.blocks,
+        hrTargets: (_b = input.hrTargets) !== null && _b !== void 0 ? _b : null,
+        resolvedAt: "historical-evidence-replay",
+    });
     let open = null;
     const closeOpen = (endSec) => {
         if (!open)
             return;
         const end = Math.max(open.active_start_sec, endSec);
-        const display = phaseDisplayName(open.kind);
-        const prescribed = prescriptionFromPlan(input.day, display, open.active_start_sec, input.blocks, input.hrTargets);
+        const prescribed = prescriptionFromPlan(open.phase_id, open.active_start_sec, prescription);
         phases.push({
             phase_id: open.phase_id,
             kind: open.kind,
@@ -99,24 +97,30 @@ export function deriveVo2EvidencePhases(input) {
             closeOpen(t);
             break;
         }
+        const resolvedTarget = findResolvedPhaseTarget(prescription, state.phaseId, t);
+        const detailName = (_c = resolvedTarget === null || resolvedTarget === void 0 ? void 0 : resolvedTarget.detailName) !== null && _c !== void 0 ? _c : state.detailName;
         if (!open) {
             open = {
                 phase_id: state.phaseId,
                 kind: state.kind,
-                detail_name: state.detailName,
+                detail_name: detailName,
                 interval_index: state.intervalIndex,
                 active_start_sec: t,
+                resolved_detail_name: resolvedTarget === null || resolvedTarget === void 0 ? void 0 : resolvedTarget.detailName,
             };
             continue;
         }
-        if (open.phase_id !== state.phaseId || open.kind !== state.kind) {
+        if (open.phase_id !== state.phaseId ||
+            open.kind !== state.kind ||
+            open.resolved_detail_name !== (resolvedTarget === null || resolvedTarget === void 0 ? void 0 : resolvedTarget.detailName)) {
             closeOpen(t);
             open = {
                 phase_id: state.phaseId,
                 kind: state.kind,
-                detail_name: state.detailName,
+                detail_name: detailName,
                 interval_index: state.intervalIndex,
                 active_start_sec: t,
+                resolved_detail_name: resolvedTarget === null || resolvedTarget === void 0 ? void 0 : resolvedTarget.detailName,
             };
         }
     }
@@ -164,6 +168,7 @@ export function buildVo2Evidence(input) {
             activeDurationSec,
             earlyCooldownElapsed: input.earlyCooldownElapsed,
             hrTargets: input.hrTargets,
+            resolvedPrescription: input.resolvedPrescription,
             vo2Protocol: input.vo2Protocol,
         })
         : [];

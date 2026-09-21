@@ -350,6 +350,9 @@ test("finalization attaches assessment and survives HR cleanup", async () => {
     vo2Profile: profile40_80,
   });
   assert.ok(summary.vo2_assessment);
+  assert.ok(summary.resolved_prescription);
+  assert.equal(summary.resolved_prescription.workoutSelector, VO2_WORKOUT_SELECTOR_ID);
+  assert.ok(summary.resolved_prescription.phases.every((phase) => phase.expectedHeartRate === undefined));
   assert.equal(summary.vo2_assessment.status, "estimated");
   assert.equal(summary.vo2_assessment.accepted_stage_count, 3);
   assert.equal(summary.vo2_assessment.fit_quality, "high");
@@ -373,6 +376,7 @@ test("finalization attaches assessment and survives HR cleanup", async () => {
   const payload = buildSisuWorkoutPayload(loaded.summary);
   assert.equal(payload.vo2_evidence, undefined);
   assert.equal(payload.vo2_assessment, undefined);
+  assert.equal(payload.resolved_prescription, undefined);
   assert.ok(loaded.summary.vo2_assessment);
   await resetWorkoutStorageForTests();
 });

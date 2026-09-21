@@ -20,6 +20,59 @@ export type Activity = "bike" | "elliptical" | "strength";
 
 export type WorkoutPhaseKind = "warmup" | "work" | "recovery" | "cooldown";
 
+export type PhaseIntensityId =
+  | "warmup_easy"
+  | "aerobic_base"
+  | "threshold"
+  | "vo2_short"
+  | "vo2_long"
+  | "recovery"
+  | "cooldown"
+  | "strength_support";
+
+export const WORKOUT_PRESCRIPTION_SCHEMA_VERSION = 1 as const;
+/** Permanent identity for the Phase A resolver; keep readable after newer resolvers ship. */
+export const LEGACY_HR_TARGET_RESOLVER_ID = "legacy-hr-target-resolver" as const;
+export const LEGACY_HR_TARGET_RESOLVER_VERSION = 1 as const;
+/** Resolver used for new resolutions in this build. */
+export const WORKOUT_PRESCRIPTION_RESOLVER_ID = LEGACY_HR_TARGET_RESOLVER_ID;
+export const WORKOUT_PRESCRIPTION_RESOLVER_VERSION = LEGACY_HR_TARGET_RESOLVER_VERSION;
+
+export interface ResolvedHeartRateTarget {
+  min?: number;
+  max?: number;
+}
+
+export type ResolvedTargetQuality = "unverified" | "low" | "moderate" | "high";
+
+export interface ResolvedWorkoutPhaseTarget {
+  phaseId: string;
+  kind: WorkoutPhaseKind;
+  intensityId?: PhaseIntensityId;
+  detailName?: string;
+  intervalIndex?: number;
+  activeStartSec?: number;
+  activeEndSec?: number;
+  expectedHeartRate?: ResolvedHeartRateTarget;
+  /** Original plan value, retained only so current UI wording remains exact. */
+  displayTargetHrBpm?: string | number;
+  source: "legacy_fallback" | "no_numeric_target";
+  quality: ResolvedTargetQuality;
+  explanationCode: "legacy_target_hr_bpm" | "no_numeric_target";
+}
+
+export interface ResolvedWorkoutPrescription {
+  schemaVersion: typeof WORKOUT_PRESCRIPTION_SCHEMA_VERSION;
+  resolver: {
+    /** Data, not the currently compiled resolver literal; historical identities remain representable. */
+    id: string;
+    version: number;
+  };
+  workoutSelector: string;
+  resolvedAt: string;
+  phases: ResolvedWorkoutPhaseTarget[];
+}
+
 export interface WorkoutPhaseState {
   phase: "Warm-Up" | "Sustain" | "Cool-Down" | "Completed";
   kind: WorkoutPhaseKind | "completed";
@@ -43,6 +96,7 @@ export interface HrIntervalPhase {
   kind: WorkoutPhaseKind;
   duration: number;
   target_hr_bpm?: string | number;
+  intensity_id?: PhaseIntensityId;
 }
 
 export interface HrIntervalTargets {
@@ -53,14 +107,18 @@ export interface HrIntervalTargets {
 
 export interface HrTargetsForDay {
   warmup?: string | number;
+  warmup_intensity_id?: PhaseIntensityId;
   warmup_subsections?: Array<{
     name: string;
     start_min: number;
     end_min: number;
     target_hr_bpm: string | number;
+    intensity_id?: PhaseIntensityId;
   }>;
   cooldown?: string | number;
+  cooldown_intensity_id?: PhaseIntensityId;
   main_set?: string | number;
+  main_set_intensity_id?: PhaseIntensityId;
   main_set_kind?: WorkoutPhaseKind;
   intervals: HrIntervalTargets | null;
 }
@@ -333,6 +391,8 @@ export interface WorkoutSummary {
   machine_profile_version?: number;
   machine_guidance_trace?: MachineGuidanceTraceEntry[];
   machine_decision_audit?: MachineDecisionAuditEntry[];
+  /** Frozen prescription provenance used by this workout. Absent on historical summaries. */
+  resolved_prescription?: ResolvedWorkoutPrescription;
   /**
    * Pause-safe stage-aware physiological evidence for the VO2 estimator.
    * Absent on historical workouts that predate this format.
