@@ -15,14 +15,8 @@ import { assessVo2 } from "./vo2Estimator.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
 import { resolveWorkoutPrescription } from "./workoutPrescription.js";
-// Generate stable UUID (v4-ish)
-function generateUUID() {
-    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-        const r = (Math.random() * 16) | 0;
-        const v = c === "x" ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-    });
-}
+import { promoteVo2SummaryToStoredFitnessState } from "./fitnessState.js";
+import { generateUUID } from "./utils/uuid.js";
 export function buildHrTrace(hrSamples) {
     if (!hrSamples || hrSamples.length === 0) {
         return { sampling_interval_seconds: 60, samples: [] };
@@ -143,6 +137,11 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
     };
     applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
     const session = getSession(day);
+    if (session.athleteId)
+        summary.athlete_id = session.athleteId;
+    if (session.athleteFitnessSnapshot) {
+        summary.athlete_fitness_snapshot = { ...session.athleteFitnessSnapshot };
+    }
     const allowed = (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.activities) !== null && _b !== void 0 ? _b : [];
     applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, session.activity));
     const base = getPlan()[day];
@@ -201,7 +200,15 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
     return summary;
 }
 async function emitWorkoutSummary(summary) {
-    await storeWorkoutSummary(summary);
+    const saved = await storeWorkoutSummary(summary);
+    if (saved) {
+        try {
+            promoteVo2SummaryToStoredFitnessState(summary);
+        }
+        catch (error) {
+            console.error("Error promoting VO2 assessment to fitness state:", error);
+        }
+    }
     await learnFromCompletedWorkout(summary);
     await learnShadowPredictionsFromCompletedWorkout(summary);
     await learnHrDynamicsFromCompletedWorkout(summary);

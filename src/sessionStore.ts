@@ -1,6 +1,13 @@
-import type { Activity, HrTargetsForDay, PlanBlock, ResolvedWorkoutPrescription } from "./types.js";
+import type {
+  Activity,
+  AthleteFitnessSnapshot,
+  HrTargetsForDay,
+  PlanBlock,
+  ResolvedWorkoutPrescription,
+} from "./types.js";
 import { isActivity } from "./workoutActivity.js";
 import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime, type Vo2ProtocolRuntime } from "./vo2Protocol.js";
+import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import {
   parsePersistedHrTargetsForDay,
   parseResolvedWorkoutPrescription,
@@ -36,6 +43,10 @@ export interface SessionData {
   pauseWallStart: number | null;
   earlyCooldownElapsed: number | null;
   activity?: Activity;
+  /** Stable owner for new sessions. Absent on legacy sessions. */
+  athleteId?: string;
+  /** Future resolver input pointer; Phase A does not consume it. */
+  athleteFitnessSnapshot?: AthleteFitnessSnapshot;
   /** Blocks + HR targets frozen at workout start for phase evidence replay. */
   phasePlan: PhasePlanSnapshot | null;
   vo2ProtocolRuntime: Vo2ProtocolRuntime | null;
@@ -63,6 +74,14 @@ function pauseWallStartKey(day: string): string {
 
 function phasePlanKey(day: string): string {
   return "phase_plan_" + day;
+}
+
+function athleteIdKey(day: string): string {
+  return "athlete_id_" + day;
+}
+
+function athleteFitnessSnapshotKey(day: string): string {
+  return "athlete_fitness_snapshot_" + day;
 }
 
 function vo2ProtocolRuntimeKey(day: string): string {
@@ -116,6 +135,15 @@ function parsePhasePlan(raw: string | null): PhasePlanSnapshot | null {
   }
 }
 
+function parseStoredAthleteFitnessSnapshot(raw: string | null): AthleteFitnessSnapshot | undefined {
+  if (!raw) return undefined;
+  try {
+    return parseAthleteFitnessSnapshot(JSON.parse(raw)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Total paused seconds including an open pause through `now`. */
 export function totalPausedDurationSec(
   session: Pick<SessionData, "paused" | "pausedDurationSec" | "pauseWallStart">,
@@ -140,6 +168,13 @@ export function setEarlyCooldownElapsed(day: string, elapsedSec: number, storage
 
 export function getSession(day: string, storage?: SessionStorage): SessionData {
   const store = storageOrBrowser(storage);
+  const athleteFitnessSnapshot = parseStoredAthleteFitnessSnapshot(
+    store.getItem(athleteFitnessSnapshotKey(day))
+  );
+  const storedAthleteId = store.getItem(athleteIdKey(day));
+  const athleteId = athleteFitnessSnapshot && storedAthleteId === athleteFitnessSnapshot.athleteId
+    ? storedAthleteId
+    : undefined;
   return {
     startTime: store.getItem("start_" + day),
     sessionId: store.getItem("session_id_" + day),
@@ -151,6 +186,8 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
     pauseWallStart: parseOptionalWallMs(store.getItem(pauseWallStartKey(day))),
     earlyCooldownElapsed: parseEarlyCooldownElapsed(store.getItem(earlyCooldownKey(day))),
     activity: parseStoredActivity(store.getItem("activity_" + day)),
+    athleteId,
+    athleteFitnessSnapshot: athleteId ? athleteFitnessSnapshot : undefined,
     phasePlan: parsePhasePlan(store.getItem(phasePlanKey(day))),
     vo2ProtocolRuntime: parseVo2ProtocolRuntime(
       (() => {
@@ -181,6 +218,8 @@ export function startSession(
   store.removeItem("paused_" + day);
   store.removeItem("paused_elapsed_" + day);
   store.removeItem(phasePlanKey(day));
+  store.removeItem(athleteIdKey(day));
+  store.removeItem(athleteFitnessSnapshotKey(day));
   store.removeItem(legacyVo2ProtocolPlanKey(day));
   store.removeItem(vo2ProtocolRuntimeKey(day));
   store.setItem("start_" + day, String(startTime));
@@ -191,6 +230,9 @@ export function startSession(
   }
   if (activity) store.setItem("activity_" + day, activity);
   else store.removeItem("activity_" + day);
+  const athleteFitnessSnapshot = captureAthleteFitnessSnapshot(store);
+  store.setItem(athleteIdKey(day), athleteFitnessSnapshot.athleteId);
+  store.setItem(athleteFitnessSnapshotKey(day), JSON.stringify(athleteFitnessSnapshot));
   if (phasePlan?.blocks) {
     store.setItem(
       phasePlanKey(day),
@@ -246,6 +288,8 @@ export function clearSession(day: string, storage?: SessionStorage): void {
   store.removeItem(earlyCooldownKey(day));
   store.removeItem("activity_" + day);
   store.removeItem(phasePlanKey(day));
+  store.removeItem(athleteIdKey(day));
+  store.removeItem(athleteFitnessSnapshotKey(day));
   store.removeItem(legacyVo2ProtocolPlanKey(day));
   store.removeItem(vo2ProtocolRuntimeKey(day));
 }

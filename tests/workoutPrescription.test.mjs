@@ -304,6 +304,22 @@ test("Friday warm-up subsections and variants resolve from frozen structured dat
   assert.equal(findResolvedPhaseTarget(resumed.phasePlan.resolvedPrescription, "warmup", 60).detailName, "Very Easy");
 });
 
+test("Phase B athlete capture leaves the Phase A legacy prescription byte-for-byte unchanged", () => {
+  const document = parseWorkoutTemplateDocument(rawData);
+  transformWorkoutData(document, new Date("2024-01-01T12:00:00Z").getTime());
+  const before = capturePhasePlanSnapshot("Monday", "2026-09-21T12:00:00.000Z");
+  const storage = memoryStorage({
+    profile: JSON.stringify({ age: 40, weight: 176.37, height: 70, sex: "female", vo2: 55 }),
+  });
+  startSession("Monday", 1_758_456_000_000, "phase-b-parity", "bike", storage, before);
+  const restored = getSession("Monday", storage);
+  assert.equal(typeof restored.athleteId, "string");
+  assert.equal(restored.athleteFitnessSnapshot.athleteId, restored.athleteId);
+  assert.deepEqual(restored.phasePlan.resolvedPrescription, before.resolvedPrescription);
+  assert.equal(restored.phasePlan.resolvedPrescription.resolver.id, "legacy-hr-target-resolver");
+  assert.equal(restored.phasePlan.resolvedPrescription.resolver.version, 1);
+});
+
 test("resolved prescription survives session serialization and old snapshots remain readable", () => {
   const document = parseWorkoutTemplateDocument(rawData);
   transformWorkoutData(document, new Date("2024-01-01T12:00:00Z").getTime());

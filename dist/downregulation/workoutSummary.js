@@ -5,6 +5,7 @@ import { getHrSamples } from "../workoutStorage.js";
 import { calculateZoneMinutes, determinePrimaryZone } from "../zoneCalculator.js";
 import { buildHrTrace, determineStressProfile } from "../workoutSummary.js";
 import { formatISO8601UTC } from "../utils/dateTime.js";
+import { captureAthleteFitnessSnapshot } from "../fitnessState.js";
 const MAX_DURATION_MINUTES = 1440;
 const DOWNREGULATION_DAY = "Downregulation";
 const DOWNREGULATION_INTENT = "physiological_downregulation";
@@ -45,6 +46,9 @@ export async function generateDownregulationSummary(sessionId, startedAt, endedA
         day: DOWNREGULATION_DAY,
         cancelled: false,
     };
+    const athleteFitnessSnapshot = captureAthleteFitnessSnapshot();
+    summary.athlete_id = athleteFitnessSnapshot.athleteId;
+    summary.athlete_fitness_snapshot = athleteFitnessSnapshot;
     // Align zone sum with duration_minutes if needed (e.g. rounding)
     const zoneSum = summary.zone_minutes.z1 +
         summary.zone_minutes.z2 +

@@ -316,6 +316,8 @@ test("historical workouts without vo2_evidence still deserialize from workout st
   const loaded = loadedRows.find((row) => row.summary?.external_session_id === "old-idb");
   assert.ok(loaded);
   assert.equal(loaded.summary.vo2_evidence, undefined);
+  assert.equal(loaded.summary.athlete_id, undefined);
+  assert.equal(loaded.summary.athlete_fitness_snapshot, undefined);
   assert.equal(Object.prototype.hasOwnProperty.call(loaded.summary, "vo2_evidence"), false);
   await resetWorkoutStorageForTests();
 });

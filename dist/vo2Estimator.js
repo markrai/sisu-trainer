@@ -1,7 +1,10 @@
 import { VO2_ASSESSMENT_SCHEMA_VERSION, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
-/** Versioned submaximal cycle-ergometer estimator. Bound to protocol id AND version. */
-export const VO2_ESTIMATOR_ID = "bike-submax-linear-hr-workload";
-export const VO2_ESTIMATOR_VERSION = 1;
+/** Permanent historical identity for the v1 submaximal cycle-ergometer estimator; keep readable after newer estimators ship. */
+export const LEGACY_VO2_ESTIMATOR_ID = "bike-submax-linear-hr-workload";
+export const LEGACY_VO2_ESTIMATOR_VERSION = 1;
+/** Estimator used for new formal assessments in this build. */
+export const VO2_ESTIMATOR_ID = LEGACY_VO2_ESTIMATOR_ID;
+export const VO2_ESTIMATOR_VERSION = LEGACY_VO2_ESTIMATOR_VERSION;
 /** Estimator v1 consumes only protocol `bike-submax-70rpm` version 1. */
 export const VO2_ESTIMATOR_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION;
 /** Minimum accepted steady-state stages required to estimate. Matches protocol target. */

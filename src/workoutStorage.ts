@@ -82,7 +82,7 @@ async function getHrSamples(sessionId: string): Promise<HrSample[]> {
   }
 }
 
-async function storeWorkoutSummary(summary: WorkoutSummary) {
+async function storeWorkoutSummary(summary: WorkoutSummary): Promise<boolean> {
   try {
     const database = await initDB();
     const tx = database.transaction([STORE_WORKOUTS], "readwrite");
@@ -100,8 +100,10 @@ async function storeWorkoutSummary(summary: WorkoutSummary) {
       tx.onerror = () => reject(tx.error);
       tx.onabort = () => reject(tx.error || new Error("workout summary write aborted"));
     });
+    return true;
   } catch (error) {
     console.error("Error storing workout summary:", error);
+    return false;
   }
 }
 

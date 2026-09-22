@@ -16,6 +16,8 @@ const urlsToCache = [
   '/dist/sessionStore.js',
   '/dist/zoneCalculator.js',
   '/dist/profile.js',
+  '/dist/fitnessState.js',
+  '/dist/utils/uuid.js',
   '/dist/voice.js',
   '/dist/uiControls.js',
   '/dist/sisuSync.js',

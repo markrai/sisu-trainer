@@ -10,21 +10,25 @@ The recommended direction is evolutionary:
 
 1. Keep `data.json` as the workout-template source and preserve workout `intent`, activity, phase kind, duration, interval structure, pause-safe timing, and the machine-adapter boundary.
 2. Build on the now-implemented relative phase intensity and frozen, versioned `ResolvedWorkoutPrescription` seam; keep its historical resolver formats readable as newer resolvers ship.
-3. Next add a small internal athlete/fitness model and qualified VO₂ calibration promotion. Do not add multi-profile UI or a readiness score yet.
+3. Build on the now-implemented internal athlete/fitness model and qualified VO₂ calibration promotion; next capture normalized ordinary-workout response without adding multi-profile UI or a readiness score.
 4. Treat workload as the primary prescription for hard bike intervals when reliable watts/calibration exists; treat HR as expected response and a bounded guardrail. Continue to use HR more directly for longer steady work where lag is less problematic.
 5. Normalize post-workout response metrics and use repeated, quality-qualified observations to update state conservatively. Reuse the existing machine learning/dynamics stores rather than creating a competing controller.
 
 The largest technical risks are:
 
 - ordinary workouts do **not** retain observed watts, cadence, or resistance; those samples are captured only during the VO₂ assessment and are deleted after finalization;
-- the app has no resting HR, observed HRmax, persisted HRV baseline, or authoritative latest fitness state;
+- the app has no resting HR, observed HRmax, or persisted HRV baseline, and its authoritative fitness state currently comes only from qualified formal VO₂ assessments;
 - existing automatic resistance control can act on fixed BPM targets, so changing target generation changes a real controller, not just display text;
 - machine learning is device-global and keyed by machine/intent/duration, not by athlete, which is unsafe for future shared-device profiles;
 - several confidence concepts exist, but they are specific to separate subsystems rather than a unified provenance model.
 
 ### Implementation status (Phase A)
 
-Phase A has now been implemented as a behavior-preserving prescription seam. `data.json` retains every legacy `target_hr_bpm` value and adds semantic `intensity_id` values. `src/workoutTemplate.ts` validates the active template, while `src/workoutPrescription.ts` resolves the legacy values once into a versioned `ResolvedWorkoutPrescription`. `beginWorkout` freezes that result inside the existing `PhasePlanSnapshot`; the workout UI, heart-zone coloring, machine-guidance input, VO₂ evidence, and workout summary consume the same structured phase target. Historical session snapshots without the new field remain readable and are resolved only from strictly sanitized frozen legacy inputs. If both persisted representations are invalid, restoration supplies no HR target and does not fall back to the current live plan. This phase does **not** personalize or otherwise change any BPM range, does not add athlete/fitness state, and does not change the standalone VO₂ protocol. The next phase should introduce athlete/fitness state and promote qualified VO₂ calibration outputs into it; the subsequent recommendations in this review remain the proposed path beyond this seam.
+Phase A has now been implemented as a behavior-preserving prescription seam. `data.json` retains every legacy `target_hr_bpm` value and adds semantic `intensity_id` values. `src/workoutTemplate.ts` validates the active template, while `src/workoutPrescription.ts` resolves the legacy values once into a versioned `ResolvedWorkoutPrescription`. `beginWorkout` freezes that result inside the existing `PhasePlanSnapshot`; the workout UI, heart-zone coloring, machine-guidance input, VO₂ evidence, and workout summary consume the same structured phase target. Historical session snapshots without the new field remain readable and are resolved only from strictly sanitized frozen legacy inputs. If both persisted representations are invalid, restoration supplies no HR target and does not fall back to the current live plan. Phase A itself did **not** personalize or otherwise change any BPM range and did not change the standalone VO₂ protocol.
+
+### Implementation status (Phase B)
+
+Phase B is now implemented. `src/profile.ts` migrates the legacy single-user form into a versioned `AthleteProfile` under `athlete_profile_v1`; a separate `athlete_identity_v1` record and recoverable canonical-envelope identity prevent malformed demographics or metric provenance from silently rotating the athlete owner. The profile preserves pounds/inches for lossless UI compatibility, keeps blank/default values absent, and retains unchanged user-entered VO₂ observation provenance across unrelated edits. User-entered VO₂ remains only `source: user_entered`, `quality: unverified`. `src/fitnessState.ts` provides strict parsing and local persistence under `fitness_state_v1`, plus a pure, fail-closed formal-assessment promotion reducer. Its persisted v1 reader is pinned to permanent estimator/protocol identities rather than current writer aliases, while historical v1 promotion re-verifies evidence with explicitly version-bound v1 formulas and thresholds. Qualified assessments retain exact VO₂, predicted—not measured—maximal watts, eligible HR/watt points, regression diagnostics, workload provenance, the actual validated estimator/protocol versions, evidence session ID, timestamps, and conservative quality; rejected stages and demographic predicted HRmax are not promoted as observed facts. New sessions and summaries carry the stable athlete owner and a minimal athlete/fitness version snapshot, while legacy history remains readable and unmodified. Summary persistence occurs before the derived projection update, and projection failure cannot prevent history storage. The Phase A legacy resolver remains authoritative: seven-day targets and machine-guidance behavior are unchanged. Machine-learning/dynamics stores remain device-global and require a dedicated athlete-scoping phase before multi-profile UI.
 
 Throughout this review:
 
@@ -104,11 +108,11 @@ The current architecture already separates the template, phase runtime, machine 
 
 ### User/profile data
 
-`src/types.ts::Profile` contains `weight`, `height`, `age`, `sex`, and `vo2`. `src/profile.ts` saves one JSON object under local-storage key `profile`. There is no profile ID, account, multiple-profile collection, selected-profile pointer, or history ownership field. This is one implicit local user.
+`src/types.ts::AthleteProfile` is the canonical versioned record for the one local athlete. `src/profile.ts::loadAthleteProfile` reads `athlete_profile_v1` or idempotently migrates the legacy `profile` object, generating one opaque stable UUID and retaining the legacy record. There is still no account, multiple-profile collection, selected-profile pointer, or profile-switching UI.
 
-The UI in `index.html` calls this area “Profile,” but it is a single settings form. Weight is entered in pounds; height is total inches; age and a male/female/blank sex field are stored; VO₂ is an optional user-entered number. Sex, height, and stored `vo2` currently have no effect on workout prescription or the VO₂ estimator.
+The UI in `index.html` still calls this area “Profile” and remains a single settings form. Weight is entered and canonically retained in pounds; height remains total inches, avoiding a lossy or repeatable unit migration. Age and a male/female/blank sex field are stored. Optional user-entered VO₂ becomes an unverified provenance-bearing metric on `AthleteProfile`; it does not overwrite formal-assessment `FitnessState`. Sex, height, and user-entered VO₂ have no effect on workout prescription or the VO₂ estimator.
 
-`BLANK_PROFILE` deliberately uses empty strings. `parseExplicitVo2ProfileInputs` reads only explicitly stored positive age and weight and converts pounds to kilograms. Tests in `tests/profileDefaults.test.mjs` protect the rule that blank or historical UI placeholders must not become estimator inputs. Ordinary workout code is also tested not to import `getProfile`. This protection should remain.
+`BLANK_PROFILE` deliberately uses empty strings. Migration and `parseExplicitVo2ProfileInputs` retain only explicit values inside the estimator's supported age/body-mass bounds and convert pounds to kilograms only at the estimator boundary. Blank, partial, malformed, and placeholder-looking legacy fields remain absent. The legacy `profile` key is retained as a compatibility mirror but is no longer authoritative after successful migration.
 
 Equipment and learned machine state are separate global local-storage records:
 
@@ -151,7 +155,7 @@ At finalization, `src/workoutSummary.ts::generateWorkoutSummary` builds protocol
 - fits HR as a linear function of watts and requires R² at least 0.7;
 - extrapolates to predicted HRmax and applies the ACSM cycle equation.
 
-The result retains much more than `VO2Max = N`: accepted/eligible points, per-point steady-state HR and workload provenance, slope, intercept, R², predicted HRmax, predicted maximal watts, profile snapshot, reason codes, stage counts, estimator/protocol versions, and a high/moderate/low fit-quality label. It is stored only in that workout summary. It is not promoted to `Profile.vo2`, not indexed as the current fitness estimate, and not consumed by ordinary workouts.
+The result retains much more than `VO2Max = N`: accepted/eligible points, per-point steady-state HR and workload provenance, slope, intercept, R², predicted HRmax, predicted maximal watts, profile snapshot, reason codes, stage counts, estimator/protocol versions, and a high/moderate/low fit-quality label. The immutable result remains in its workout summary. After that summary is saved, a supported `estimated` result can update the current `FitnessState`; the reducer revalidates and recomputes its eligible-point regression, retains only eligible points, labels maximal watts as predicted, and keeps demographic HRmax inside calibration audit metadata rather than promoting observed HRmax. Ordinary workouts still do not consume this state.
 
 ### Telemetry and workout history
 
@@ -179,7 +183,7 @@ IndexedDB schema version 2 in `src/workoutStorage.ts` has:
 - `hr_samples`, keyed by `[session_id, timestamp_sec]`, indexed by `session_id`;
 - `sisu_settings`, keyed by `key`.
 
-There are no explicit migration transforms, athlete IDs, normalized response objects, raw bike-sample store, or training-state store. Deleting a workout deletes its HR samples. SISU export intentionally strips activity, machine traces/audits, shadow fields, VO₂ evidence, and VO₂ assessment.
+Versioned local-storage records now provide the single `AthleteProfile` and current `FitnessState`; new session/summary evidence carries `athlete_id` plus a minimal version pointer. Historical IndexedDB rows are not rewritten and may omit both fields. There is still no normalized response object or ordinary-workout raw bike-sample store. Deleting a workout deletes its HR samples. SISU export intentionally strips local athlete/snapshot fields, activity, machine traces/audits, shadow fields, VO₂ evidence, VO₂ assessment, and resolved prescription.
 
 The frozen session/VO₂ runtime survives reload, but machine-guidance runtime, its recent HR buffer, trace, and in-progress decision-audit state are memory-only. A mid-workout reload resets that controller history, so the final trace/audit can be incomplete and learned behavior may restart within the same nominal session. Any future adaptive authority needs an explicit recovery policy or persisted controller snapshot.
 
@@ -202,7 +206,6 @@ flowchart TD
     G --> I
     I --> J["Formatter + UI target text / heart color"]
     I --> K["Numeric bounds to updateMachineGuidanceRuntime"]
-    D --> K
     K --> L["ProForm adapter: resistance/cadence guidance"]
     L --> M["UI and voice"]
     L --> N["Bike Bridge executor"]
@@ -244,7 +247,8 @@ flowchart TD
     I --> K
     K --> L["Versioned result + points + regression + fit quality"]
     L --> M["WorkoutSummary in IndexedDB"]
-    M --> N["No promotion to athlete fitness state"]
+    M --> N["Qualified promotion reducer"]
+    N --> O["fitness_state_v1 projection"]
 ```
 
 ## 4. Hard-Coded Target Audit
@@ -632,16 +636,16 @@ Two separate decisions are required.
 
 ### Internal athlete/training profile now
 
-Yes. Target resolution and fitness observations need a stable owner, explicit inputs, provenance, and a way to prevent machine learning from crossing athletes. Introduce a stable local `athleteId` even if only one athlete exists in v1. Migrate the existing `profile` object into an `AthleteProfile` shape or wrap it with a schema version; keep blank-input protections.
+Implemented. A stable local `athleteId`, versioned `AthleteProfile`, versioned `FitnessState`, and new-evidence ownership now exist for the one local athlete, with blank-input protections preserved. Machine-learning stores are not yet athlete-scoped, so the identity foundation does not imply complete profile isolation.
 
 ### Multiple user-selectable Profiles now
 
 No. The UI and storage assume one user in many places:
 
-- one `profile` key;
+- one canonical `athlete_profile_v1` record and no selected-profile lifecycle;
 - globally keyed equipment and Bike Bridge settings;
 - learned machine state without athlete ID;
-- workouts with no athlete/profile ID or athlete index;
+- legacy workouts with no athlete ID and no athlete index over history;
 - sessions keyed by weekday/selector rather than profile;
 - no selected-profile lifecycle or isolation tests.
 
@@ -653,9 +657,12 @@ Adding multiple Profiles before namespacing history and learned state risks cros
 
 | Store | Data | Scope |
 | --- | --- | --- |
-| localStorage `profile` | age, weight lb, height in, sex, optional VO₂ | implicit single user |
-| localStorage session keys | timing, pause, activity, frozen blocks/legacy inputs/resolved prescription, VO₂ runtime | per day/selector, max 24 h |
-| IndexedDB `workouts` | full `WorkoutSummary` wrapper, including resolved prescription on new workouts | device-global history |
+| localStorage `athlete_identity_v1` | independently durable athlete ID and creation time | single local athlete |
+| localStorage `athlete_profile_v1` | versioned stable athlete ID, explicit demographics, unverified user-entered VO₂ | single local athlete |
+| localStorage `profile` | retained legacy compatibility mirror | migration source / compatibility only |
+| localStorage `fitness_state_v1` | current formal-assessment metrics, calibration, provenance and quality | owned by athlete ID |
+| localStorage session keys | timing, pause, activity, athlete/snapshot, frozen blocks/legacy inputs/resolved prescription, VO₂ runtime | per day/selector, max 24 h |
+| IndexedDB `workouts` | immutable `WorkoutSummary` wrapper, including athlete/snapshot and resolved prescription on new workouts | legacy rows may be unowned |
 | IndexedDB `hr_samples` | one active HR sample/sec | by session |
 | IndexedDB `sisu_settings` | sync endpoint | device-global |
 | localStorage machine/equipment keys | selection, bridge, learned starts, dynamics, shadow validation | device-global |
@@ -663,20 +670,17 @@ Adding multiple Profiles before namespacing history and learned state risks cros
 
 ### Proposed additions
 
-- versioned `athlete_profiles` and selected athlete identity (one row initially);
-- versioned `fitness_state` with provenance-bearing metrics;
-- `athlete_id`, template ID/version, and athlete/fitness input snapshots alongside the existing resolved prescription on workout/session/summary;
 - versioned `workout_response` or response fields in the summary;
 - IndexedDB telemetry store or chunk store for ordinary bike samples, indexed by session and active timestamp;
 - athlete ID in learned-start, dynamics, and shadow keys.
 
 ### Migration
 
-An IndexedDB version bump is required for new stores/indexes. Existing workout rows can remain readable with `athlete_id` absent and be labeled `legacy-local-user` only after an explicit one-time migration. Do not silently attribute historical data to a newly selected second profile.
+Phase B required no IndexedDB version bump: the small single-athlete profile/current-state projections use versioned local-storage records, and optional ownership fields fit existing summary rows. Phase C ordinary telemetry will require an IndexedDB version bump/new store. Existing workout rows remain readable with `athlete_id` absent and are not silently attributed to the new athlete.
 
-The current local-storage profile can migrate to the initial athlete record. Existing machine-learning keys can be associated with that initial athlete only if the product states that the device previously had one user; otherwise preserve them as legacy/unowned and require new evidence before control use. Preserve the existing no-placeholder estimator rule.
+The legacy local-storage profile migrates idempotently to the initial athlete record without deleting the source. Existing machine-learning keys remain legacy device-global; they have not been assigned to the athlete. Preserve them as legacy/unowned until a dedicated scoping policy is implemented.
 
-The resolved prescription is now frozen at workout start inside `phasePlan`, and the summary stores its resolver ID/version and per-phase provenance. Phase B should add the athlete/fitness metric snapshots needed so later profile or fitness-state edits cannot rewrite why a target was selected.
+The resolved prescription remains frozen at workout start inside `phasePlan`, and the summary stores its resolver ID/version and per-phase provenance. Sessions now also freeze the athlete ID, profile schema version, and fitness-state version/update time when present, without passing those values into the Phase A resolver.
 
 ### Storage growth
 
@@ -852,13 +856,12 @@ This order differs from a direct “individualize BPM first” approach because 
 
 ## 19. Recommended Next Implementation Step
 
-Implement **Phase B — AthleteProfile + FitnessState + qualified VO₂ calibration promotion**, without changing workout targets yet:
+Implement **Phase C — ordinary workload capture + normalized `WorkoutResponse`**, without changing workout targets or feeding passive observations into `FitnessState` yet:
 
-1. Replace the implicit single `Profile` record with a versioned internal `AthleteProfile` that preserves the existing blank/default protections and initially represents one local athlete; do not add multi-profile UI yet.
-2. Add a small persisted `FitnessState` made of provenance-bearing metrics (`value`, source, quality, observed/updated time, algorithm version, and evidence session ID where applicable).
-3. Add a pure assessment-to-state promotion function that accepts only `Vo2AssessmentResult.status === "estimated"` with supported protocol/estimator versions and retains the assessment's fit quality, workload provenance, input snapshot, regression diagnostics, and stages used.
-4. Persist both the headline VO₂ estimate and the defensible calibration observations already produced by the assessment—eligible HR/workload points and estimated aerobic power—without promoting rejected stages or inventing observed HRmax.
-5. Snapshot the athlete/fitness inputs used by future prescription resolution, but leave the Phase A legacy resolver and all seven-day numeric targets authoritative until a separately reviewed resolver policy is implemented.
-6. Add migration, no-placeholder, insufficient-evidence, historical-version, source-precedence, and immutable-history tests.
+1. Persist pause-safe ordinary bike telemetry in a bounded IndexedDB store, explicitly separating observed watts/RPM/resistance from desired or commanded resistance.
+2. Derive a compact, versioned `WorkoutResponse` at finalization using frozen phase IDs: completion, prescribed/completed load, HR/workload response, recovery, drift, and data-quality/coverage.
+3. Store the response with immutable workout history and define deletion, retention, and compaction behavior for raw telemetry.
+4. Associate all new telemetry/response evidence with the frozen athlete ID, but keep machine-learning stores legacy device-global until their dedicated scoping migration.
+5. Do not update `FitnessState` from ordinary workouts in this phase; Phase D should add repeated-observation trend logic after response validity is reviewable.
 
-This is the smallest next slice because it establishes explicit ownership and trustworthy provenance for data the app already computes. It does not yet authorize those values to change exercise targets or resistance behavior; that policy remains a later, separately versioned resolver change.
+This is the smallest next slice because Phase B now provides identity and provenance, while the principal evidence gap is observed ordinary-workout load. It preserves the current resolver and controller while making later passive learning reproducible and inspectable.

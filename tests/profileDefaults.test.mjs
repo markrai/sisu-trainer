@@ -3,9 +3,18 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import {
   BLANK_PROFILE,
+  ATHLETE_IDENTITY_STORAGE_KEY,
+  ATHLETE_PROFILE_STORAGE_KEY,
+  LEGACY_PROFILE_STORAGE_KEY,
+  athleteProfileToLegacyProfile,
   getProfile,
+  loadAthleteProfile,
+  migrateLegacyProfile,
+  parseAthleteProfile,
   parseExplicitVo2ProfileInputs,
   PROFILE_WEIGHT_LBS_TO_KG,
+  storeAthleteProfile,
+  updateAthleteProfileFromLegacy,
 } from "../dist/profile.js";
 import { calculateZoneMinutes, mapHrToZone } from "../dist/zoneCalculator.js";
 import { adjustedBlockLengths } from "../dist/workoutLogic.js";
@@ -56,6 +65,170 @@ test("placeholder-like numbers would become VO2 inputs only if actually stored",
   assert.equal(storedDefaults.age_years, 25);
   assert.ok(storedDefaults.weight_kg > 0);
   assert.deepEqual(parseExplicitVo2ProfileInputs(BLANK_PROFILE), {});
+});
+
+test("blank legacy profile migrates once to a stable versioned athlete without fabricating demographics", () => {
+  const storage = memoryStorage({
+    [LEGACY_PROFILE_STORAGE_KEY]: JSON.stringify(BLANK_PROFILE),
+  });
+  let generated = 0;
+  const options = {
+    now: "2026-09-21T12:00:00.000Z",
+    generateAthleteId: () => `athlete-${++generated}`,
+  };
+  const first = loadAthleteProfile(storage, options);
+  const second = loadAthleteProfile(storage, {
+    now: "2026-09-22T12:00:00.000Z",
+    generateAthleteId: () => `athlete-${++generated}`,
+  });
+  assert.equal(first.schemaVersion, 1);
+  assert.equal(first.athleteId, "athlete-1");
+  assert.deepEqual(first.demographics, {});
+  assert.equal(first.userEnteredVo2, undefined);
+  assert.deepEqual(second, first);
+  assert.equal(generated, 1);
+  assert.equal(storage.getItem(LEGACY_PROFILE_STORAGE_KEY), JSON.stringify(BLANK_PROFILE));
+  assert.deepEqual(JSON.parse(storage.getItem(ATHLETE_PROFILE_STORAGE_KEY)), first);
+});
+
+test("legacy migration retains valid explicit form units and marks entered VO2 unverified", () => {
+  const timestamp = "2026-09-21T12:00:00.000Z";
+  const migrated = migrateLegacyProfile(
+    { age: "40", weight: "176.37", height: "66", sex: "female", vo2: "47.2" },
+    "athlete-valid",
+    timestamp
+  );
+  assert.deepEqual(migrated.demographics, {
+    ageYears: 40,
+    bodyMassLbs: 176.37,
+    heightInches: 66,
+    sex: "female",
+  });
+  assert.deepEqual(migrated.userEnteredVo2, {
+    value: 47.2,
+    source: "user_entered",
+    quality: "unverified",
+    observedAt: timestamp,
+    updatedAt: timestamp,
+  });
+  assert.deepEqual(athleteProfileToLegacyProfile(migrated), {
+    age: 40,
+    weight: 176.37,
+    height: 66,
+    sex: "female",
+    vo2: 47.2,
+  });
+  const inputs = parseExplicitVo2ProfileInputs(migrated);
+  assert.equal(inputs.age_years, 40);
+  assert.ok(Math.abs(inputs.weight_kg - 176.37 * PROFILE_WEIGHT_LBS_TO_KG) < 1e-9);
+});
+
+test("legacy migration keeps valid partial profiles and drops malformed or placeholder-looking values", () => {
+  const timestamp = "2026-09-21T12:00:00.000Z";
+  assert.deepEqual(
+    migrateLegacyProfile({ age: "40", weight: "" }, "age-only", timestamp).demographics,
+    { ageYears: 40 }
+  );
+  assert.deepEqual(
+    migrateLegacyProfile({ age: "", weight: "176.37" }, "weight-only", timestamp).demographics,
+    { bodyMassLbs: 176.37 }
+  );
+  assert.deepEqual(
+    migrateLegacyProfile({ age: "40", weight: "176.37" }, "both", timestamp).demographics,
+    { ageYears: 40, bodyMassLbs: 176.37 }
+  );
+  const malformed = migrateLegacyProfile(
+    { age: "years", weight: "lbs", height: "inches", sex: "select", vo2: "optional" },
+    "malformed",
+    timestamp
+  );
+  assert.deepEqual(malformed.demographics, {});
+  assert.equal(malformed.userEnteredVo2, undefined);
+  assert.deepEqual(parseExplicitVo2ProfileInputs({ age: "years", weight: "lbs" }), {});
+});
+
+test("canonical athlete parser rejects unknown schemas and malformed metrics", () => {
+  const valid = migrateLegacyProfile(
+    { age: 40, weight: 176.37, vo2: 45 },
+    "athlete-parser",
+    "2026-09-21T12:00:00.000Z"
+  );
+  assert.deepEqual(parseAthleteProfile(valid), valid);
+  assert.equal(parseAthleteProfile({ ...valid, schemaVersion: 2 }), null);
+  assert.equal(parseAthleteProfile({ ...valid, athleteId: "" }), null);
+  assert.equal(
+    parseAthleteProfile({ ...valid, demographics: { ...valid.demographics, ageYears: "40" } }),
+    null
+  );
+  assert.equal(
+    parseAthleteProfile({
+      ...valid,
+      userEnteredVo2: { ...valid.userEnteredVo2, source: "formal_assessment" },
+    }),
+    null
+  );
+});
+
+test("malformed profile data cannot rotate an established athlete identity", () => {
+  const original = migrateLegacyProfile(
+    { age: 40, weight: 176.37, vo2: 45 },
+    "athlete-stable-a",
+    "2026-09-01T12:00:00.000Z"
+  );
+  const storage = memoryStorage();
+  assert.equal(storeAthleteProfile(original, storage), true);
+  storage.removeItem(ATHLETE_IDENTITY_STORAGE_KEY);
+
+  const malformed = { ...original, demographics: { ageYears: "not-an-age" } };
+  storage.setItem(ATHLETE_PROFILE_STORAGE_KEY, JSON.stringify(malformed));
+  let generated = 0;
+  const recovered = loadAthleteProfile(storage, {
+    now: "2026-09-21T12:00:00.000Z",
+    generateAthleteId: () => `unexpected-${++generated}`,
+  });
+  assert.equal(recovered.athleteId, original.athleteId);
+  assert.equal(generated, 0);
+
+  const conflicting = { ...original, athleteId: "athlete-conflicting-b", demographics: { ageYears: "bad" } };
+  storage.setItem(ATHLETE_PROFILE_STORAGE_KEY, JSON.stringify(conflicting));
+  const dedicatedWins = loadAthleteProfile(storage, {
+    now: "2026-09-22T12:00:00.000Z",
+    generateAthleteId: () => `unexpected-${++generated}`,
+  });
+  assert.equal(
+    JSON.parse(storage.getItem(ATHLETE_IDENTITY_STORAGE_KEY)).athleteId,
+    original.athleteId
+  );
+  assert.equal(dedicatedWins.athleteId, original.athleteId);
+  assert.equal(generated, 0);
+});
+
+test("profile edits preserve unchanged user-entered VO2 provenance and timestamp changed values", () => {
+  const originalObservedAt = "2026-09-01T12:00:00.000Z";
+  const editTime = "2026-09-21T12:00:00.000Z";
+  const original = migrateLegacyProfile(
+    { age: 40, weight: 176.37, height: 66, sex: "female", vo2: 47.2 },
+    "athlete-vo2-provenance",
+    originalObservedAt
+  );
+
+  const unrelatedEdit = updateAthleteProfileFromLegacy(
+    { age: 41, weight: 176.37, height: 67, sex: "female", vo2: 47.2 },
+    original,
+    editTime
+  );
+  assert.deepEqual(unrelatedEdit.userEnteredVo2, original.userEnteredVo2);
+
+  const changedVo2 = updateAthleteProfileFromLegacy(
+    { age: 41, weight: 176.37, height: 67, sex: "female", vo2: 48.1 },
+    unrelatedEdit,
+    editTime
+  );
+  assert.equal(changedVo2.userEnteredVo2.value, 48.1);
+  assert.equal(changedVo2.userEnteredVo2.source, "user_entered");
+  assert.equal(changedVo2.userEnteredVo2.quality, "unverified");
+  assert.equal(changedVo2.userEnteredVo2.observedAt, editTime);
+  assert.equal(changedVo2.userEnteredVo2.updatedAt, editTime);
 });
 
 test("HR zones do not use profile age, weight, height, or sex", () => {

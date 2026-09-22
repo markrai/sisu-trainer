@@ -16,15 +16,8 @@ import { assessVo2, type Vo2ProfileInputs } from "./vo2Estimator.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
 import { resolveWorkoutPrescription } from "./workoutPrescription.js";
-
-// Generate stable UUID (v4-ish)
-function generateUUID(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
-    const r = (Math.random() * 16) | 0;
-    const v = c === "x" ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
-}
+import { promoteVo2SummaryToStoredFitnessState } from "./fitnessState.js";
+import { generateUUID } from "./utils/uuid.js";
 
 export function buildHrTrace(hrSamples: any[]) {
   if (!hrSamples || hrSamples.length === 0) {
@@ -167,6 +160,10 @@ async function generateWorkoutSummary(
 
   applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
   const session = getSession(day);
+  if (session.athleteId) summary.athlete_id = session.athleteId;
+  if (session.athleteFitnessSnapshot) {
+    summary.athlete_fitness_snapshot = { ...session.athleteFitnessSnapshot };
+  }
   const allowed = getWorkoutMetadata()[day]?.activities ?? [];
   applyWorkoutActivityToSummary(summary, getActiveWorkoutActivity(allowed, session.activity));
 
@@ -241,7 +238,14 @@ async function generateWorkoutSummary(
 }
 
 async function emitWorkoutSummary(summary: WorkoutSummary) {
-  await storeWorkoutSummary(summary);
+  const saved = await storeWorkoutSummary(summary);
+  if (saved) {
+    try {
+      promoteVo2SummaryToStoredFitnessState(summary);
+    } catch (error) {
+      console.error("Error promoting VO2 assessment to fitness state:", error);
+    }
+  }
   await learnFromCompletedWorkout(summary);
   await learnShadowPredictionsFromCompletedWorkout(summary);
   await learnHrDynamicsFromCompletedWorkout(summary);

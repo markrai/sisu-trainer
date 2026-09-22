@@ -98,9 +98,11 @@ async function storeWorkoutSummary(summary) {
             tx.onerror = () => reject(tx.error);
             tx.onabort = () => reject(tx.error || new Error("workout summary write aborted"));
         });
+        return true;
     }
     catch (error) {
         console.error("Error storing workout summary:", error);
+        return false;
     }
 }
 async function clearHrSamples(sessionId) {

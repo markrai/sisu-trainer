@@ -350,6 +350,9 @@ test("finalization attaches assessment and survives HR cleanup", async () => {
     vo2Profile: profile40_80,
   });
   assert.ok(summary.vo2_assessment);
+  assert.equal(typeof summary.athlete_id, "string");
+  assert.equal(summary.athlete_fitness_snapshot.athleteId, summary.athlete_id);
+  assert.equal(summary.athlete_fitness_snapshot.profileSchemaVersion, 1);
   assert.ok(summary.resolved_prescription);
   assert.equal(summary.resolved_prescription.workoutSelector, VO2_WORKOUT_SELECTOR_ID);
   assert.ok(summary.resolved_prescription.phases.every((phase) => phase.expectedHeartRate === undefined));
@@ -377,6 +380,8 @@ test("finalization attaches assessment and survives HR cleanup", async () => {
   assert.equal(payload.vo2_evidence, undefined);
   assert.equal(payload.vo2_assessment, undefined);
   assert.equal(payload.resolved_prescription, undefined);
+  assert.equal(payload.athlete_id, undefined);
+  assert.equal(payload.athlete_fitness_snapshot, undefined);
   assert.ok(loaded.summary.vo2_assessment);
   await resetWorkoutStorageForTests();
 });
