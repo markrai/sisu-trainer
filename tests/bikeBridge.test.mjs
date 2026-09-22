@@ -278,8 +278,13 @@ test("telemetry preserves null, observed zero, and normal values", async () => {
     await waitUntil(() => session.getViewState().rpm === 0);
     const state = session.getViewState();
     assert.equal(state.observedResistance, null);
+    assert.equal(state.observedResistanceCurrent, false);
     assert.equal(state.rpm, 0);
+    assert.equal(state.rpmCurrent, true);
     assert.equal(state.watts, 42);
+    assert.equal(state.wattsCurrent, true);
+    assert.equal(state.telemetrySnapshotAt, "2026-08-28T12:00:00.000Z");
+    assert.equal(typeof state.telemetryReceivedAtMs, "number");
   } finally {
     session.stop();
   }

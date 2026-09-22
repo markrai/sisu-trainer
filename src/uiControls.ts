@@ -15,6 +15,7 @@ import {
   lastPersistedElapsedFromHrSamples,
   workoutRelativeHrSample,
   recordVo2ActiveBikeTelemetry,
+  ordinaryActiveBikeTelemetrySample,
   startWorkout,
   todayName,
   updateRing,
@@ -22,7 +23,12 @@ import {
   requestVo2LimitReached,
 } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
-import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
+import {
+  getAllWorkoutSummaries,
+  deleteWorkoutSummary,
+  getHrSamples,
+  queueOrdinaryBikeTelemetrySample,
+} from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
@@ -691,6 +697,35 @@ function recordVo2BikeTelemetryIfActive(): void {
     metrics.observed_resistance = state.observedResistance;
   }
   recordVo2ActiveBikeTelemetry(session, metrics);
+}
+
+function recordOrdinaryBikeTelemetryIfActive(): void {
+  const day = getSelectedDay();
+  if (isVo2WorkoutSelector(day)) return;
+  const session = getSession(day);
+  if (
+    !session.sessionId ||
+    !session.startTime ||
+    !session.athleteId ||
+    session.activity !== "bike"
+  ) {
+    return;
+  }
+  const state = getBikeBridgeSession().getViewState();
+  const sample = ordinaryActiveBikeTelemetrySample(session, {
+    telemetryStale: state.telemetryStale,
+    telemetryReceivedAtMs: state.telemetryReceivedAtMs,
+    telemetrySnapshotAt: state.telemetrySnapshotAt,
+    watts: { value: state.watts, current: state.wattsCurrent },
+    cadenceRpm: { value: state.rpm, current: state.rpmCurrent },
+    observedResistance: {
+      value: state.observedResistance,
+      current: state.observedResistanceCurrent,
+    },
+    desiredResistance: state.desiredResistance,
+    commandedResistance: state.commandedResistance,
+  });
+  if (sample) queueOrdinaryBikeTelemetrySample(sample);
 }
 
 function renderBikeBridgeSettingsStatus() {
@@ -1968,6 +2003,7 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   getBikeBridgeSession().subscribe(() => {
     renderBikeBridgeHud();
     recordVo2BikeTelemetryIfActive();
+    recordOrdinaryBikeTelemetryIfActive();
     const equipmentTab = document.getElementById("equipmentTab");
     if (equipmentTab?.classList.contains("active")) renderBikeBridgeSettingsStatus();
   });

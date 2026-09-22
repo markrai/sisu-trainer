@@ -5,9 +5,10 @@ import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
 import { advanceVo2Protocol, createVo2ProtocolRuntime, evaluateVo2PreflightForUi, getVo2ProtocolPhase, isVo2WorkoutSelector, vo2ProtocolNeedsHrEvaluation, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, } from "./vo2Protocol.js";
-import { getHrSamples } from "./workoutStorage.js";
+import { clearOrdinaryBikeTelemetry, getHrSamples } from "./workoutStorage.js";
 import { clearBikeTelemetrySamples, recordBikeTelemetrySample, } from "./bikeTelemetryTrace.js";
 import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
+import { buildOrdinaryBikeTelemetrySample, } from "./ordinaryWorkoutTelemetry.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
 function getRingCircumference() {
@@ -99,11 +100,28 @@ function recordVo2ActiveBikeTelemetry(session, metrics, now = Date.now(), storag
     recordBikeTelemetrySample(session.sessionId, { timestamp_sec: clock.elapsedSec, ...metrics }, storage);
     return clock.elapsedSec;
 }
+/** Build athlete-owned ordinary evidence on the same canonical active clock as HR. */
+function ordinaryActiveBikeTelemetrySample(session, telemetry, now = Date.now()) {
+    const clock = workoutRelativeHrSample(session, now);
+    if (!clock)
+        return null;
+    return buildOrdinaryBikeTelemetrySample({
+        ...telemetry,
+        athleteId: session.athleteId,
+        sessionId: session.sessionId,
+        activeSec: clock.elapsedSec,
+        observedAtMs: now,
+    });
+}
 function releaseReplacedSessionTelemetry(day, nextSessionId) {
-    const previousId = getSession(day).sessionId;
+    const previous = getSession(day);
+    const previousId = previous.sessionId;
     if (previousId && previousId !== nextSessionId) {
         clearBikeTelemetrySamples(previousId);
+        if (previous.summaryEmitted !== "true")
+            return clearOrdinaryBikeTelemetry(previousId);
     }
+    return Promise.resolve();
 }
 function planEarlyCooldownTransition(input) {
     if (!input.hasSession || !input.blocks || input.blocks.cool <= 0) {
@@ -268,11 +286,11 @@ function beginWorkout(activity) {
         let sessionId = null;
         if (typeof window.generateUUID === "function") {
             sessionId = window.generateUUID();
-            releaseReplacedSessionTelemetry(day, sessionId);
+            void releaseReplacedSessionTelemetry(day, sessionId);
             startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
         }
         else {
-            releaseReplacedSessionTelemetry(day, null);
+            void releaseReplacedSessionTelemetry(day, null);
             startSession(day, startTime, null, resolved, undefined, phasePlan);
         }
         persistVo2ProtocolRuntime(day, runtime);
@@ -298,14 +316,14 @@ function beginWorkout(activity) {
     let sessionId = null;
     if (typeof window.generateUUID === "function") {
         sessionId = window.generateUUID();
-        releaseReplacedSessionTelemetry(day, sessionId);
+        void releaseReplacedSessionTelemetry(day, sessionId);
         startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
         if (typeof window.initDB === "function") {
             window.initDB().catch((err) => console.error("Failed to init DB:", err));
         }
     }
     else {
-        releaseReplacedSessionTelemetry(day, null);
+        void releaseReplacedSessionTelemetry(day, null);
         startSession(day, startTime, null, resolved, undefined, phasePlan);
     }
     resetMachineGuidanceRuntime(sessionId);
@@ -328,6 +346,7 @@ async function restartWorkout() {
     resetMachineGuidanceRuntime();
     if (session.sessionId) {
         clearBikeTelemetrySamples(session.sessionId);
+        await clearOrdinaryBikeTelemetry(session.sessionId);
         if (typeof window.clearHrSamples === "function") {
             await window.clearHrSamples(session.sessionId).catch((err) => console.error("Error clearing HR samples:", err));
         }
@@ -596,4 +615,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, requestVo2LimitReached, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, capturePhasePlanSnapshot, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, markVo2ProtocolLimitReached, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, requestVo2LimitReached, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, releaseReplacedSessionTelemetry, capturePhasePlanSnapshot, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, markVo2ProtocolLimitReached, };

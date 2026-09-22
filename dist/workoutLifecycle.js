@@ -1,5 +1,6 @@
 import { getSession, clearSession, markSummaryEmitted } from "./sessionStore.js";
 import { clearBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
+import { clearOrdinaryBikeTelemetry } from "./workoutStorage.js";
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 function presentVo2AssessmentIfAny(summary) {
     if (!(summary === null || summary === void 0 ? void 0 : summary.vo2_assessment))
@@ -15,9 +16,13 @@ export function releaseTransientSessionTelemetry(sessionId, storage) {
 }
 /** Discard a session that will never be finalized. Clears transient bike telemetry. */
 export function discardWorkoutSession(day, storage) {
-    const sessionId = getSession(day, storage).sessionId;
+    const session = getSession(day, storage);
+    const sessionId = session.sessionId;
     clearSession(day, storage);
     releaseTransientSessionTelemetry(sessionId, storage);
+    if (sessionId && session.summaryEmitted !== "true" && typeof indexedDB !== "undefined") {
+        void clearOrdinaryBikeTelemetry(sessionId);
+    }
 }
 export function handleWorkoutCompletion(day) {
     const session = getSession(day);

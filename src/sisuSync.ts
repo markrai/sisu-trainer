@@ -283,6 +283,7 @@ function buildSisuWorkoutPayload(summary: any) {
   delete payload.resolved_prescription;
   delete payload.athlete_id;
   delete payload.athlete_fitness_snapshot;
+  delete payload.workout_response;
   if (typeof payload.day !== "string" || payload.day.trim() === "") delete payload.day;
   return payload;
 }

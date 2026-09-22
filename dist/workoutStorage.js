@@ -1,8 +1,12 @@
+import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
+import { parseWorkoutResponse } from "./workoutResponse.js";
 const DB_NAME = "vo2_workout_db";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_WORKOUTS = "workouts";
 const STORE_HR_SAMPLES = "hr_samples";
+export const STORE_ORDINARY_BIKE_TELEMETRY = "ordinary_bike_telemetry";
 const STORE_SISU_SETTINGS = "sisu_settings";
+export const ABANDONED_ORDINARY_TELEMETRY_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 let db = null;
 async function initDB() {
     if (db)
@@ -27,11 +31,209 @@ async function initDB() {
                 });
                 hrSamplesStore.createIndex("session_id", "session_id", { unique: false });
             }
+            if (!database.objectStoreNames.contains(STORE_ORDINARY_BIKE_TELEMETRY)) {
+                const telemetryStore = database.createObjectStore(STORE_ORDINARY_BIKE_TELEMETRY, {
+                    keyPath: ["session_id", "active_sec"],
+                });
+                telemetryStore.createIndex("session_id", "session_id", { unique: false });
+                telemetryStore.createIndex("observed_at", "observed_at", { unique: false });
+                telemetryStore.createIndex("session_source_id", ["session_id", "source_sample_id"], { unique: false });
+            }
             if (!database.objectStoreNames.contains(STORE_SISU_SETTINGS)) {
                 database.createObjectStore(STORE_SISU_SETTINGS, { keyPath: "key" });
             }
         };
     });
+}
+function requestResult(request) {
+    return new Promise((resolve, reject) => {
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+    });
+}
+function transactionComplete(tx) {
+    return new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+    });
+}
+function telemetryRow(sample) {
+    return {
+        session_id: sample.sessionId,
+        athlete_id: sample.athleteId,
+        active_sec: sample.activeSec,
+        observed_at: sample.observedAt,
+        ...(sample.sourceSampleId ? { source_sample_id: sample.sourceSampleId } : {}),
+        sample,
+    };
+}
+function availabilityRank(sample) {
+    return sample.availability === "fresh" ? 2 : sample.availability === "stale" ? 1 : 0;
+}
+async function sourceSampleBelongsToAnotherSecond(store, sample) {
+    if (!sample.sourceSampleId)
+        return false;
+    const sameSourceRows = await requestResult(store.index("session_source_id").getAll([sample.sessionId, sample.sourceSampleId]));
+    return sameSourceRows.some((row) => row.active_sec !== sample.activeSec);
+}
+async function storeOrdinaryBikeTelemetrySample(value) {
+    const sample = parseOrdinaryBikeTelemetrySample(value);
+    if (!sample)
+        return "rejected";
+    try {
+        const database = await initDB();
+        const tx = database.transaction([STORE_ORDINARY_BIKE_TELEMETRY], "readwrite");
+        const completed = transactionComplete(tx);
+        const store = tx.objectStore(STORE_ORDINARY_BIKE_TELEMETRY);
+        let outcome = "stored";
+        const existing = await requestResult(store.get([sample.sessionId, sample.activeSec]));
+        if (existing) {
+            const prior = parseOrdinaryBikeTelemetrySample(existing.sample);
+            if (prior && availabilityRank(sample) > availabilityRank(prior)) {
+                if (await sourceSampleBelongsToAnotherSecond(store, sample))
+                    outcome = "duplicate";
+                else
+                    await requestResult(store.put(telemetryRow(sample)));
+            }
+            else {
+                outcome = "duplicate";
+            }
+        }
+        else if (sample.sourceSampleId) {
+            if (await sourceSampleBelongsToAnotherSecond(store, sample))
+                outcome = "duplicate";
+            else
+                await requestResult(store.add(telemetryRow(sample)));
+        }
+        else {
+            await requestResult(store.add(telemetryRow(sample)));
+        }
+        await completed;
+        return outcome;
+    }
+    catch (error) {
+        console.error("Error storing ordinary bike telemetry:", error);
+        return "failed";
+    }
+}
+function oldTelemetrySessionIds(store, cutoffIso) {
+    return new Promise((resolve, reject) => {
+        const sessionIds = new Set();
+        const request = store
+            .index("observed_at")
+            .openKeyCursor(IDBKeyRange.upperBound(cutoffIso, true));
+        request.onsuccess = () => {
+            const cursor = request.result;
+            if (!cursor) {
+                resolve(sessionIds);
+                return;
+            }
+            const primaryKey = cursor.primaryKey;
+            if (Array.isArray(primaryKey) && typeof primaryKey[0] === "string") {
+                sessionIds.add(primaryKey[0]);
+            }
+            cursor.continue();
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+const pendingOrdinaryWrites = new Map();
+/** Serialize per-session writes so finalization can reliably flush the last observed second. */
+export function queueOrdinaryBikeTelemetrySample(sample) {
+    var _a;
+    const prior = (_a = pendingOrdinaryWrites.get(sample.sessionId)) !== null && _a !== void 0 ? _a : Promise.resolve();
+    const next = prior
+        .catch(() => undefined)
+        .then(async () => {
+        await storeOrdinaryBikeTelemetrySample(sample);
+    });
+    pendingOrdinaryWrites.set(sample.sessionId, next);
+    void next.finally(() => {
+        if (pendingOrdinaryWrites.get(sample.sessionId) === next)
+            pendingOrdinaryWrites.delete(sample.sessionId);
+    });
+}
+export async function flushOrdinaryBikeTelemetryWrites(sessionId) {
+    var _a;
+    await ((_a = pendingOrdinaryWrites.get(sessionId)) !== null && _a !== void 0 ? _a : Promise.resolve());
+}
+async function getOrdinaryBikeTelemetrySamples(sessionId) {
+    try {
+        const database = await initDB();
+        const tx = database.transaction([STORE_ORDINARY_BIKE_TELEMETRY], "readonly");
+        const rows = await requestResult(tx.objectStore(STORE_ORDINARY_BIKE_TELEMETRY).index("session_id").getAll(sessionId));
+        const samples = [];
+        for (const row of rows) {
+            const parsed = parseOrdinaryBikeTelemetrySample(row === null || row === void 0 ? void 0 : row.sample);
+            if (!parsed ||
+                parsed.sessionId !== sessionId ||
+                row.session_id !== parsed.sessionId ||
+                row.athlete_id !== parsed.athleteId ||
+                row.active_sec !== parsed.activeSec) {
+                continue;
+            }
+            samples.push(parsed);
+        }
+        return samples.sort((a, b) => a.activeSec - b.activeSec);
+    }
+    catch (error) {
+        console.error("Error getting ordinary bike telemetry:", error);
+        return [];
+    }
+}
+function deleteBySessionIndex(store, sessionId) {
+    const request = store.index("session_id").openCursor(IDBKeyRange.only(sessionId));
+    request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor)
+            return;
+        cursor.delete();
+        cursor.continue();
+    };
+}
+async function clearOrdinaryBikeTelemetry(sessionId) {
+    try {
+        await flushOrdinaryBikeTelemetryWrites(sessionId);
+        const database = await initDB();
+        const tx = database.transaction([STORE_ORDINARY_BIKE_TELEMETRY], "readwrite");
+        const completed = transactionComplete(tx);
+        deleteBySessionIndex(tx.objectStore(STORE_ORDINARY_BIKE_TELEMETRY), sessionId);
+        await completed;
+    }
+    catch (error) {
+        console.error("Error clearing ordinary bike telemetry:", error);
+    }
+}
+/** Delete old raw traces only when no immutable workout summary owns the session. */
+async function cleanupAbandonedOrdinaryBikeTelemetry(now = Date.now(), maxAgeMs = ABANDONED_ORDINARY_TELEMETRY_MAX_AGE_MS) {
+    try {
+        if (!Number.isFinite(now) || !Number.isFinite(maxAgeMs) || maxAgeMs < 0)
+            return 0;
+        const database = await initDB();
+        const cutoff = now - maxAgeMs;
+        const telemetryTx = database.transaction([STORE_ORDINARY_BIKE_TELEMETRY], "readonly");
+        const candidateSessionIds = await oldTelemetrySessionIds(telemetryTx.objectStore(STORE_ORDINARY_BIKE_TELEMETRY), new Date(cutoff).toISOString());
+        if (candidateSessionIds.size === 0)
+            return 0;
+        const workoutTx = database.transaction([STORE_WORKOUTS], "readonly");
+        const workoutStore = workoutTx.objectStore(STORE_WORKOUTS);
+        const ownership = await Promise.all([...candidateSessionIds].map(async (sessionId) => ({
+            sessionId,
+            row: await requestResult(workoutStore.get(sessionId)),
+        })));
+        const abandoned = ownership
+            .filter(({ row }) => row === undefined)
+            .map(({ sessionId }) => sessionId);
+        for (const sessionId of abandoned) {
+            await clearOrdinaryBikeTelemetry(sessionId);
+        }
+        return abandoned.length;
+    }
+    catch (error) {
+        console.error("Error cleaning abandoned ordinary bike telemetry:", error);
+        return 0;
+    }
 }
 async function storeHrSample(sessionId, timestampSec, hr) {
     try {
@@ -141,9 +343,22 @@ async function getAllWorkoutSummaries() {
             const workouts = [];
             const request = index.openCursor(null, "prev");
             request.onsuccess = (event) => {
+                var _a;
                 const cursor = event.target.result;
                 if (cursor) {
-                    workouts.push(cursor.value);
+                    const row = cursor.value;
+                    if (((_a = row === null || row === void 0 ? void 0 : row.summary) === null || _a === void 0 ? void 0 : _a.workout_response) !== undefined) {
+                        const parsed = parseWorkoutResponse(row.summary.workout_response);
+                        row.summary = { ...row.summary };
+                        if (parsed &&
+                            parsed.sessionId === row.session_id &&
+                            parsed.sessionId === row.summary.external_session_id &&
+                            parsed.athleteId === row.summary.athlete_id)
+                            row.summary.workout_response = parsed;
+                        else
+                            delete row.summary.workout_response;
+                    }
+                    workouts.push(row);
                     cursor.continue();
                 }
                 else {
@@ -160,11 +375,14 @@ async function getAllWorkoutSummaries() {
 }
 async function deleteWorkoutSummary(sessionId) {
     try {
+        await flushOrdinaryBikeTelemetryWrites(sessionId);
         const database = await initDB();
-        const tx = database.transaction([STORE_WORKOUTS], "readwrite");
-        const store = tx.objectStore(STORE_WORKOUTS);
-        await store.delete(sessionId);
-        await clearHrSamples(sessionId);
+        const tx = database.transaction([STORE_WORKOUTS, STORE_HR_SAMPLES, STORE_ORDINARY_BIKE_TELEMETRY], "readwrite");
+        const completed = transactionComplete(tx);
+        tx.objectStore(STORE_WORKOUTS).delete(sessionId);
+        deleteBySessionIndex(tx.objectStore(STORE_HR_SAMPLES), sessionId);
+        deleteBySessionIndex(tx.objectStore(STORE_ORDINARY_BIKE_TELEMETRY), sessionId);
+        await completed;
         return true;
     }
     catch (error) {
@@ -227,6 +445,9 @@ export function registerStorageGlobals() {
     window.getHrSamples = getHrSamples;
     window.storeWorkoutSummary = storeWorkoutSummary;
     window.clearHrSamples = clearHrSamples;
+    window.storeOrdinaryBikeTelemetrySample = storeOrdinaryBikeTelemetrySample;
+    window.getOrdinaryBikeTelemetrySamples = getOrdinaryBikeTelemetrySamples;
+    window.clearOrdinaryBikeTelemetry = clearOrdinaryBikeTelemetry;
     window.getAllWorkoutSummaries = getAllWorkoutSummaries;
     window.deleteWorkoutSummary = deleteWorkoutSummary;
     window.storeSisuSettings = storeSisuSettings;
@@ -246,4 +467,4 @@ export async function resetWorkoutStorageForTests() {
         request.onblocked = () => resolve();
     });
 }
-export { initDB, storeHrSample, getHrSamples, storeWorkoutSummary, clearHrSamples, getAllWorkoutSummaries, deleteWorkoutSummary, storeSisuSettings, getSisuSettings, clearSisuSettings, };
+export { initDB, storeHrSample, getHrSamples, storeWorkoutSummary, clearHrSamples, storeOrdinaryBikeTelemetrySample, getOrdinaryBikeTelemetrySamples, clearOrdinaryBikeTelemetry, cleanupAbandonedOrdinaryBikeTelemetry, getAllWorkoutSummaries, deleteWorkoutSummary, storeSisuSettings, getSisuSettings, clearSisuSettings, };

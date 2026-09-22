@@ -14,6 +14,8 @@ const REQUIRED_VO2_RUNTIME_MODULES = [
   "/dist/workoutTemplate.js",
   "/dist/workoutPrescription.js",
   "/dist/fitnessState.js",
+  "/dist/ordinaryWorkoutTelemetry.js",
+  "/dist/workoutResponse.js",
   "/dist/utils/uuid.js",
 ];
 

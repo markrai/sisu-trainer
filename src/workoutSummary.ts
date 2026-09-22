@@ -1,5 +1,10 @@
 import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js";
-import { getHrSamples, storeWorkoutSummary } from "./workoutStorage.js";
+import {
+  flushOrdinaryBikeTelemetryWrites,
+  getHrSamples,
+  getOrdinaryBikeTelemetrySamples,
+  storeWorkoutSummary,
+} from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
 import { Activity, WorkoutSummary } from "./types.js";
 import { getMachineUsageSnapshot, type MachineUsageSnapshot } from "./machines/runtime.js";
@@ -18,6 +23,7 @@ import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
 import { resolveWorkoutPrescription } from "./workoutPrescription.js";
 import { promoteVo2SummaryToStoredFitnessState } from "./fitnessState.js";
 import { generateUUID } from "./utils/uuid.js";
+import { deriveWorkoutResponse } from "./workoutResponse.js";
 
 export function buildHrTrace(hrSamples: any[]) {
   if (!hrSamples || hrSamples.length === 0) {
@@ -219,6 +225,29 @@ async function generateWorkoutSummary(
   if (isVo2WorkoutSelector(day)) {
     const profile = options?.vo2Profile ?? readExplicitVo2ProfileInputs();
     summary.vo2_assessment = assessVo2(summary.vo2_evidence, profile);
+  } else if (
+    session.activity === "bike" &&
+    session.athleteId &&
+    phasePlan?.resolvedPrescription
+  ) {
+    try {
+      await flushOrdinaryBikeTelemetryWrites(sessionId);
+      const bikeSamples = await getOrdinaryBikeTelemetrySamples(sessionId);
+      const response = deriveWorkoutResponse({
+        athleteId: session.athleteId,
+        sessionId,
+        blocks: phasePlan.blocks,
+        resolvedPrescription: phasePlan.resolvedPrescription,
+        completedActiveSec: activeDurationSec,
+        cancelled: options?.cancelled === true,
+        earlyCooldownElapsed: session.earlyCooldownElapsed,
+        hrSamples,
+        bikeSamples,
+      });
+      if (response) summary.workout_response = response;
+    } catch (error) {
+      console.error("Error deriving ordinary workout response:", error);
+    }
   }
 
   validateSummary(summary);
@@ -239,7 +268,7 @@ async function generateWorkoutSummary(
 
 async function emitWorkoutSummary(summary: WorkoutSummary) {
   const saved = await storeWorkoutSummary(summary);
-  if (saved) {
+  if (saved && summary.vo2_assessment) {
     try {
       promoteVo2SummaryToStoredFitnessState(summary);
     } catch (error) {

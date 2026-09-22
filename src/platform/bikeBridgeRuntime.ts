@@ -52,8 +52,13 @@ export interface BikeBridgeViewState {
   commandedResistance?: number;
   requestedResistance: number | null;
   observedResistance: number | null;
+  observedResistanceCurrent: boolean;
   rpm: number | null;
+  rpmCurrent: boolean;
   watts: number | null;
+  wattsCurrent: boolean;
+  telemetrySnapshotAt: string | null;
+  telemetryReceivedAtMs: number | null;
   telemetryStale: boolean;
   lastError: string | null;
   lastCommandOutcome: BikeBridgeLastCommandOutcome | null;
@@ -111,6 +116,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
   const storage = options.storage ?? defaultBikeBridgeStorage();
   const timeoutMs = options.requestTimeoutMs ?? BIKE_BRIDGE_REQUEST_TIMEOUT_MS;
   const pollIntervalMs = options.pollIntervalMs ?? BIKE_BRIDGE_POLL_INTERVAL_MS;
+  const now = options.now ?? Date.now;
   const readBpm = options.getCurrentBpm ?? getCurrentBpm;
   const postedBodies: string[] = [];
   const baseTransport = options.transport ?? createDefaultBikeBridgeTransport();
@@ -146,6 +152,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
   let paused = false;
   let lastStatus: BridgeStatus | null = null;
   let lastTelemetry: BikeTelemetry | null = null;
+  let lastTelemetryReceivedAtMs: number | null = null;
   let telemetryStale = false;
   let lastError: string | null = null;
   let lastPollKind: "ok" | "timeout" | "unreachable" | "http_error" | "malformed" | "not_configured" | null = null;
@@ -198,8 +205,13 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       commandedResistance,
       requestedResistance: requestedForView(),
       observedResistance: formatMetric(lastTelemetry?.resistance.value),
+      observedResistanceCurrent: lastTelemetry?.resistance.current === true,
       rpm: formatMetric(lastTelemetry?.rpm.value),
+      rpmCurrent: lastTelemetry?.rpm.current === true,
       watts: formatMetric(lastTelemetry?.watts.value),
+      wattsCurrent: lastTelemetry?.watts.current === true,
+      telemetrySnapshotAt: lastTelemetry?.snapshotAt ?? null,
+      telemetryReceivedAtMs: lastTelemetryReceivedAtMs,
       telemetryStale,
       lastError,
       lastCommandOutcome,
@@ -324,6 +336,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       const telemetryResult = await client.getTelemetry();
       if (isBikeBridgeClientOk(telemetryResult)) {
         lastTelemetry = telemetryResult.value;
+        lastTelemetryReceivedAtMs = now();
         telemetryStale = false;
       } else if (lastTelemetry) {
         telemetryStale = true;
@@ -406,6 +419,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
           );
           lastStatus = null;
           lastTelemetry = null;
+          lastTelemetryReceivedAtMs = null;
           lastPollKind = "not_configured";
           lastError = null;
           notify();
@@ -424,6 +438,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       if (urlChanged) {
         lastStatus = null;
         lastTelemetry = null;
+        lastTelemetryReceivedAtMs = null;
         lastAccepted = undefined;
         holdFailedLevel = undefined;
         telemetryStale = false;

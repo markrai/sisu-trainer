@@ -243,6 +243,123 @@ export interface HrSample {
   hr: number;
 }
 
+/** Permanent historical schema identities for Phase C evidence. */
+export const ORDINARY_BIKE_TELEMETRY_SCHEMA_VERSION_V1 = 1 as const;
+export const ORDINARY_BIKE_TELEMETRY_SCHEMA_VERSION = ORDINARY_BIKE_TELEMETRY_SCHEMA_VERSION_V1;
+export const WORKOUT_RESPONSE_SCHEMA_VERSION_V1 = 1 as const;
+export const WORKOUT_RESPONSE_SCHEMA_VERSION = WORKOUT_RESPONSE_SCHEMA_VERSION_V1;
+
+export type OrdinaryBikeTelemetryAvailability = "fresh" | "stale" | "unavailable";
+export type BikeWattsProvenance = "measured_watts" | "calibrated_watts";
+
+export interface OrdinaryBikeTelemetrySampleV1 {
+  schemaVersion: typeof ORDINARY_BIKE_TELEMETRY_SCHEMA_VERSION_V1;
+  athleteId: string;
+  sessionId: string;
+  activeSec: number;
+  observedAt: string;
+  availability: OrdinaryBikeTelemetryAvailability;
+  /** Stable identity from the successful Bike Bridge snapshot, used to reject duplicate observations. */
+  sourceSampleId?: string;
+  freshnessMs?: number;
+  watts?: {
+    value: number;
+    source: BikeWattsProvenance;
+    freshnessMs: number;
+  };
+  cadenceRpm?: {
+    value: number;
+    source: "measured";
+    freshnessMs: number;
+  };
+  observedResistance?: {
+    value: number;
+    source: "observed";
+    freshnessMs: number;
+  };
+  /** Controller/audit values. Never physiological workload evidence. */
+  desiredResistance?: number;
+  commandedResistance?: number;
+}
+
+/** Persisted/read union. Add historical members here without relabeling prior schemas. */
+export type OrdinaryBikeTelemetrySample = OrdinaryBikeTelemetrySampleV1;
+/** Writer alias. Advance this only when a new writer and matching parser are introduced. */
+export type CurrentOrdinaryBikeTelemetrySample = OrdinaryBikeTelemetrySampleV1;
+
+export interface WorkoutResponseScalarSummary {
+  sampleCount: number;
+  coverageRatio: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+  end: number;
+}
+
+export interface WorkoutPhaseResponse {
+  phaseInstanceId: string;
+  phaseId: string;
+  kind: WorkoutPhaseKind;
+  intensityId?: PhaseIntensityId;
+  detailName?: string;
+  intervalIndex?: number;
+  activeStartSec: number;
+  activeEndSec: number;
+  plannedDurationSec: number;
+  completedDurationSec: number;
+  expectedHeartRate?: ResolvedHeartRateTarget;
+  hr?: WorkoutResponseScalarSummary;
+  watts?: WorkoutResponseScalarSummary & {
+    provenance: "measured_watts" | "calibrated_watts" | "mixed";
+  };
+  cadenceRpm?: WorkoutResponseScalarSummary;
+  observedResistance?: WorkoutResponseScalarSummary;
+  desiredResistance?: WorkoutResponseScalarSummary;
+  commandedResistance?: WorkoutResponseScalarSummary;
+}
+
+export interface WorkoutResponseV1 {
+  schemaVersion: typeof WORKOUT_RESPONSE_SCHEMA_VERSION_V1;
+  athleteId: string;
+  sessionId: string;
+  completion: {
+    plannedActiveSec: number;
+    completedActiveSec: number;
+    completionFraction: number;
+    cancelled: boolean;
+    earlyCooldown: boolean;
+  };
+  evidence: {
+    hr: {
+      expectedDurationSec: number;
+      validSampleCount: number;
+      coverageRatio: number;
+      source: "ble_chest_strap" | "unavailable";
+    };
+    bike: {
+      expectedDurationSec: number;
+      rowCount: number;
+      freshSampleCount: number;
+      staleSampleCount: number;
+      unavailableSampleCount: number;
+      implicitMissingCount: number;
+      freshRowCoverageRatio: number;
+      wattsProvenance: "measured_watts" | "calibrated_watts" | "mixed" | "unavailable";
+    };
+    rawTelemetry: {
+      store: "ordinary_bike_telemetry";
+      schemaVersion: typeof ORDINARY_BIKE_TELEMETRY_SCHEMA_VERSION_V1;
+    };
+  };
+  phases: WorkoutPhaseResponse[];
+}
+
+/** Persisted/read union. Add historical members here without relabeling prior schemas. */
+export type WorkoutResponse = WorkoutResponseV1;
+/** Writer alias. Advance this only when a new writer and matching parser are introduced. */
+export type CurrentWorkoutResponse = WorkoutResponseV1;
+
 export interface ZoneMinutes {
   z1: number;
   z2: number;
@@ -515,6 +632,8 @@ export interface WorkoutSummary {
    * Local-only; stripped from SISU ingest. Absent on ordinary workouts.
    */
   vo2_assessment?: Vo2AssessmentResult;
+  /** Athlete-owned ordinary-workout response. Local-only and absent on legacy/VO2 summaries. */
+  workout_response?: WorkoutResponse;
 }
 
 export interface SisuSettings {

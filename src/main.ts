@@ -1,6 +1,6 @@
 import { APP_VERSION, setVersionOnDom } from "./version.js";
 import { registerProfileGlobals, loadProfile } from "./profile.js";
-import { registerStorageGlobals } from "./workoutStorage.js";
+import { cleanupAbandonedOrdinaryBikeTelemetry, registerStorageGlobals } from "./workoutStorage.js";
 import { registerZoneGlobals } from "./zoneCalculator.js";
 import { registerSummaryGlobals } from "./workoutSummary.js";
 import { registerWorkoutDataGlobals, initializeWorkoutPlan } from "./workoutData.js";
@@ -108,6 +108,7 @@ async function bootstrap() {
   setupModalBackgroundHandlers();
   loadProfile();
   cleanupStaleWorkoutSessions();
+  void cleanupAbandonedOrdinaryBikeTelemetry();
   await initializeWorkoutPlan();
   startBikeBridgeRuntime();
   updateDisplay();

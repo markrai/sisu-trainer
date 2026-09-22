@@ -1,6 +1,6 @@
-import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, startWorkout, todayName, updateRing, tickVo2ProtocolWithCanonicalHr, requestVo2LimitReached, } from "./workoutLogic.js";
+import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, startWorkout, todayName, updateRing, tickVo2ProtocolWithCanonicalHr, requestVo2LimitReached, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
-import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples } from "./workoutStorage.js";
+import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples, queueOrdinaryBikeTelemetrySample, } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
@@ -577,6 +577,34 @@ function recordVo2BikeTelemetryIfActive() {
         metrics.observed_resistance = state.observedResistance;
     }
     recordVo2ActiveBikeTelemetry(session, metrics);
+}
+function recordOrdinaryBikeTelemetryIfActive() {
+    const day = getSelectedDay();
+    if (isVo2WorkoutSelector(day))
+        return;
+    const session = getSession(day);
+    if (!session.sessionId ||
+        !session.startTime ||
+        !session.athleteId ||
+        session.activity !== "bike") {
+        return;
+    }
+    const state = getBikeBridgeSession().getViewState();
+    const sample = ordinaryActiveBikeTelemetrySample(session, {
+        telemetryStale: state.telemetryStale,
+        telemetryReceivedAtMs: state.telemetryReceivedAtMs,
+        telemetrySnapshotAt: state.telemetrySnapshotAt,
+        watts: { value: state.watts, current: state.wattsCurrent },
+        cadenceRpm: { value: state.rpm, current: state.rpmCurrent },
+        observedResistance: {
+            value: state.observedResistance,
+            current: state.observedResistanceCurrent,
+        },
+        desiredResistance: state.desiredResistance,
+        commandedResistance: state.commandedResistance,
+    });
+    if (sample)
+        queueOrdinaryBikeTelemetrySample(sample);
 }
 function renderBikeBridgeSettingsStatus() {
     var _a, _b;
@@ -1831,6 +1859,7 @@ function registerUiGlobals(phaseBoxEl) {
     getBikeBridgeSession().subscribe(() => {
         renderBikeBridgeHud();
         recordVo2BikeTelemetryIfActive();
+        recordOrdinaryBikeTelemetryIfActive();
         const equipmentTab = document.getElementById("equipmentTab");
         if (equipmentTab === null || equipmentTab === void 0 ? void 0 : equipmentTab.classList.contains("active"))
             renderBikeBridgeSettingsStatus();

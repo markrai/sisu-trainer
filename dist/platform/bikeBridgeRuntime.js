@@ -23,13 +23,14 @@ function formatMetric(value) {
     return value === undefined ? null : value;
 }
 export function createBikeBridgeSession(options = {}) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const storage = (_a = options.storage) !== null && _a !== void 0 ? _a : defaultBikeBridgeStorage();
     const timeoutMs = (_b = options.requestTimeoutMs) !== null && _b !== void 0 ? _b : BIKE_BRIDGE_REQUEST_TIMEOUT_MS;
     const pollIntervalMs = (_c = options.pollIntervalMs) !== null && _c !== void 0 ? _c : BIKE_BRIDGE_POLL_INTERVAL_MS;
-    const readBpm = (_d = options.getCurrentBpm) !== null && _d !== void 0 ? _d : getCurrentBpm;
+    const now = (_d = options.now) !== null && _d !== void 0 ? _d : Date.now;
+    const readBpm = (_e = options.getCurrentBpm) !== null && _e !== void 0 ? _e : getCurrentBpm;
     const postedBodies = [];
-    const baseTransport = (_e = options.transport) !== null && _e !== void 0 ? _e : createDefaultBikeBridgeTransport();
+    const baseTransport = (_f = options.transport) !== null && _f !== void 0 ? _f : createDefaultBikeBridgeTransport();
     const transport = {
         async request(request) {
             if (request.method === "POST" &&
@@ -55,6 +56,7 @@ export function createBikeBridgeSession(options = {}) {
     let paused = false;
     let lastStatus = null;
     let lastTelemetry = null;
+    let lastTelemetryReceivedAtMs = null;
     let telemetryStale = false;
     let lastError = null;
     let lastPollKind = null;
@@ -89,6 +91,7 @@ export function createBikeBridgeSession(options = {}) {
         return (_a = lastStatus === null || lastStatus === void 0 ? void 0 : lastStatus.resistance.requested) !== null && _a !== void 0 ? _a : null;
     }
     function viewState() {
+        var _a;
         const current = settings();
         const readiness = classifyReadiness(configured(), lastStatus, lastPollKind);
         return {
@@ -101,8 +104,13 @@ export function createBikeBridgeSession(options = {}) {
             commandedResistance,
             requestedResistance: requestedForView(),
             observedResistance: formatMetric(lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.resistance.value),
+            observedResistanceCurrent: (lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.resistance.current) === true,
             rpm: formatMetric(lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.rpm.value),
+            rpmCurrent: (lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.rpm.current) === true,
             watts: formatMetric(lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.watts.value),
+            wattsCurrent: (lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.watts.current) === true,
+            telemetrySnapshotAt: (_a = lastTelemetry === null || lastTelemetry === void 0 ? void 0 : lastTelemetry.snapshotAt) !== null && _a !== void 0 ? _a : null,
+            telemetryReceivedAtMs: lastTelemetryReceivedAtMs,
             telemetryStale,
             lastError,
             lastCommandOutcome,
@@ -233,6 +241,7 @@ export function createBikeBridgeSession(options = {}) {
             const telemetryResult = await client.getTelemetry();
             if (isBikeBridgeClientOk(telemetryResult)) {
                 lastTelemetry = telemetryResult.value;
+                lastTelemetryReceivedAtMs = now();
                 telemetryStale = false;
             }
             else if (lastTelemetry) {
@@ -313,6 +322,7 @@ export function createBikeBridgeSession(options = {}) {
                     }, storage);
                     lastStatus = null;
                     lastTelemetry = null;
+                    lastTelemetryReceivedAtMs = null;
                     lastPollKind = "not_configured";
                     lastError = null;
                     notify();
@@ -331,6 +341,7 @@ export function createBikeBridgeSession(options = {}) {
             if (urlChanged) {
                 lastStatus = null;
                 lastTelemetry = null;
+                lastTelemetryReceivedAtMs = null;
                 lastAccepted = undefined;
                 holdFailedLevel = undefined;
                 telemetryStale = false;
