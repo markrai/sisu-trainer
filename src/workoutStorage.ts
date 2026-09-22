@@ -1,6 +1,7 @@
 import { HrSample, WorkoutSummary, SisuSettings, type OrdinaryBikeTelemetrySample } from "./types.js";
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
+import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 
 const DB_NAME = "vo2_workout_db";
 const DB_VERSION = 3;
@@ -411,6 +412,12 @@ async function deleteWorkoutSummary(sessionId: string) {
     deleteBySessionIndex(tx.objectStore(STORE_HR_SAMPLES), sessionId);
     deleteBySessionIndex(tx.objectStore(STORE_ORDINARY_BIKE_TELEMETRY), sessionId);
     await completed;
+    try {
+      const history = await getAllWorkoutSummaries();
+      rebuildStoredPassiveFitnessProjection(history.map((row) => row.summary));
+    } catch (error) {
+      console.error("Error rebuilding passive fitness projection after deletion:", error);
+    }
     return true;
   } catch (error) {
     console.error("Error deleting workout summary:", error);

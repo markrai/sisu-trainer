@@ -195,7 +195,7 @@ test("fitness state parser and local persistence reconstruct strict versioned re
   assert.equal(storeFitnessState(promoted, storage), true);
   assert.deepEqual(readFitnessState(fixture.athlete.athleteId, storage), promoted);
   assert.equal(readFitnessState("different-athlete", storage), null);
-  assert.equal(parseFitnessState({ ...promoted, schemaVersion: 2 }), null);
+  assert.equal(parseFitnessState({ ...promoted, schemaVersion: 3 }), null);
   assert.equal(parseFitnessState({ ...promoted, athleteId: "" }), null);
   assert.equal(parseFitnessState({ ...promoted, vo2Max: { ...promoted.vo2Max, value: "bad" } }), null);
   assert.equal(parseFitnessState({ ...promoted, updatedAt: "not-a-date" }), null);

@@ -10,14 +10,14 @@ The recommended direction is evolutionary:
 
 1. Keep `data.json` as the workout-template source and preserve workout `intent`, activity, phase kind, duration, interval structure, pause-safe timing, and the machine-adapter boundary.
 2. Build on the now-implemented relative phase intensity and frozen, versioned `ResolvedWorkoutPrescription` seam; keep its historical resolver formats readable as newer resolvers ship.
-3. Build on the now-implemented internal athlete/fitness model, qualified VO₂ calibration promotion, and normalized ordinary-workout response; next qualify repeated comparable responses in shadow/audit mode without adding multi-profile UI or a readiness score.
+3. Build on the now-implemented internal athlete/fitness model, qualified VO₂ calibration promotion, normalized ordinary-workout response, and conservative passive comparable-HR workload trend; do not add multi-profile UI or a readiness score yet.
 4. Treat workload as the primary prescription for hard bike intervals when reliable watts/calibration exists; treat HR as expected response and a bounded guardrail. Continue to use HR more directly for longer steady work where lag is less problematic.
-5. Convert repeated, quality-qualified `WorkoutResponse` evidence into conservative fitness observations before allowing any state update. Reuse the existing machine learning/dynamics patterns rather than creating a competing controller.
+5. Keep the Phase D trend observational and non-prescriptive until Phase E defines an approved individualized resolver and safety policy.
 
 The largest technical risks are:
 
 - historical/legacy workouts still lack workload traces, while new ordinary evidence depends on Bike Bridge availability and can add roughly 1–3 MB of retained raw telemetry per workout hour;
-- the app has no resting HR, observed HRmax, or persisted HRV baseline, and its authoritative fitness state currently comes only from qualified formal VO₂ assessments;
+- the app has no resting HR, observed HRmax, or persisted HRV baseline; formal VO₂ remains authoritative while ordinary workouts support only a narrow passive workload-at-comparable-HR trend;
 - existing automatic resistance control can act on fixed BPM targets, so changing target generation changes a real controller, not just display text;
 - machine learning is device-global and keyed by machine/intent/duration, not by athlete, which is unsafe for future shared-device profiles;
 - several confidence concepts exist, but they are specific to separate subsystems rather than a unified provenance model.
@@ -32,7 +32,15 @@ Phase B is now implemented. `src/profile.ts` migrates the legacy single-user for
 
 ### Implementation status (Phase C)
 
-Phase C is now implemented without changing prescription or control behavior. Successful ordinary bike sessions write strict v1 telemetry rows to the IndexedDB `ordinary_bike_telemetry` store at the existing pause-safe active-second cadence. Each row uses the athlete/session frozen at workout start, records fresh measured watts/cadence/observed resistance separately from desired/commanded resistance, and records stale/unavailable seconds without carrying their machine values forward. Finalization flushes pending rows and derives a strict v1 `WorkoutResponse` from existing canonical HR, the raw bike trace, frozen blocks, and the frozen `ResolvedWorkoutPrescription`; current profile and live template data are not consulted for ownership or segmentation. The response retains completion, independent HR quality and fresh-transport-row coverage, workload provenance, and stable per-phase/interval summaries. Insufficient machine evidence produces an explicit HR-only/partial response rather than zero workload. Raw telemetry for a successfully summarized workout remains for audit until that workout is deleted. Restarting or replacing an unfinalized session flushes and deletes its ordinary trace immediately; any other abandoned trace becomes eligible for indexed cleanup after 48 hours only when no immutable summary owns it. Ordinary responses do not update `FitnessState`. The standalone VO₂ collector/estimator remains separate and unchanged, and existing machine learning remains legacy device-global.
+Phase C is now implemented without changing prescription or control behavior. Successful ordinary bike sessions write strict v1 telemetry rows to the IndexedDB `ordinary_bike_telemetry` store at the existing pause-safe active-second cadence. Each row uses the athlete/session frozen at workout start, records fresh measured watts/cadence/observed resistance separately from desired/commanded resistance, and records stale/unavailable seconds without carrying their machine values forward. Finalization flushes pending rows and derives a strict v1 `WorkoutResponse` from existing canonical HR, the raw bike trace, frozen blocks, and the frozen `ResolvedWorkoutPrescription`; current profile and live template data are not consulted for ownership or segmentation. The response retains completion, independent HR quality and fresh-transport-row coverage, workload provenance, and stable per-phase/interval summaries. Insufficient machine evidence produces an explicit HR-only/partial response rather than zero workload. Raw telemetry for a successfully summarized workout remains for audit until that workout is deleted. Restarting or replacing an unfinalized session flushes and deletes its ordinary trace immediately; any other abandoned trace becomes eligible for indexed cleanup after 48 hours only when no immutable summary owns it. The standalone VO₂ collector/estimator remains separate and unchanged, and existing machine learning remains legacy device-global.
+
+### Implementation status (Phase D)
+
+Phase D is implemented as a conservative athlete-owned `workload_at_comparable_hr` trend, not an absolute VO₂ estimate or generic fitness score. `src/fitnessRefinement.ts` strictly re-parses owned Phase C responses, accepts only completed ordinary bike `aerobic_base` or `threshold` work of at least eight minutes, and requires session and phase HR/load coverage, fresh bike coverage, stable plausible watts/HR/cadence, and observed measured or calibrated watts. Mixed workload provenance, short VO₂ intervals, recovery, warm-up/cooldown, strength/elliptical activity, cancellation, controller resistance, stale/missing load, and malformed/unowned history fail closed. Four measured sessions on four dates are required; any calibrated-watt evidence raises the requirement to five sessions and keeps quality low. Observations must lie within a 10 BPM comparison band.
+
+The deterministic `fitness-refinement-v1` reducer de-duplicates session IDs, sorts evidence chronologically, uses a four-session rolling median, caps improvement at 1.5% per added session, and permits at most a 0.75% decline only after three consecutive observations are more than 2% below the current projection. Quality is transparent `low`/`moderate`/`high`, based on independent-session volume, measured provenance, and median absolute workload dispersion. Persisted v2 provenance includes algorithm/version, session IDs, independent counts, earliest/latest timestamps, workload-source mix, observed HR/watt ranges, dispersion, quality, and any formal anchor. The projection is rebuilt from immutable summaries after durable save and after deletion; the latest evidence timestamp is its deterministic update watermark, so duplicate callbacks and out-of-order replay converge. Projection errors are isolated from history writes/deletes.
+
+Formal assessment fields remain unchanged and authoritative. Ordinary evidence at or before the latest formal anchor is excluded, and the passive metric remains `source: workout_observation`; it never becomes or overwrites `formal_assessment`. The permanent v1 state reader remains independent, while the v2 reader accepts only the historical Phase D v1 algorithm identity and rejects unknown versions. Current profile demographics and legacy device-global learned resistance, HR dynamics, and shadow prediction never enter the reducer. Phase D does not infer VO₂, HRmax, recovery, drift, readiness, illness, sleep, HRV, temperature, or acute fatigue, and it does not change prescriptions or machine behavior.
 
 Throughout this review:
 
@@ -159,7 +167,7 @@ At finalization, `src/workoutSummary.ts::generateWorkoutSummary` builds protocol
 - fits HR as a linear function of watts and requires R² at least 0.7;
 - extrapolates to predicted HRmax and applies the ACSM cycle equation.
 
-The result retains much more than `VO2Max = N`: accepted/eligible points, per-point steady-state HR and workload provenance, slope, intercept, R², predicted HRmax, predicted maximal watts, profile snapshot, reason codes, stage counts, estimator/protocol versions, and a high/moderate/low fit-quality label. The immutable result remains in its workout summary. After that summary is saved, a supported `estimated` result can update the current `FitnessState`; the reducer revalidates and recomputes its eligible-point regression, retains only eligible points, labels maximal watts as predicted, and keeps demographic HRmax inside calibration audit metadata rather than promoting observed HRmax. Ordinary workouts still do not consume this state.
+The result retains much more than `VO2Max = N`: accepted/eligible points, per-point steady-state HR and workload provenance, slope, intercept, R², predicted HRmax, predicted maximal watts, profile snapshot, reason codes, stage counts, estimator/protocol versions, and a high/moderate/low fit-quality label. The immutable result remains in its workout summary. After that summary is saved, a supported `estimated` result can update the current `FitnessState`; the reducer revalidates and recomputes its eligible-point regression, retains only eligible points, labels maximal watts as predicted, and keeps demographic HRmax inside calibration audit metadata rather than promoting observed HRmax. Ordinary workout prescriptions still do not consume this state; Phase D only adds a separate non-prescriptive trend.
 
 ### Telemetry and workout history
 
@@ -188,7 +196,7 @@ IndexedDB schema version 3 in `src/workoutStorage.ts` has:
 - `ordinary_bike_telemetry`, keyed by `[session_id, active_sec]`, with session, observation-time, and session/source-snapshot indexes;
 - `sisu_settings`, keyed by `key`.
 
-Versioned local-storage records provide the single `AthleteProfile` and current `FitnessState`; new session/summary evidence carries `athlete_id` plus a minimal version pointer. Historical IndexedDB rows are not rewritten and may omit both fields. New owned ordinary bike summaries may contain a strict `workout_response`; malformed persisted responses are omitted when history is read. Workout deletion removes the summary, HR, and only that session's ordinary telemetry in one IndexedDB transaction. SISU export strips local athlete/snapshot fields, activity, machine traces/audits, shadow fields, VO₂ evidence/assessment, resolved prescription, and `workout_response`.
+Versioned local-storage records provide the single `AthleteProfile` and current `FitnessState`; new session/summary evidence carries `athlete_id` plus a minimal version pointer. Historical IndexedDB rows are not rewritten and may omit both fields. New owned ordinary bike summaries may contain a strict `workout_response`; malformed persisted responses are omitted when history is read. Workout deletion removes the summary, HR, and only that session's ordinary telemetry in one IndexedDB transaction, then rebuilds the passive projection from remaining summaries without touching formal assessment evidence. SISU export strips local athlete/snapshot fields, activity, machine traces/audits, shadow fields, VO₂ evidence/assessment, resolved prescription, and `workout_response`.
 
 The frozen session/VO₂ runtime survives reload, but machine-guidance runtime, its recent HR buffer, trace, and in-progress decision-audit state are memory-only. A mid-workout reload resets that controller history, so the final trace/audit can be incomplete and learned behavior may restart within the same nominal session. Any future adaptive authority needs an explicit recovery policy or persisted controller snapshot.
 
@@ -387,8 +395,8 @@ Current `zone_minutes`, `primary_zone`, and `stress_profile` should not be treat
 | How quickly did HR rise? | Yes, for qualified work starts and ±1 recommended resistance changes; existing dynamics implement this. |
 | How quickly did HR recover? | Raw HR and stable work→recovery boundaries are retained, but Phase C intentionally leaves the metric unavailable pending a reviewed window/coverage policy. |
 | Did the user complete intended workload? | Active-time completion plus phase-level observed workload/cadence/resistance are retained when fresh; missing evidence remains explicit. |
-| Same workload easier weeks later? | Comparable measured-workload evidence can now be selected, but Phase D must require repeated qualified responses before updating state. |
-| Power-at-HR / HR-at-power trend? | Computable from qualified measured-watt ordinary traces and formal stages; no ordinary trend currently updates `FitnessState`. |
+| Same workload easier weeks later? | Phase D now recognizes a slow workload-at-comparable-HR trend after at least four measured sessions on four dates, or five when calibrated watts are represented. |
+| Power-at-HR / HR-at-power trend? | A narrow comparable-HR workload projection is persisted; full HR↔power regression and extrapolation remain intentionally unavailable. |
 | Comparable phase alignment? | Yes for new summaries through `vo2_evidence.phases`; older summaries may lack it. |
 | Skipped intervals/repetitions? | No explicit skip action/state exists. Early cooldown and cancellation are known, but arbitrary skips are not represented. |
 
@@ -398,7 +406,7 @@ Reload also weakens comparability of machine traces because the controller/audit
 
 `OrdinaryBikeTelemetrySampleV1` retains athlete/session ownership, active second, local observation time, bridge snapshot identity, availability/freshness, fresh observed watts/RPM/resistance, and separately labeled desired/commanded resistance. Watts are `measured_watts`, `calibrated_watts`, or absent; current collection emits measured watts only and never manufactures watts from resistance. IndexedDB provides deterministic per-session/active-second keys and bridge-snapshot deduplication, including upgrades of an already-present active second. `WorkoutResponseV1` stores active completion, separate HR quality and fresh-row transport coverage, raw-store provenance, and per-phase summaries from frozen windows. The persisted/read types are historical unions, while current-writer aliases remain separate. Raw rows for successfully summarized workouts remain until workout deletion. Restart and unfinalized-session replacement use the same flush-aware per-session delete path; non-blocking startup cleanup uses the `observed_at` index to scan only old keys, deduplicates candidate session IDs, and point-checks summary ownership before removing any remaining abandoned traces.
 
-Passive updates should use repeated comparable observations, robust aggregation, recency limits, minimum coverage, and source quality. A single high-HR workout should become a low-weight observation or an outlier, not overwrite fitness. The app cannot currently distinguish heat, dehydration, illness, caffeine, sleep loss, medication, emotional stress, or sensor error; it also lacks perceived exertion and environmental context. Therefore high-HR observations alone should not lower fitness state. At most they should delay progression or request confirmation after a repeated pattern.
+Phase D uses repeated comparable observations, robust medians, minimum coverage, provenance-specific evidence counts, and bounded changes. A single high-HR or low-workload workout cannot overwrite fitness. The app cannot distinguish heat, dehydration, illness, caffeine, sleep loss, medication, emotional stress, or sensor error; it also lacks perceived exertion and environmental context. Therefore a decline requires three corroborating qualified observations and remains capped, without assigning a readiness or illness cause.
 
 ## 8. Recommended Domain Model
 
@@ -626,20 +634,23 @@ interface WorkoutResponseV1 {
 
 Each phase response has a stable `phaseInstanceId`, original phase ID/kind/intensity/detail/interval identity, frozen expected HR, planned/completed active duration, and available HR/watts/cadence/observed-resistance summaries. Desired and commanded resistance have separate summaries and never become watts. The builder consumes canonical raw HR plus Phase C raw bike rows and reconstructs phase windows from frozen blocks/prescription, not `data.json`. The misleading VO₂-specific name on general `vo2_evidence` remains for backward compatibility; renaming historical JSON is unnecessary.
 
-Then emit narrowly typed observations, for example:
+Phase D currently emits one narrowly typed observation:
 
 ```text
 WorkoutResponse
-    -> HR recovery observation
-    -> HR-at-measured-power observation
-    -> drift observation
-    -> completion/tolerance observation
-    -> candidate FitnessState update
+    -> qualified steady aerobic/threshold phase
+    -> one session-level watts + representative-HR observation
+    -> repeated comparable-HR workload trend
+    -> separate passive FitnessState metric
 ```
 
-Phase C persists the compact response inside `WorkoutSummary` and keeps raw telemetry for audit/re-derivation until the workout is deleted. A response failure is caught and omits only the response; summary persistence still proceeds. Persisted history reads additionally require the response's session and athlete owners to match the containing summary. Pending raw writes are flushed before derivation. Storage writes fail independently of workout completion, and missing machine data yields a partial response. `freshRowCoverageRatio` means successful fresh transport-row coverage, not watts or workload coverage; phase-level watts summaries carry their own coverage. There is no HR recovery/drift field yet because its evidence policy is unresolved. No ordinary or cancelled response updates fitness state.
+Phase C persists the compact response inside `WorkoutSummary` and keeps raw telemetry for audit/re-derivation until the workout is deleted. A response failure is caught and omits only the response; summary persistence still proceeds. Persisted history reads additionally require the response's session and athlete owners to match the containing summary. Pending raw writes are flushed before derivation. Storage writes fail independently of workout completion, and missing machine data yields a partial response. `freshRowCoverageRatio` means successful fresh transport-row coverage, not watts or workload coverage; phase-level watts summaries carry their own coverage. There is no HR recovery/drift field yet because its evidence policy is unresolved.
 
-Update rules should be gradual and inspectable: robust rolling medians or bounded exponentially weighted trends, minimum comparable-session count, outlier resistance, separate positive/negative evidence gates, and no large regression from one session. Reuse the existing conservative one-resistance-step update and recent-opportunity patterns as design precedents, not necessarily as universal formulas.
+After durable summary persistence, Phase D rebuilds from all remaining strictly parsed owned responses. It accepts only work phases with semantic `aerobic_base` or `threshold` identity, at least 480 planned seconds, at least 90% phase completion, 80% phase HR coverage, 75% session HR and fresh bike coverage, adequate watts coverage (80% measured or 90% calibrated), stable cadence, plausible/stable HR, and plausible/stable watts. It rejects mixed provenance because Phase C cannot allocate its phase median to one source class. Session phases of the same intensity are duration-weighted into one observation, preventing one workout from masquerading as multiple independent sessions.
+
+The selected same-intensity observations must fit inside a 10 BPM observed band and span four dates/four sessions for measured watts or five for any calibrated watts. The first eligible window establishes the baseline; each later session contributes through a four-session median. Upward movement is capped at 1.5% per session. Downward movement needs three consecutive observations each more than 2% below the current projection and is capped at 0.75% per session. No wall-clock decay is used: all qualified history remains until deletion, chronological ordering is explicit, and replay is deterministic. The diagnostic result reports qualified/rejected sessions, rejection reasons, evidence range, source mix, formal anchor, previous projection, candidate, guardrail-limited value, and final value.
+
+This is not a linear HR/workload calibration and is never extrapolated beyond its observed ranges. Phase C's current summaries do not provide enough controlled multi-stage ordinary-workout evidence to justify a robust absolute VO₂ estimate, and historical body weight is not frozen. Phase D therefore does not create passive VO₂ or reuse the formal submax estimator.
 
 ## 12. Profiles Product Model
 
@@ -671,7 +682,7 @@ Adding multiple Profiles before namespacing history and learned state risks cros
 | localStorage `athlete_identity_v1` | independently durable athlete ID and creation time | single local athlete |
 | localStorage `athlete_profile_v1` | versioned stable athlete ID, explicit demographics, unverified user-entered VO₂ | single local athlete |
 | localStorage `profile` | retained legacy compatibility mirror | migration source / compatibility only |
-| localStorage `fitness_state_v1` | current formal-assessment metrics, calibration, provenance and quality | owned by athlete ID |
+| localStorage `fitness_state_v1` | strict v1 formal metrics or v2 formal metrics plus separate Phase D passive comparable-HR workload trend | owned by athlete ID |
 | localStorage session keys | timing, pause, activity, athlete/snapshot, frozen blocks/legacy inputs/resolved prescription, VO₂ runtime | per day/selector, max 24 h |
 | IndexedDB `workouts` | immutable `WorkoutSummary` wrapper, including athlete/snapshot and resolved prescription on new workouts | legacy rows may be unowned |
 | IndexedDB `hr_samples` | one active HR sample/sec | by session |
@@ -680,13 +691,13 @@ Adding multiple Profiles before namespacing history and learned state risks cros
 | localStorage machine/equipment keys | selection, bridge, learned starts, dynamics, shadow validation | device-global |
 | localStorage `bike_telemetry_<id>` | assessment-only raw bike samples | transient, deleted after finalization |
 
-`workout_response` v1 is now stored in new owned ordinary-bike summaries. Athlete scoping for learned-start, dynamics, and shadow keys remains proposed and explicitly was not folded into Phase C.
+`workout_response` v1 is stored in new owned ordinary-bike summaries. The Phase D projection is athlete-scoped, while learned-start, dynamics, and shadow keys remain legacy device-global and are neither migrated nor used as fitness evidence.
 
 ### Migration
 
 Phase B required no IndexedDB version bump. Phase C moves the database from v2 to v3 by adding only `ordinary_bike_telemetry`; the upgrade does not rewrite `workouts`, `hr_samples`, or `sisu_settings`. Existing workout rows remain readable with `athlete_id` absent and are not silently attributed to the new athlete or given a response.
 
-The legacy local-storage profile migrates idempotently to the initial athlete record without deleting the source. Existing machine-learning keys remain legacy device-global; they have not been assigned to the athlete. Preserve them as legacy/unowned until a dedicated scoping policy is implemented.
+The legacy local-storage profile migrates idempotently to the initial athlete record without deleting the source. Fitness-state v1 remains readable through its permanent historical parser; new passive state uses schema v2 and a reader pinned to `fitness-refinement-v1`, independent of future writer aliases. Existing machine-learning keys remain legacy device-global; they have not been assigned to the athlete. Preserve them as legacy/unowned until a dedicated scoping policy is implemented.
 
 The resolved prescription remains frozen at workout start inside `phasePlan`, and the summary stores its resolver ID/version and per-phase provenance. Sessions now also freeze the athlete ID, profile schema version, and fitness-state version/update time when present, without passing those values into the Phase A resolver.
 
@@ -766,19 +777,20 @@ Per-second HR is already retained indefinitely. Phase C adds at most one ordinar
 
 ### Phase D — Passive fitness-state refinement
 
-- **Scope:** turn repeated comparable responses into provenance-bearing observations; refine workload/HR expectations and conservative starting load.
-- **Reuse:** learned-start conservative updates, HR dynamics recent-opportunity/reliability logic, shadow validation patterns.
-- **New abstractions:** `FitnessObservation`, comparability key, bounded trend reducer.
-- **Persistence:** compact observation/trend state with evidence session IDs; athlete-scoped machine keys.
-- **Tests:** no update from one outlier, missing/stale sensors, confounder flags, repeated trends, source precedence, rollback/recompute behavior.
-- **Risks:** confounding fitness with environment/fatigue; reinforcing controller-induced data; selection bias from completed workouts.
-- **Dependencies:** Phase C measured response; Phase B ownership/provenance.
+- **Status/scope:** implemented as a non-prescriptive, athlete-owned workload-at-comparable-HR trend. It does not estimate passive VO₂, HRmax, readiness, recovery, or drift and does not change a starting load or target.
+- **Reuse:** immutable Phase C response ownership/quality/provenance and the conservative design precedent of recent robust windows and asymmetric evidence gates. Device-global learned-start/dynamics/shadow values are not inputs.
+- **New abstractions:** `PassiveFitnessObservation`, pure qualification result, `PassiveAerobicTrend`, explanation diagnostics, `fitness-refinement-v1`, and a pure effective projection selector that keeps formal and passive metrics separate.
+- **Persistence:** `FitnessState` schema v2 retains formal v1-compatible fields and adds a separate `passiveAerobicTrend` metric with source, quality, algorithm, range, and evidence IDs. Full rebuild is inexpensive at current history volume.
+- **Tests:** strict gates, independent sessions/dates, measured/calibrated/command separation, athlete isolation, formal priority, idempotence, out-of-order replay, stable/improving/bad-day/deteriorating trajectories, deletion rebuild, unknown-version rejection, and unchanged controller/formal assessment regression suites.
+- **Risks:** controller-influenced observed workload remains endogenous even though commands are excluded; completion selection, environment, and unobserved fatigue can still bias observations. The narrow HR band and slow guardrails reduce but cannot remove those risks.
+- **Dependencies:** satisfied by Phase C response evidence and Phase B ownership/provenance.
 
 ### Phase E — Individualized numeric prescription and bounded live use
 
 - **Scope:** enable approved source hierarchy to resolve relative intensity to workload/HR; use structured targets in the existing controller; retain current bounded behavior and shadow any expanded rule first.
 - **Reuse:** machine adapter/runtime, decision audit, learned timing, shadow prediction/validation, Bike Bridge opt-in executor.
 - **New abstractions:** source-quality authorization policy, target explanation, progression budget.
+- **Next step:** consume the slow `FitnessState` projection while retaining safety envelopes and workload-first semantics for short VO₂ intervals. Define whether and how the narrow passive trend may influence a target before granting it controller authority.
 - **Persistence:** resolved targets and every adaptive decision already fit summary/audit; add weekly progression state if approved.
 - **Tests:** source downgrade, HR lag behavior, short-next-rep semantics, bounds, stale/missing inputs, opt-in actuation, explanation text, regression against current controller.
 - **Risks:** exercise safety, target-policy error, excessive progression, interaction between learned start and new target.
@@ -794,7 +806,7 @@ Per-second HR is already retained indefinitely. Phase C adds at most one ordinar
 - **Risks:** controller conflict, opaque behavior, weak HRV interpretation, multi-user data leakage.
 - **Dependencies:** earlier phases and explicit product demand.
 
-This order differs from a direct “individualize BPM first” approach because the current BPM range is a live controller input. The resolver/provenance seam is now in place; athlete/fitness ownership must land before changing target policy, and measured ordinary workload should exist before workout-derived power trends gain authority.
+This order differs from a direct “individualize BPM first” approach because the current BPM range is a live controller input. The resolver/provenance seam, athlete ownership, measured ordinary workload, and a passive trend now exist; Phase E still needs an explicit authorization and safety policy before any workout-derived trend gains prescription authority.
 
 ## 16. Concrete Code Impact
 
@@ -805,7 +817,7 @@ This order differs from a direct “individualize BPM first” approach because 
 | Phase runtime | `getPhase`, `WorkoutPhaseState` | stable IDs and pause-safe timing | consume structured phase prescription; later support plan revisions | optional runtime-plan revision model in Phase F |
 | Workout UI | `deriveWorkoutState`, `renderWorkout`, `findResolvedPhaseTarget`, `formatResolvedHeartRateTarget` | shared frozen structured target for display, coloring, and control | display source/explanation when individualized policies arrive | explanation formatter/components |
 | Profile | `Profile`, `src/profile.ts`, profile tab | explicit-input/blank protections | versioned athlete record, units/provenance | `AthleteProfile` repository/migration |
-| Fitness state | assessment result only | assessment diagnostics and history | add current-state consumer | `FitnessState`, `FitnessMetric`, reducer/store |
+| Fitness state | `FitnessState` v1/v2, formal metrics, separate passive trend | strict historical readers, assessment diagnostics, immutable history | add a Phase E consumer only after policy approval | individualized resolver authorization/explanation |
 | VO₂ protocol | `src/vo2Protocol.ts`, `Vo2ProtocolRuntime/Evidence` | stage/runtime/evidence logic | preflight profile requirement if promised; expose calibration promotion | assessment-to-calibration mapper |
 | VO₂ estimator | `src/vo2Estimator.ts`, `Vo2AssessmentResult` | pure versioned algorithm and validity | likely no estimator change for v1 architecture | none unless algorithm changes; version if it does |
 | HR telemetry | `src/hrMonitor.ts`, `persistWorkoutRelativeHr`, `hr_samples` | unchanged canonical active-clock recorder | consumed read-only by `WorkoutResponse` | Phase D observation qualification only |
@@ -815,11 +827,11 @@ This order differs from a direct “individualize BPM first” approach because 
 | HR dynamics | `src/machines/dynamics/*` | response timing, robust aggregates, reliability | add athlete ID; optionally emit normalized observations | adapter to `FitnessObservation` |
 | Shadow prediction | `src/machines/prediction/*` | shadow-first validation pattern | athlete scope and target provenance | only for new candidate rules |
 | Decision audit | `src/machines/audit/*` | inspectable decision record | include prescription resolver/source/version | possibly workout-plan adaptation audit |
-| Workout summary | `WorkoutSummary.resolved_prescription`, `workout_response`, `generateWorkoutSummary`, `emitWorkoutSummary` | frozen resolver/target provenance and single finalization pipeline | Phase C response attached before immutable summary persistence | Phase D observations, without ordinary direct state mutation |
-| History | `workoutStorage.ts`, history UI | durable summaries and raw HR | v3 telemetry store, strict response read, session-scoped deletion implemented | optional human-readable response UI |
+| Workout summary | `WorkoutSummary.resolved_prescription`, `workout_response`, `generateWorkoutSummary`, `emitWorkoutSummary` | frozen resolver/target provenance and single finalization pipeline | passive rebuild runs only after durable summary persistence | optional human-readable trend explanation UI |
+| History | `workoutStorage.ts`, history UI | durable summaries and raw HR | v3 telemetry store, strict response read, session-scoped deletion plus passive rebuild implemented | optional human-readable response UI |
 | Sync | `src/sisuSync.ts` | explicit local-only stripping | `workout_response` remains local | no change until an external versioned contract is approved |
 | HRV/readiness | `platform/hrv*`, inert HRV hooks | signal quality and live RMSSD | no readiness use in early phases | future baseline protocol/store only if justified |
-| Tests | machine, VO₂, timing, pause, profile suites | extensive characterization | add prescription/ownership/telemetry tests | new resolver and migration fixtures |
+| Tests | machine, VO₂, timing, pause, profile, response, refinement suites | extensive characterization plus Phase D synthetic trajectories | retain unchanged controller/formal-assessment baselines | Phase E resolver and migration fixtures |
 
 ## 17. What Not to Change
 
@@ -864,4 +876,4 @@ This order differs from a direct “individualize BPM first” approach because 
 
 ## 19. Recommended Next Implementation Step
 
-Implement **Phase D — conservative passive state refinement from repeated qualified `WorkoutResponse` observations**. First review real Phase C coverage/provenance distributions and define explicit comparability keys, minimum repeated-session evidence, outlier/confounder handling, recency, and source-precedence policy. Then add a versioned `FitnessObservation` reducer that operates in shadow/audit mode before any ordinary observation can update authoritative `FitnessState`. One response, a stale/calibrated-only trace, a cancelled session, or an isolated high-HR day must not lower fitness. Personalized prescription remains a later decision after the evidence review; Phase D should not automatically change workout targets or resistance policy.
+Implement **Phase E — individualized target prescription using `FitnessState`**. Define and version the authorization hierarchy that can translate formal calibration and the slow passive projection into a frozen `ResolvedWorkoutPrescription`, with explicit target explanations and progression budgets. Retain workload-first semantics for short VO₂ intervals, expected-HR lag, all current controller safety envelopes, and legacy fallback behavior until each new evidence tier is approved. Shadow the new resolver before granting it machine-control authority. Phase E must not reinterpret the Phase D trend as VO₂, readiness, or validity outside its observed HR/watt range.

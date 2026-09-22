@@ -1,6 +1,7 @@
 import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js";
 import {
   flushOrdinaryBikeTelemetryWrites,
+  getAllWorkoutSummaries,
   getHrSamples,
   getOrdinaryBikeTelemetrySamples,
   storeWorkoutSummary,
@@ -24,6 +25,7 @@ import { resolveWorkoutPrescription } from "./workoutPrescription.js";
 import { promoteVo2SummaryToStoredFitnessState } from "./fitnessState.js";
 import { generateUUID } from "./utils/uuid.js";
 import { deriveWorkoutResponse } from "./workoutResponse.js";
+import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 
 export function buildHrTrace(hrSamples: any[]) {
   if (!hrSamples || hrSamples.length === 0) {
@@ -273,6 +275,14 @@ async function emitWorkoutSummary(summary: WorkoutSummary) {
       promoteVo2SummaryToStoredFitnessState(summary);
     } catch (error) {
       console.error("Error promoting VO2 assessment to fitness state:", error);
+    }
+  }
+  if (saved) {
+    try {
+      const history = await getAllWorkoutSummaries();
+      rebuildStoredPassiveFitnessProjection(history.map((row) => row.summary));
+    } catch (error) {
+      console.error("Error rebuilding passive fitness projection:", error);
     }
   }
   await learnFromCompletedWorkout(summary);

@@ -3,6 +3,7 @@ import {
   ATHLETE_PROFILE_SCHEMA_VERSION_V1,
   FITNESS_STATE_SCHEMA_VERSION,
   FITNESS_STATE_SCHEMA_VERSION_V1,
+  FITNESS_STATE_SCHEMA_VERSION_V2,
   LEGACY_VO2_PROTOCOL_ID,
   LEGACY_VO2_PROTOCOL_VERSION,
   VO2_ASSESSMENT_SCHEMA_VERSION_V1,
@@ -14,6 +15,7 @@ import {
   type FitnessState,
   type HrWorkloadCalibration,
   type HrWorkloadCalibrationPoint,
+  type PassiveAerobicTrend,
   type Vo2AssessmentResult,
   type WorkoutSummary,
 } from "./types.js";
@@ -28,7 +30,7 @@ import {
 } from "./vo2Estimator.js";
 
 export const FITNESS_STATE_STORAGE_KEY = "fitness_state_v1";
-const MAX_EVIDENCE_SESSION_IDS = 100;
+const MAX_EVIDENCE_SESSION_IDS = 1000;
 const MAX_CALIBRATION_POINTS = 20;
 const ATHLETE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -70,6 +72,7 @@ export interface FitnessStateStorage extends ProfileStorage {
 
 export interface WritableFitnessStateStorage extends FitnessStateStorage {
   setItem(key: string, value: string): void;
+  removeItem?(key: string): void;
 }
 
 export interface PromoteVo2AssessmentInput {
@@ -333,6 +336,7 @@ function parseCalibration(value: unknown): HrWorkloadCalibration | null {
 /** Strict reconstruction of the permanent v1 persisted fitness projection. */
 function parseFitnessStateV1(value: Record<string, unknown>): FitnessState | null {
   if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1 || !isAthleteId(value.athleteId)) return null;
+  if (value.passiveAerobicTrend !== undefined) return null;
   if (!isIsoTimestamp(value.updatedAt)) return null;
 
   const vo2Max = value.vo2Max == null
@@ -421,12 +425,153 @@ function parseFitnessStateV1(value: Record<string, unknown>): FitnessState | nul
   };
 }
 
+/** Permanent Phase D v1 algorithm reader contract; never follows a writer alias. */
+export const PASSIVE_FITNESS_REFINEMENT_READER_V1 = {
+  id: "fitness-refinement-v1",
+  version: 1,
+  comparisonBandBpm: 10,
+  minimumDistinctDates: 4,
+} as const;
+
+function parsePassiveAerobicTrend(value: unknown): PassiveAerobicTrend | null {
+  if (!isObject(value) || value.metric !== "workload_at_comparable_hr") return null;
+  if (value.intensityId !== "aerobic_base" && value.intensityId !== "threshold") return null;
+  for (const key of [
+    "referenceHeartRateBpm",
+    "projectedComparableWorkloadWatts",
+    "baselineComparableWorkloadWatts",
+    "observedMinWatts",
+    "observedMaxWatts",
+    "observedMinHeartRateBpm",
+    "observedMaxHeartRateBpm",
+  ] as const) {
+    if (!isPositiveFinite(value[key])) return null;
+  }
+  if (!isFiniteNumber(value.changeFromBaselinePercent) || !isFiniteNumber(value.medianAbsoluteDeviationWatts)) return null;
+  if (value.medianAbsoluteDeviationWatts < 0) return null;
+  if (!isPositiveInteger(value.qualifiedSessionCount) || !isPositiveInteger(value.observationCount)) return null;
+  if (!isPositiveInteger(value.distinctWorkoutDateCount)) return null;
+  if (value.observationCount !== value.qualifiedSessionCount) return null;
+  if (
+    value.distinctWorkoutDateCount > value.qualifiedSessionCount ||
+    value.distinctWorkoutDateCount < PASSIVE_FITNESS_REFINEMENT_READER_V1.minimumDistinctDates
+  ) return null;
+  if (
+    value.observedMinWatts > value.observedMaxWatts ||
+    value.observedMinHeartRateBpm > value.observedMaxHeartRateBpm ||
+    value.baselineComparableWorkloadWatts < value.observedMinWatts ||
+    value.baselineComparableWorkloadWatts > value.observedMaxWatts ||
+    value.projectedComparableWorkloadWatts < value.observedMinWatts ||
+    value.projectedComparableWorkloadWatts > value.observedMaxWatts ||
+    value.referenceHeartRateBpm < value.observedMinHeartRateBpm ||
+    value.referenceHeartRateBpm > value.observedMaxHeartRateBpm
+  ) return null;
+  if (value.comparisonBandBpm !== PASSIVE_FITNESS_REFINEMENT_READER_V1.comparisonBandBpm) return null;
+  if (
+    !nearlyEqual(
+      value.changeFromBaselinePercent as number,
+      (((value.projectedComparableWorkloadWatts as number) - (value.baselineComparableWorkloadWatts as number)) /
+        (value.baselineComparableWorkloadWatts as number)) * 100,
+      1e-3
+    )
+  ) return null;
+  if (!isIsoTimestamp(value.earliestEvidenceAt) || !isIsoTimestamp(value.latestEvidenceAt)) return null;
+  if (Date.parse(value.earliestEvidenceAt) > Date.parse(value.latestEvidenceAt)) return null;
+  if (
+    !Array.isArray(value.workloadSourceClasses) ||
+    value.workloadSourceClasses.length === 0 ||
+    value.workloadSourceClasses.length > 2
+  ) return null;
+  const workloadSourceClasses: Array<"measured_watts" | "calibrated_watts"> = [];
+  for (const source of value.workloadSourceClasses) {
+    if (source !== "measured_watts" && source !== "calibrated_watts") return null;
+    if (workloadSourceClasses.includes(source)) return null;
+    workloadSourceClasses.push(source);
+  }
+  const hasAnchorTime = value.formalAnchorObservedAt !== undefined;
+  const hasAnchorSession = value.formalAnchorSessionId !== undefined;
+  if (hasAnchorTime && !isIsoTimestamp(value.formalAnchorObservedAt)) return null;
+  if (hasAnchorSession && !isEvidenceSessionId(value.formalAnchorSessionId)) return null;
+  if (hasAnchorSession && !hasAnchorTime) return null;
+  if (hasAnchorTime && Date.parse(value.formalAnchorObservedAt as string) >= Date.parse(value.earliestEvidenceAt)) return null;
+  const referenceHeartRateBpm = value.referenceHeartRateBpm as number;
+  const projectedComparableWorkloadWatts = value.projectedComparableWorkloadWatts as number;
+  const baselineComparableWorkloadWatts = value.baselineComparableWorkloadWatts as number;
+  const changeFromBaselinePercent = value.changeFromBaselinePercent as number;
+  const observedMinWatts = value.observedMinWatts as number;
+  const observedMaxWatts = value.observedMaxWatts as number;
+  const observedMinHeartRateBpm = value.observedMinHeartRateBpm as number;
+  const observedMaxHeartRateBpm = value.observedMaxHeartRateBpm as number;
+  const medianAbsoluteDeviationWatts = value.medianAbsoluteDeviationWatts as number;
+  return {
+    metric: "workload_at_comparable_hr",
+    intensityId: value.intensityId,
+    referenceHeartRateBpm,
+    projectedComparableWorkloadWatts,
+    baselineComparableWorkloadWatts,
+    changeFromBaselinePercent,
+    qualifiedSessionCount: value.qualifiedSessionCount as number,
+    observationCount: value.observationCount as number,
+    distinctWorkoutDateCount: value.distinctWorkoutDateCount as number,
+    workloadSourceClasses,
+    earliestEvidenceAt: value.earliestEvidenceAt,
+    latestEvidenceAt: value.latestEvidenceAt,
+    observedMinWatts,
+    observedMaxWatts,
+    observedMinHeartRateBpm,
+    observedMaxHeartRateBpm,
+    medianAbsoluteDeviationWatts,
+    comparisonBandBpm: value.comparisonBandBpm as number,
+    ...(hasAnchorTime ? { formalAnchorObservedAt: value.formalAnchorObservedAt as string } : {}),
+    ...(hasAnchorSession ? { formalAnchorSessionId: value.formalAnchorSessionId as string } : {}),
+  };
+}
+
+function parseFitnessStateV2(value: Record<string, unknown>): FitnessState | null {
+  if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V2) return null;
+  const formal = parseFitnessStateV1({
+    ...value,
+    schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
+    passiveAerobicTrend: undefined,
+  });
+  if (!formal) return null;
+  const passive = value.passiveAerobicTrend == null
+    ? undefined
+    : parseMetricEnvelope(value.passiveAerobicTrend, parsePassiveAerobicTrend);
+  if (value.passiveAerobicTrend != null && !passive) return null;
+  if (passive) {
+    if (
+      passive.source !== "workout_observation" ||
+      passive.quality === "unverified" ||
+      passive.algorithm?.id !== PASSIVE_FITNESS_REFINEMENT_READER_V1.id ||
+      passive.algorithm.version !== PASSIVE_FITNESS_REFINEMENT_READER_V1.version ||
+      !passive.evidenceSessionIds ||
+      passive.evidenceSessionIds.length !== passive.value.qualifiedSessionCount ||
+      passive.observedAt !== passive.value.latestEvidenceAt ||
+      passive.updatedAt !== passive.value.latestEvidenceAt ||
+      Date.parse(passive.updatedAt) > Date.parse(value.updatedAt as string)
+    ) return null;
+    const anchor = latestFormalEvidenceTime(formal);
+    if (
+      passive.value.formalAnchorObservedAt !== undefined &&
+      (anchor === undefined || anchor !== Date.parse(passive.value.formalAnchorObservedAt))
+    ) return null;
+  }
+  return {
+    ...formal,
+    schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V2,
+    ...(passive ? { passiveAerobicTrend: passive } : {}),
+  };
+}
+
 /** Dispatch persisted state by historical schema, never by the current writer alias. */
 export function parseFitnessState(value: unknown): FitnessState | null {
   if (!isObject(value)) return null;
   switch (value.schemaVersion) {
     case FITNESS_STATE_SCHEMA_VERSION_V1:
       return parseFitnessStateV1(value);
+    case FITNESS_STATE_SCHEMA_VERSION_V2:
+      return parseFitnessStateV2(value);
     default:
       return null;
   }
@@ -439,7 +584,10 @@ export function parseAthleteFitnessSnapshot(value: unknown): AthleteFitnessSnaps
   const hasFitnessTime = value.fitnessUpdatedAt != null;
   if (hasFitnessVersion !== hasFitnessTime) return null;
   if (hasFitnessVersion) {
-    if (value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1) return null;
+    if (
+      value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1 &&
+      value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V2
+    ) return null;
     if (!isIsoTimestamp(value.fitnessUpdatedAt)) return null;
   }
   return {
@@ -447,7 +595,9 @@ export function parseAthleteFitnessSnapshot(value: unknown): AthleteFitnessSnaps
     profileSchemaVersion: ATHLETE_PROFILE_SCHEMA_VERSION_V1,
     ...(hasFitnessVersion
       ? {
-          fitnessStateSchemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
+          fitnessStateSchemaVersion: value.fitnessStateSchemaVersion as
+            | typeof FITNESS_STATE_SCHEMA_VERSION_V1
+            | typeof FITNESS_STATE_SCHEMA_VERSION_V2,
           fitnessUpdatedAt: value.fitnessUpdatedAt as string,
         }
       : {}),
@@ -494,7 +644,7 @@ export function captureAthleteFitnessSnapshot(storage?: FitnessStateStorage): At
     profileSchemaVersion: ATHLETE_PROFILE_SCHEMA_VERSION,
     ...(fitness
       ? {
-          fitnessStateSchemaVersion: FITNESS_STATE_SCHEMA_VERSION,
+          fitnessStateSchemaVersion: fitness.schemaVersion,
           fitnessUpdatedAt: fitness.updatedAt,
         }
       : {}),
