@@ -139,8 +139,9 @@ export interface Profile {
 export const ATHLETE_PROFILE_SCHEMA_VERSION_V1 = 1 as const;
 export const FITNESS_STATE_SCHEMA_VERSION_V1 = 1 as const;
 export const FITNESS_STATE_SCHEMA_VERSION_V2 = 2 as const;
+export const FITNESS_STATE_SCHEMA_VERSION_V3 = 3 as const;
 export const ATHLETE_PROFILE_SCHEMA_VERSION = ATHLETE_PROFILE_SCHEMA_VERSION_V1;
-export const FITNESS_STATE_SCHEMA_VERSION = FITNESS_STATE_SCHEMA_VERSION_V2;
+export const FITNESS_STATE_SCHEMA_VERSION = FITNESS_STATE_SCHEMA_VERSION_V3;
 
 export type FitnessMetricSource =
   | "formal_assessment"
@@ -222,11 +223,7 @@ export interface PredictedMaxWattsMetric extends FitnessMetric<number> {
 
 export type PassiveAerobicIntensityId = "aerobic_base" | "threshold";
 
-/**
- * A slow, directly interpretable ordinary-workout projection. It reports the
- * supported workload seen in a narrow observed HR band; it is not VO2, a
- * readiness score, or a claim outside the recorded workload range.
- */
+/** Historical Phase D v1 shape. Reader-supported, but not effective current evidence. */
 export interface PassiveAerobicTrend {
   metric: "workload_at_comparable_hr";
   intensityId: PassiveAerobicIntensityId;
@@ -250,15 +247,77 @@ export interface PassiveAerobicTrend {
   formalAnchorSessionId?: string;
 }
 
+export interface PassiveEvidenceDigest {
+  algorithm: "fnv1a32";
+  value: string;
+}
+
+/** Bounded provenance for a rebuildable projection whose source of truth is workout history. */
+export interface PassiveEvidenceSummary {
+  sessionCount: number;
+  observationCount: number;
+  distinctWorkoutDateCount: number;
+  earliestEvidenceAt: string;
+  latestEvidenceAt: string;
+  firstSessionId: string;
+  latestSessionId: string;
+  recentSessionIds: string[];
+  digest: PassiveEvidenceDigest;
+}
+
+/**
+ * Descriptive Phase D v2 output. It deliberately makes no HR normalization or
+ * prescription-authority claim; Phase E must not consume it as a fitness target.
+ */
+export interface PassiveAerobicObservation {
+  metric: "descriptive_workload_trend_in_fixed_hr_window";
+  interpretation: "descriptive_observation_only";
+  normalizedToReferenceHr: false;
+  eligibleForPrescription: false;
+  intensityId: PassiveAerobicIntensityId;
+  heartRateWindowCenterBpm: number;
+  heartRateWindowMinBpm: number;
+  heartRateWindowMaxExclusiveBpm: number;
+  guardedTrendWorkloadWatts: number;
+  baselineWorkloadMedianWatts: number;
+  guardedTrendChangeFromBaselinePercent: number;
+  workloadSourceClasses: BikeWattsProvenance[];
+  observedMinWatts: number;
+  observedMaxWatts: number;
+  observedMinHeartRateBpm: number;
+  observedMaxHeartRateBpm: number;
+  medianAbsoluteDeviationWatts: number;
+  formalAnchorObservedAt?: string;
+  formalAnchorSessionId?: string;
+}
+
+export interface PassiveAerobicObservationMetric {
+  value: PassiveAerobicObservation;
+  source: "workout_observation";
+  quality: Exclude<FitnessMetricQuality, "unverified">;
+  observedAt: string;
+  updatedAt: string;
+  algorithm: {
+    id: "fitness-refinement-v2";
+    version: 2;
+  };
+  evidence: PassiveEvidenceSummary;
+}
+
 export interface FitnessState {
-  schemaVersion: typeof FITNESS_STATE_SCHEMA_VERSION_V1 | typeof FITNESS_STATE_SCHEMA_VERSION_V2;
+  schemaVersion:
+    | typeof FITNESS_STATE_SCHEMA_VERSION_V1
+    | typeof FITNESS_STATE_SCHEMA_VERSION_V2
+    | typeof FITNESS_STATE_SCHEMA_VERSION_V3;
   athleteId: string;
   vo2Max?: FitnessMetric<number>;
   /** Extrapolated by the named estimator; not directly measured maximal power. */
   predictedMaxWatts?: PredictedMaxWattsMetric;
   hrWorkloadCalibration?: FitnessMetric<HrWorkloadCalibration>;
-  /** Phase D ordinary-workout projection, kept separate from formal calibration/VO2. */
+  /** Historical Phase D v1 metric; retained only for storage compatibility. */
   passiveAerobicTrend?: FitnessMetric<PassiveAerobicTrend>;
+  /** Current descriptive Phase D metric; explicitly unavailable to prescription resolution. */
+  passiveAerobicObservation?: PassiveAerobicObservationMetric;
   updatedAt: string;
 }
 
@@ -266,7 +325,10 @@ export interface FitnessState {
 export interface AthleteFitnessSnapshot {
   athleteId: string;
   profileSchemaVersion: typeof ATHLETE_PROFILE_SCHEMA_VERSION;
-  fitnessStateSchemaVersion?: typeof FITNESS_STATE_SCHEMA_VERSION_V1 | typeof FITNESS_STATE_SCHEMA_VERSION_V2;
+  fitnessStateSchemaVersion?:
+    | typeof FITNESS_STATE_SCHEMA_VERSION_V1
+    | typeof FITNESS_STATE_SCHEMA_VERSION_V2
+    | typeof FITNESS_STATE_SCHEMA_VERSION_V3;
   fitnessUpdatedAt?: string;
 }
 

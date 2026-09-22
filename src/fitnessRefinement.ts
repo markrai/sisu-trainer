@@ -1,9 +1,11 @@
 import {
-  FITNESS_STATE_SCHEMA_VERSION_V2,
+  FITNESS_STATE_SCHEMA_VERSION_V3,
   type BikeWattsProvenance,
   type FitnessMetric,
   type FitnessMetricQuality,
   type FitnessState,
+  type PassiveAerobicObservation,
+  type PassiveAerobicObservationMetric,
   type PassiveAerobicIntensityId,
   type PassiveAerobicTrend,
   type WorkoutPhaseResponse,
@@ -41,8 +43,42 @@ export const FITNESS_REFINEMENT_ALGORITHM_V1 = {
   maximumDeclineFractionPerSession: 0.0075,
 } as const;
 
-/** Current writer alias. Historical readers must use FITNESS_REFINEMENT_ALGORITHM_V1. */
-export const FITNESS_REFINEMENT_ALGORITHM = FITNESS_REFINEMENT_ALGORITHM_V1;
+/**
+ * Corrected writer. V1 remains a permanent historical identity only: its
+ * 10-BPM cluster trended raw watts and was not truly HR-normalized.
+ */
+export const FITNESS_REFINEMENT_ALGORITHM_V2 = {
+  id: "fitness-refinement-v2",
+  version: 2,
+  minimumMeasuredSessions: 4,
+  minimumCalibratedSessions: 5,
+  minimumDistinctDates: 4,
+  minimumPlannedPhaseDurationSec: 8 * 60,
+  minimumCompletedPhaseDurationSec: 8 * 60,
+  minimumSessionCompletionFraction: 0.8,
+  minimumSessionHrCoverage: 0.75,
+  minimumSessionFreshBikeCoverage: 0.75,
+  minimumPhaseCompletionFraction: 0.9,
+  minimumPhaseHrCoverage: 0.8,
+  minimumMeasuredWattsCoverage: 0.8,
+  minimumCalibratedWattsCoverage: 0.9,
+  minimumCadenceCoverage: 0.75,
+  minimumPhaseMedianHeartRateBpm: 80,
+  maximumPhaseMedianHeartRateBpm: 200,
+  minimumPhaseMedianWorkloadWatts: 30,
+  maximumPhaseMedianWorkloadWatts: 600,
+  fixedHrWindowWidthBpm: 2,
+  recentWindowSessions: 4,
+  declineCorroborationSessions: 3,
+  declineThresholdFraction: 0.02,
+  maximumImprovementFractionPerSession: 0.015,
+  maximumDeclineFractionPerSession: 0.0075,
+  maximumRecentEvidenceSessionIds: 16,
+  evidenceDigestAlgorithm: "fnv1a32",
+} as const;
+
+/** Current writer alias. Historical readers must use a permanent version constant. */
+export const FITNESS_REFINEMENT_ALGORITHM = FITNESS_REFINEMENT_ALGORITHM_V2;
 
 export type PassiveFitnessRejectionReason =
   | "invalid_summary"
@@ -103,10 +139,10 @@ export interface PassiveFitnessRefinementDiagnostics {
   evidenceRange?: { earliest: string; latest: string };
   workloadSourceMix: BikeWattsProvenance[];
   formalAnchor?: { observedAt: string; sessionId?: string };
-  previousProjectionWatts?: number;
-  candidateProjectionWatts?: number;
-  guardrailLimitedProjectionWatts?: number;
-  finalProjectionWatts?: number;
+  baselineWorkloadMedianWatts?: number;
+  previousGuardedTrendWorkloadWatts?: number;
+  rollingCandidateWorkloadWatts?: number;
+  guardedTrendWorkloadWatts?: number;
   selectedIntensityId?: PassiveAerobicIntensityId;
   status: "eligible" | "insufficient_evidence";
 }
@@ -119,7 +155,7 @@ export interface PassiveFitnessRebuildResult {
 export interface EffectiveFitnessProjection {
   authoritativeVo2Max?: FitnessState["vo2Max"];
   authoritativeHrWorkloadCalibration?: FitnessState["hrWorkloadCalibration"];
-  passiveAerobicTrend?: FitnessState["passiveAerobicTrend"];
+  descriptiveAerobicObservation?: FitnessState["passiveAerobicObservation"];
 }
 
 export type PersistedPassiveRefinementResult =
@@ -134,7 +170,7 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * Phase D selection is deliberately non-prescriptive: formal measurements stay
- * authoritative and the ordinary-workout trend is a separate supplemental view.
+ * authoritative and the ordinary-workout observation is a separate descriptive view.
  */
 export function selectEffectiveFitnessProjection(state: FitnessState | null): EffectiveFitnessProjection {
   if (!state) return {};
@@ -143,8 +179,8 @@ export function selectEffectiveFitnessProjection(state: FitnessState | null): Ef
     ...(state.hrWorkloadCalibration?.source === "formal_assessment"
       ? { authoritativeHrWorkloadCalibration: state.hrWorkloadCalibration }
       : {}),
-    ...(state.passiveAerobicTrend?.source === "workout_observation"
-      ? { passiveAerobicTrend: state.passiveAerobicTrend }
+    ...(state.passiveAerobicObservation?.source === "workout_observation"
+      ? { descriptiveAerobicObservation: state.passiveAerobicObservation }
       : {}),
   };
 }
@@ -173,12 +209,15 @@ function unique<T>(values: readonly T[]): T[] {
 }
 
 function phaseReason(phase: WorkoutPhaseResponse): PassiveFitnessRejectionReason | null {
-  const policy = FITNESS_REFINEMENT_ALGORITHM_V1;
+  const policy = FITNESS_REFINEMENT_ALGORITHM_V2;
   if (
     phase.kind !== "work" ||
     (phase.intensityId !== "aerobic_base" && phase.intensityId !== "threshold")
   ) return "unsupported_phase_semantics";
-  if (phase.plannedDurationSec < policy.minimumPhaseDurationSec) return "phase_too_short";
+  if (
+    phase.plannedDurationSec < policy.minimumPlannedPhaseDurationSec ||
+    phase.completedDurationSec < policy.minimumCompletedPhaseDurationSec
+  ) return "phase_too_short";
   if (phase.completedDurationSec / phase.plannedDurationSec < policy.minimumPhaseCompletionFraction) {
     return "low_phase_completion";
   }
@@ -188,8 +227,14 @@ function phaseReason(phase: WorkoutPhaseResponse): PassiveFitnessRejectionReason
     ? policy.minimumMeasuredWattsCoverage
     : policy.minimumCalibratedWattsCoverage;
   if (phase.watts.coverageRatio < minimumWattsCoverage) return "low_phase_workload_coverage";
-  if (phase.hr.median < 80 || phase.hr.median > 200) return "implausible_hr";
-  if (phase.watts.median < 30 || phase.watts.median > 600) return "implausible_watts";
+  if (
+    phase.hr.median < policy.minimumPhaseMedianHeartRateBpm ||
+    phase.hr.median > policy.maximumPhaseMedianHeartRateBpm
+  ) return "implausible_hr";
+  if (
+    phase.watts.median < policy.minimumPhaseMedianWorkloadWatts ||
+    phase.watts.median > policy.maximumPhaseMedianWorkloadWatts
+  ) return "implausible_watts";
   if (phase.hr.max - phase.hr.min > 45 || Math.abs(phase.hr.end - phase.hr.median) > 20) {
     return "unstable_hr";
   }
@@ -224,18 +269,24 @@ export function qualifyWorkoutResponseForPassiveFitness(
   if (response.completion.cancelled || summary.cancelled === true) {
     return { qualified: false, sessionId, rejectionReasons: ["cancelled"] };
   }
-  if (response.completion.completionFraction < FITNESS_REFINEMENT_ALGORITHM_V1.minimumSessionCompletionFraction) {
+  if (response.completion.completionFraction < FITNESS_REFINEMENT_ALGORITHM_V2.minimumSessionCompletionFraction) {
     return { qualified: false, sessionId, rejectionReasons: ["low_completion"] };
   }
-  if (response.evidence.hr.coverageRatio < FITNESS_REFINEMENT_ALGORITHM_V1.minimumSessionHrCoverage) {
+  if (response.evidence.hr.coverageRatio < FITNESS_REFINEMENT_ALGORITHM_V2.minimumSessionHrCoverage) {
     return { qualified: false, sessionId, rejectionReasons: ["low_session_hr_coverage"] };
   }
-  if (response.evidence.bike.freshRowCoverageRatio < FITNESS_REFINEMENT_ALGORITHM_V1.minimumSessionFreshBikeCoverage) {
+  if (response.evidence.bike.freshRowCoverageRatio < FITNESS_REFINEMENT_ALGORITHM_V2.minimumSessionFreshBikeCoverage) {
     return { qualified: false, sessionId, rejectionReasons: ["low_fresh_workload_coverage"] };
   }
 
   const phaseRejectionReasons: PassiveFitnessRejectionReason[] = [];
-  const accepted = new Map<PassiveAerobicIntensityId, WorkoutPhaseResponse[]>();
+  const accepted = new Map<
+    string,
+    {
+      intensityId: PassiveAerobicIntensityId;
+      phases: WorkoutPhaseResponse[];
+    }
+  >();
   for (const phase of response.phases) {
     const reason = phaseReason(phase);
     if (reason) {
@@ -243,9 +294,12 @@ export function qualifyWorkoutResponseForPassiveFitness(
       continue;
     }
     const intensity = phase.intensityId as PassiveAerobicIntensityId;
-    const phases = accepted.get(intensity) ?? [];
-    phases.push(phase);
-    accepted.set(intensity, phases);
+    const phaseHeartRateBpm = round(phase.hr!.median);
+    const heartRateWindowMinBpm = fixedHrWindowMin(phaseHeartRateBpm);
+    const key = `${intensity}:${heartRateWindowMinBpm}`;
+    const group = accepted.get(key) ?? { intensityId: intensity, phases: [] };
+    group.phases.push(phase);
+    accepted.set(key, group);
   }
   if (accepted.size === 0) {
     return {
@@ -256,7 +310,7 @@ export function qualifyWorkoutResponseForPassiveFitness(
   }
 
   const observations: PassiveFitnessObservation[] = [];
-  for (const [intensityId, phases] of accepted) {
+  for (const { intensityId, phases } of accepted.values()) {
     const completedDurationSec = phases.reduce((sum, phase) => sum + phase.completedDurationSec, 0);
     const weighted = (selector: (phase: WorkoutPhaseResponse) => number) =>
       phases.reduce((sum, phase) => sum + selector(phase) * phase.completedDurationSec, 0) / completedDurationSec;
@@ -268,7 +322,10 @@ export function qualifyWorkoutResponseForPassiveFitness(
       workoutDate: (summary.endedAt as string).slice(0, 10),
       observedAt: summary.endedAt as string,
       intensityId,
-      heartRateBpm: round(weighted((phase) => phase.hr!.median)),
+      // Aggregate only phase medians already assigned to this exact fixed HR
+      // window. Rounding each constituent first prevents a boundary-crossing
+      // aggregate from being placed into a window no phase supported.
+      heartRateBpm: round(weighted((phase) => round(phase.hr!.median))),
       watts: round(weighted((phase) => phase.watts!.median)),
       workloadSource: sources[0] as BikeWattsProvenance,
       phaseCount: phases.length,
@@ -303,24 +360,84 @@ function formalOnlyState(state: FitnessState | null): FitnessState | null {
       : {}),
   };
   if (Object.keys(formal).length === 0) return null;
-  return { schemaVersion: state.schemaVersion, athleteId: state.athleteId, ...formal, updatedAt: state.updatedAt };
+  const retainedUpdateTimes = [formal.vo2Max, formal.predictedMaxWatts, formal.hrWorkloadCalibration]
+    .map((metric) => metric?.updatedAt)
+    .filter((value): value is string => !!value)
+    .sort();
+  return {
+    schemaVersion: state.schemaVersion,
+    athleteId: state.athleteId,
+    ...formal,
+    updatedAt: retainedUpdateTimes[retainedUpdateTimes.length - 1],
+  };
 }
 
-function comparableCluster(observations: readonly PassiveFitnessObservation[]): PassiveFitnessObservation[] {
-  const byHr = [...observations].sort(
-    (a, b) => a.heartRateBpm - b.heartRateBpm || Date.parse(a.observedAt) - Date.parse(b.observedAt) || a.sessionId.localeCompare(b.sessionId)
+interface FixedHrWindowSelection {
+  intensityId: PassiveAerobicIntensityId;
+  windowMinBpm: number;
+  windowMaxExclusiveBpm: number;
+  eligibleAt: string;
+  observations: PassiveFitnessObservation[];
+}
+
+function chronological(
+  observations: readonly PassiveFitnessObservation[]
+): PassiveFitnessObservation[] {
+  return [...observations].sort(
+    (a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt) || a.sessionId.localeCompare(b.sessionId)
   );
-  let best: PassiveFitnessObservation[] = [];
-  for (let start = 0; start < byHr.length; start += 1) {
-    let end = start;
-    while (
-      end + 1 < byHr.length &&
-      byHr[end + 1].heartRateBpm - byHr[start].heartRateBpm <= FITNESS_REFINEMENT_ALGORITHM_V1.comparableHrBandBpm
-    ) end += 1;
-    const candidate = byHr.slice(start, end + 1);
-    if (candidate.length > best.length) best = candidate;
+}
+
+function fixedHrWindowMin(heartRateBpm: number): number {
+  const width = FITNESS_REFINEMENT_ALGORITHM_V2.fixedHrWindowWidthBpm;
+  return Math.floor(heartRateBpm / width) * width;
+}
+
+function minimumSessionsFor(observations: readonly PassiveFitnessObservation[]): number {
+  return observations.some((observation) => observation.workloadSource === "calibrated_watts")
+    ? FITNESS_REFINEMENT_ALGORITHM_V2.minimumCalibratedSessions
+    : FITNESS_REFINEMENT_ALGORITHM_V2.minimumMeasuredSessions;
+}
+
+/** Select the first fixed 2-BPM bin to independently become eligible. */
+function selectFixedHrWindow(
+  observations: readonly PassiveFitnessObservation[]
+): FixedHrWindowSelection | undefined {
+  const groups = new Map<string, PassiveFitnessObservation[]>();
+  for (const observation of chronological(observations)) {
+    const windowMinBpm = fixedHrWindowMin(observation.heartRateBpm);
+    const key = `${observation.intensityId}:${windowMinBpm}`;
+    const group = groups.get(key) ?? [];
+    group.push(observation);
+    groups.set(key, group);
   }
-  return best.sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt) || a.sessionId.localeCompare(b.sessionId));
+  const eligible: FixedHrWindowSelection[] = [];
+  for (const group of groups.values()) {
+    for (let end = 0; end < group.length; end += 1) {
+      const prefix = group.slice(0, end + 1);
+      const distinctDates = unique(prefix.map((observation) => observation.workoutDate));
+      if (
+        prefix.length >= minimumSessionsFor(prefix) &&
+        distinctDates.length >= FITNESS_REFINEMENT_ALGORITHM_V2.minimumDistinctDates
+      ) {
+        const windowMinBpm = fixedHrWindowMin(prefix[0].heartRateBpm);
+        eligible.push({
+          intensityId: prefix[0].intensityId,
+          windowMinBpm,
+          windowMaxExclusiveBpm: windowMinBpm + FITNESS_REFINEMENT_ALGORITHM_V2.fixedHrWindowWidthBpm,
+          eligibleAt: prefix[prefix.length - 1].observedAt,
+          observations: chronological(group),
+        });
+        break;
+      }
+    }
+  }
+  return eligible.sort(
+    (a, b) =>
+      Date.parse(a.eligibleAt) - Date.parse(b.eligibleAt) ||
+      a.intensityId.localeCompare(b.intensityId) ||
+      a.windowMinBpm - b.windowMinBpm
+  )[0];
 }
 
 function projectionQuality(
@@ -332,6 +449,26 @@ function projectionQuality(
   if (allMeasured && observations.length >= 8 && madWatts / baselineWatts <= 0.05) return "high";
   if (allMeasured && observations.length >= 6 && madWatts / baselineWatts <= 0.1) return "moderate";
   return "low";
+}
+
+function fnv1a32(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function evidenceDigest(observations: readonly PassiveFitnessObservation[]): string {
+  return fnv1a32(observations.map((observation) => [
+    observation.sessionId,
+    observation.observedAt,
+    observation.intensityId,
+    observation.heartRateBpm.toFixed(3),
+    observation.watts.toFixed(3),
+    observation.workloadSource,
+  ].join("\u001f")).join("\n"));
 }
 
 function countReason(
@@ -379,21 +516,16 @@ export function rebuildPassiveFitnessProjection(input: {
   }
 
   const all = [...bySession.values()].flat();
-  const intensities: PassiveAerobicIntensityId[] = ["aerobic_base", "threshold"];
-  const candidates = intensities.map((intensityId) => comparableCluster(all.filter((item) => item.intensityId === intensityId)));
-  const selected = candidates.sort((a, b) =>
-    b.length - a.length ||
-    ((b[b.length - 1]?.observedAt ?? "").localeCompare(a[a.length - 1]?.observedAt ?? "")) ||
-    ((a[0]?.intensityId ?? "").localeCompare(b[0]?.intensityId ?? ""))
-  )[0] ?? [];
+  const selection = selectFixedHrWindow(all);
+  const selected = selection?.observations ?? [];
   const sources = unique(selected.map((observation) => observation.workloadSource)).sort();
   const distinctDates = unique(selected.map((observation) => observation.workoutDate));
-  const minimumSessions = sources.includes("calibrated_watts")
-    ? FITNESS_REFINEMENT_ALGORITHM_V1.minimumCalibratedSessions
-    : FITNESS_REFINEMENT_ALGORITHM_V1.minimumMeasuredSessions;
-  const priorProjection = input.currentState?.passiveAerobicTrend?.value.projectedComparableWorkloadWatts;
+  const minimumSessions = minimumSessionsFor(selected);
+  const priorGuardedTrendWorkload =
+    input.currentState?.passiveAerobicObservation?.value.guardedTrendWorkloadWatts ??
+    input.currentState?.passiveAerobicTrend?.value.projectedComparableWorkloadWatts;
   const baseDiagnostics: PassiveFitnessRefinementDiagnostics = {
-    algorithm: { id: FITNESS_REFINEMENT_ALGORITHM_V1.id, version: FITNESS_REFINEMENT_ALGORITHM_V1.version },
+    algorithm: { id: FITNESS_REFINEMENT_ALGORITHM_V2.id, version: FITNESS_REFINEMENT_ALGORITHM_V2.version },
     athleteId: input.athleteId,
     qualifiedSessionCount: bySession.size,
     rejectedSessionCount: rejectedSessions.size,
@@ -401,96 +533,119 @@ export function rebuildPassiveFitnessProjection(input: {
     evidenceSessionIds: selected.map((observation) => observation.sessionId),
     workloadSourceMix: sources,
     ...(anchor ? { formalAnchor: anchor } : {}),
-    ...(priorProjection !== undefined ? { previousProjectionWatts: priorProjection } : {}),
+    ...(priorGuardedTrendWorkload !== undefined
+      ? { previousGuardedTrendWorkloadWatts: priorGuardedTrendWorkload }
+      : {}),
     ...(selected[0]
       ? { evidenceRange: { earliest: selected[0].observedAt, latest: selected[selected.length - 1].observedAt } }
       : {}),
-    ...(selected[0] ? { selectedIntensityId: selected[0].intensityId } : {}),
+    ...(selection ? { selectedIntensityId: selection.intensityId } : {}),
     status: "insufficient_evidence",
   };
-  if (selected.length < minimumSessions || distinctDates.length < FITNESS_REFINEMENT_ALGORITHM_V1.minimumDistinctDates) {
+  if (
+    !selection ||
+    selected.length < minimumSessions ||
+    distinctDates.length < FITNESS_REFINEMENT_ALGORITHM_V2.minimumDistinctDates
+  ) {
     return { state: formalState, diagnostics: baseDiagnostics };
   }
 
-  const firstWindow = selected.slice(0, minimumSessions);
-  const baselineWatts = median(firstWindow.map((observation) => observation.watts));
+  const baselineSessions = selected.slice(0, minimumSessions);
+  const baselineWatts = median(baselineSessions.map((observation) => observation.watts));
   let guardedWatts = baselineWatts;
-  let latestCandidate = baselineWatts;
+  let rollingCandidateWatts = baselineWatts;
   for (let index = minimumSessions; index < selected.length; index += 1) {
     const throughCurrent = selected.slice(0, index + 1);
-    const recent = throughCurrent.slice(-FITNESS_REFINEMENT_ALGORITHM_V1.recentWindowSessions);
-    latestCandidate = median(recent.map((observation) => observation.watts));
-    if (latestCandidate > guardedWatts) {
+    const recent = throughCurrent.slice(-FITNESS_REFINEMENT_ALGORITHM_V2.recentWindowSessions);
+    rollingCandidateWatts = median(recent.map((observation) => observation.watts));
+    if (rollingCandidateWatts > guardedWatts) {
       guardedWatts += Math.min(
-        latestCandidate - guardedWatts,
-        guardedWatts * FITNESS_REFINEMENT_ALGORITHM_V1.maximumImprovementFractionPerSession
+        rollingCandidateWatts - guardedWatts,
+        guardedWatts * FITNESS_REFINEMENT_ALGORITHM_V2.maximumImprovementFractionPerSession
       );
       continue;
     }
     const corroborating = throughCurrent
-      .slice(-FITNESS_REFINEMENT_ALGORITHM_V1.declineCorroborationSessions)
-      .every((observation) => observation.watts < guardedWatts * (1 - FITNESS_REFINEMENT_ALGORITHM_V1.declineThresholdFraction));
+      .slice(-FITNESS_REFINEMENT_ALGORITHM_V2.declineCorroborationSessions)
+      .every((observation) => observation.watts < guardedWatts * (1 - FITNESS_REFINEMENT_ALGORITHM_V2.declineThresholdFraction));
     if (corroborating) {
       guardedWatts -= Math.min(
-        guardedWatts - latestCandidate,
-        guardedWatts * FITNESS_REFINEMENT_ALGORITHM_V1.maximumDeclineFractionPerSession
+        guardedWatts - rollingCandidateWatts,
+        guardedWatts * FITNESS_REFINEMENT_ALGORITHM_V2.maximumDeclineFractionPerSession
       );
     }
   }
 
   const watts = selected.map((observation) => observation.watts);
   const hrs = selected.map((observation) => observation.heartRateBpm);
-  const referenceHr = median(hrs);
   const madWatts = median(watts.map((wattsValue) => Math.abs(wattsValue - median(watts))));
   const earliest = selected[0].observedAt;
   const latest = selected[selected.length - 1].observedAt;
-  const value: PassiveAerobicTrend = {
-    metric: "workload_at_comparable_hr",
-    intensityId: selected[0].intensityId,
-    referenceHeartRateBpm: round(referenceHr),
-    projectedComparableWorkloadWatts: round(guardedWatts),
-    baselineComparableWorkloadWatts: round(baselineWatts),
-    changeFromBaselinePercent: round(((guardedWatts - baselineWatts) / baselineWatts) * 100),
-    qualifiedSessionCount: selected.length,
-    observationCount: selected.length,
-    distinctWorkoutDateCount: distinctDates.length,
+  const storedGuardedTrendWatts = round(guardedWatts);
+  const storedBaselineWatts = round(baselineWatts);
+  const value: PassiveAerobicObservation = {
+    metric: "descriptive_workload_trend_in_fixed_hr_window",
+    interpretation: "descriptive_observation_only",
+    normalizedToReferenceHr: false,
+    eligibleForPrescription: false,
+    intensityId: selection.intensityId,
+    heartRateWindowCenterBpm: selection.windowMinBpm + FITNESS_REFINEMENT_ALGORITHM_V2.fixedHrWindowWidthBpm / 2,
+    heartRateWindowMinBpm: selection.windowMinBpm,
+    heartRateWindowMaxExclusiveBpm: selection.windowMaxExclusiveBpm,
+    guardedTrendWorkloadWatts: storedGuardedTrendWatts,
+    baselineWorkloadMedianWatts: storedBaselineWatts,
+    guardedTrendChangeFromBaselinePercent: round(
+      ((storedGuardedTrendWatts - storedBaselineWatts) / storedBaselineWatts) * 100
+    ),
     workloadSourceClasses: sources,
-    earliestEvidenceAt: earliest,
-    latestEvidenceAt: latest,
     observedMinWatts: Math.min(...watts),
     observedMaxWatts: Math.max(...watts),
     observedMinHeartRateBpm: Math.min(...hrs),
     observedMaxHeartRateBpm: Math.max(...hrs),
     medianAbsoluteDeviationWatts: round(madWatts),
-    comparisonBandBpm: FITNESS_REFINEMENT_ALGORITHM_V1.comparableHrBandBpm,
     ...(anchor ? { formalAnchorObservedAt: anchor.observedAt } : {}),
     ...(anchor?.sessionId ? { formalAnchorSessionId: anchor.sessionId } : {}),
   };
-  const passiveAerobicTrend: FitnessMetric<PassiveAerobicTrend> = {
+  const evidenceSessionIds = selected.map((observation) => observation.sessionId);
+  const recentSessionIds = evidenceSessionIds.slice(-FITNESS_REFINEMENT_ALGORITHM_V2.maximumRecentEvidenceSessionIds);
+  const passiveAerobicObservation: PassiveAerobicObservationMetric = {
     value,
     source: "workout_observation",
-    quality: projectionQuality(selected, madWatts, baselineWatts),
+    quality: projectionQuality(selected, round(madWatts), storedBaselineWatts),
     observedAt: latest,
     updatedAt: latest,
-    algorithm: { id: FITNESS_REFINEMENT_ALGORITHM_V1.id, version: FITNESS_REFINEMENT_ALGORITHM_V1.version },
-    evidenceSessionIds: selected.map((observation) => observation.sessionId),
+    algorithm: { id: FITNESS_REFINEMENT_ALGORITHM_V2.id, version: FITNESS_REFINEMENT_ALGORITHM_V2.version },
+    evidence: {
+      sessionCount: selected.length,
+      observationCount: selected.length,
+      distinctWorkoutDateCount: distinctDates.length,
+      earliestEvidenceAt: earliest,
+      latestEvidenceAt: latest,
+      firstSessionId: evidenceSessionIds[0],
+      latestSessionId: evidenceSessionIds[evidenceSessionIds.length - 1],
+      recentSessionIds,
+      digest: {
+        algorithm: FITNESS_REFINEMENT_ALGORITHM_V2.evidenceDigestAlgorithm,
+        value: evidenceDigest(selected),
+      },
+    },
   };
   const state: FitnessState = {
-    schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V2,
+    schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V3,
     athleteId: input.athleteId,
     ...(formalState?.vo2Max ? { vo2Max: formalState.vo2Max } : {}),
     ...(formalState?.predictedMaxWatts ? { predictedMaxWatts: formalState.predictedMaxWatts } : {}),
     ...(formalState?.hrWorkloadCalibration ? { hrWorkloadCalibration: formalState.hrWorkloadCalibration } : {}),
-    passiveAerobicTrend,
+    passiveAerobicObservation,
     updatedAt: [formalState?.updatedAt, latest].filter((value): value is string => !!value).sort().slice(-1)[0],
   };
   return {
     state,
     diagnostics: {
       ...baseDiagnostics,
-      candidateProjectionWatts: round(latestCandidate),
-      guardrailLimitedProjectionWatts: round(guardedWatts),
-      finalProjectionWatts: round(guardedWatts),
+      baselineWorkloadMedianWatts: storedBaselineWatts,
+      rollingCandidateWorkloadWatts: round(rollingCandidateWatts),
+      guardedTrendWorkloadWatts: storedGuardedTrendWatts,
       status: "eligible",
     },
   };
@@ -514,7 +669,9 @@ export function rebuildStoredPassiveFitnessProjection(
     workoutSummaries: summaries,
   });
   if (!rebuilt.state) {
-    if (!currentState?.passiveAerobicTrend) return "insufficient_evidence";
+    if (!currentState?.passiveAerobicTrend && !currentState?.passiveAerobicObservation) {
+      return "insufficient_evidence";
+    }
     if (typeof store.removeItem !== "function") return "persistence_failed";
     try {
       store.removeItem(FITNESS_STATE_STORAGE_KEY);

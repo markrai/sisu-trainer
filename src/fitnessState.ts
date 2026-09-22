@@ -4,6 +4,7 @@ import {
   FITNESS_STATE_SCHEMA_VERSION,
   FITNESS_STATE_SCHEMA_VERSION_V1,
   FITNESS_STATE_SCHEMA_VERSION_V2,
+  FITNESS_STATE_SCHEMA_VERSION_V3,
   LEGACY_VO2_PROTOCOL_ID,
   LEGACY_VO2_PROTOCOL_VERSION,
   VO2_ASSESSMENT_SCHEMA_VERSION_V1,
@@ -16,6 +17,8 @@ import {
   type HrWorkloadCalibration,
   type HrWorkloadCalibrationPoint,
   type PassiveAerobicTrend,
+  type PassiveAerobicObservation,
+  type PassiveAerobicObservationMetric,
   type Vo2AssessmentResult,
   type WorkoutSummary,
 } from "./types.js";
@@ -30,7 +33,8 @@ import {
 } from "./vo2Estimator.js";
 
 export const FITNESS_STATE_STORAGE_KEY = "fitness_state_v1";
-const MAX_EVIDENCE_SESSION_IDS = 1000;
+const MAX_V1_EVIDENCE_SESSION_IDS = 1000;
+const MAX_V2_RECENT_EVIDENCE_SESSION_IDS = 16;
 const MAX_CALIBRATION_POINTS = 20;
 const ATHLETE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -205,7 +209,7 @@ function parseAlgorithm(value: unknown): FitnessMetric<number>["algorithm"] | nu
 
 function parseEvidenceSessionIds(value: unknown): string[] | null | undefined {
   if (value == null) return undefined;
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_EVIDENCE_SESSION_IDS) return null;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_V1_EVIDENCE_SESSION_IDS) return null;
   const ids: string[] = [];
   const seen = new Set<string>();
   for (const item of value) {
@@ -336,7 +340,7 @@ function parseCalibration(value: unknown): HrWorkloadCalibration | null {
 /** Strict reconstruction of the permanent v1 persisted fitness projection. */
 function parseFitnessStateV1(value: Record<string, unknown>): FitnessState | null {
   if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1 || !isAthleteId(value.athleteId)) return null;
-  if (value.passiveAerobicTrend !== undefined) return null;
+  if (value.passiveAerobicTrend !== undefined || value.passiveAerobicObservation !== undefined) return null;
   if (!isIsoTimestamp(value.updatedAt)) return null;
 
   const vo2Max = value.vo2Max == null
@@ -430,7 +434,13 @@ export const PASSIVE_FITNESS_REFINEMENT_READER_V1 = {
   id: "fitness-refinement-v1",
   version: 1,
   comparisonBandBpm: 10,
+  minimumMeasuredSessions: 4,
+  minimumCalibratedSessions: 5,
   minimumDistinctDates: 4,
+  moderateMinimumSessions: 6,
+  highMinimumSessions: 8,
+  moderateMaximumMadFraction: 0.1,
+  highMaximumMadFraction: 0.05,
 } as const;
 
 function parsePassiveAerobicTrend(value: unknown): PassiveAerobicTrend | null {
@@ -457,6 +467,10 @@ function parsePassiveAerobicTrend(value: unknown): PassiveAerobicTrend | null {
     value.distinctWorkoutDateCount < PASSIVE_FITNESS_REFINEMENT_READER_V1.minimumDistinctDates
   ) return null;
   if (
+    (value.observedMaxHeartRateBpm as number) - (value.observedMinHeartRateBpm as number) >
+    PASSIVE_FITNESS_REFINEMENT_READER_V1.comparisonBandBpm
+  ) return null;
+  if (
     value.observedMinWatts > value.observedMaxWatts ||
     value.observedMinHeartRateBpm > value.observedMaxHeartRateBpm ||
     value.baselineComparableWorkloadWatts < value.observedMinWatts ||
@@ -467,14 +481,11 @@ function parsePassiveAerobicTrend(value: unknown): PassiveAerobicTrend | null {
     value.referenceHeartRateBpm > value.observedMaxHeartRateBpm
   ) return null;
   if (value.comparisonBandBpm !== PASSIVE_FITNESS_REFINEMENT_READER_V1.comparisonBandBpm) return null;
-  if (
-    !nearlyEqual(
-      value.changeFromBaselinePercent as number,
-      (((value.projectedComparableWorkloadWatts as number) - (value.baselineComparableWorkloadWatts as number)) /
-        (value.baselineComparableWorkloadWatts as number)) * 100,
-      1e-3
-    )
-  ) return null;
+  if (!isHistoricalRoundedPercentConsistent(
+    value.baselineComparableWorkloadWatts as number,
+    value.projectedComparableWorkloadWatts as number,
+    value.changeFromBaselinePercent as number
+  )) return null;
   if (!isIsoTimestamp(value.earliestEvidenceAt) || !isIsoTimestamp(value.latestEvidenceAt)) return null;
   if (Date.parse(value.earliestEvidenceAt) > Date.parse(value.latestEvidenceAt)) return null;
   if (
@@ -488,6 +499,13 @@ function parsePassiveAerobicTrend(value: unknown): PassiveAerobicTrend | null {
     if (workloadSourceClasses.includes(source)) return null;
     workloadSourceClasses.push(source);
   }
+  if (workloadSourceClasses.some((source, index) => index > 0 && source <= workloadSourceClasses[index - 1])) {
+    return null;
+  }
+  const requiredSessionCount = workloadSourceClasses.includes("calibrated_watts")
+    ? PASSIVE_FITNESS_REFINEMENT_READER_V1.minimumCalibratedSessions
+    : PASSIVE_FITNESS_REFINEMENT_READER_V1.minimumMeasuredSessions;
+  if ((value.qualifiedSessionCount as number) < requiredSessionCount) return null;
   const hasAnchorTime = value.formalAnchorObservedAt !== undefined;
   const hasAnchorSession = value.formalAnchorSessionId !== undefined;
   if (hasAnchorTime && !isIsoTimestamp(value.formalAnchorObservedAt)) return null;
@@ -527,12 +545,60 @@ function parsePassiveAerobicTrend(value: unknown): PassiveAerobicTrend | null {
   };
 }
 
+/**
+ * V1 rounded watts and percentage independently to three decimals. Accept only
+ * percentages that could have been emitted from values inside those exact
+ * persisted rounding intervals.
+ */
+function isHistoricalRoundedPercentConsistent(
+  baselineWatts: number,
+  projectedWatts: number,
+  changePercent: number
+): boolean {
+  const halfRoundingUnit = 0.0005;
+  const minimumPossiblePercent =
+    ((projectedWatts - halfRoundingUnit) / (baselineWatts + halfRoundingUnit) - 1) * 100;
+  const maximumPossiblePercent =
+    ((projectedWatts + halfRoundingUnit) / (baselineWatts - halfRoundingUnit) - 1) * 100;
+  const storedMinimum = changePercent - halfRoundingUnit;
+  const storedMaximum = changePercent + halfRoundingUnit;
+  return storedMaximum >= minimumPossiblePercent && storedMinimum <= maximumPossiblePercent;
+}
+
+function isPassiveV1QualityConsistent(
+  value: PassiveAerobicTrend,
+  quality: Exclude<FitnessMetricQuality, "unverified">
+): boolean {
+  const allMeasured =
+    value.workloadSourceClasses.length === 1 && value.workloadSourceClasses[0] === "measured_watts";
+  if (!allMeasured) return quality === "low";
+  const roundingHalfUnit = 0.0005;
+  const minimumPossibleRatio = Math.max(0, value.medianAbsoluteDeviationWatts - roundingHalfUnit) /
+    (value.baselineComparableWorkloadWatts + roundingHalfUnit);
+  const maximumPossibleRatio = (value.medianAbsoluteDeviationWatts + roundingHalfUnit) /
+    Math.max(Number.EPSILON, value.baselineComparableWorkloadWatts - roundingHalfUnit);
+  const highPossible =
+    value.observationCount >= PASSIVE_FITNESS_REFINEMENT_READER_V1.highMinimumSessions &&
+    minimumPossibleRatio <= PASSIVE_FITNESS_REFINEMENT_READER_V1.highMaximumMadFraction;
+  const moderatePossible =
+    value.observationCount >= PASSIVE_FITNESS_REFINEMENT_READER_V1.moderateMinimumSessions &&
+    minimumPossibleRatio <= PASSIVE_FITNESS_REFINEMENT_READER_V1.moderateMaximumMadFraction &&
+    (value.observationCount < PASSIVE_FITNESS_REFINEMENT_READER_V1.highMinimumSessions ||
+      maximumPossibleRatio > PASSIVE_FITNESS_REFINEMENT_READER_V1.highMaximumMadFraction);
+  const lowPossible =
+    value.observationCount < PASSIVE_FITNESS_REFINEMENT_READER_V1.moderateMinimumSessions ||
+    maximumPossibleRatio > PASSIVE_FITNESS_REFINEMENT_READER_V1.moderateMaximumMadFraction;
+  return quality === "high" ? highPossible : quality === "moderate" ? moderatePossible : lowPossible;
+}
+
 function parseFitnessStateV2(value: Record<string, unknown>): FitnessState | null {
   if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V2) return null;
+  if (value.passiveAerobicObservation !== undefined) return null;
   const formal = parseFitnessStateV1({
     ...value,
     schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
     passiveAerobicTrend: undefined,
+    passiveAerobicObservation: undefined,
   });
   if (!formal) return null;
   const passive = value.passiveAerobicTrend == null
@@ -540,6 +606,8 @@ function parseFitnessStateV2(value: Record<string, unknown>): FitnessState | nul
     : parseMetricEnvelope(value.passiveAerobicTrend, parsePassiveAerobicTrend);
   if (value.passiveAerobicTrend != null && !passive) return null;
   if (passive) {
+    const anchor = latestFormalAnchorIdentity(formal);
+    const hasPassiveAnchor = passive.value.formalAnchorObservedAt !== undefined;
     if (
       passive.source !== "workout_observation" ||
       passive.quality === "unverified" ||
@@ -549,12 +617,13 @@ function parseFitnessStateV2(value: Record<string, unknown>): FitnessState | nul
       passive.evidenceSessionIds.length !== passive.value.qualifiedSessionCount ||
       passive.observedAt !== passive.value.latestEvidenceAt ||
       passive.updatedAt !== passive.value.latestEvidenceAt ||
+      !isPassiveV1QualityConsistent(passive.value, passive.quality as Exclude<FitnessMetricQuality, "unverified">) ||
       Date.parse(passive.updatedAt) > Date.parse(value.updatedAt as string)
     ) return null;
-    const anchor = latestFormalEvidenceTime(formal);
     if (
-      passive.value.formalAnchorObservedAt !== undefined &&
-      (anchor === undefined || anchor !== Date.parse(passive.value.formalAnchorObservedAt))
+      Boolean(anchor) !== hasPassiveAnchor ||
+      (anchor && passive.value.formalAnchorObservedAt !== anchor.observedAt) ||
+      (anchor && passive.value.formalAnchorSessionId !== anchor.sessionId)
     ) return null;
   }
   return {
@@ -562,6 +631,284 @@ function parseFitnessStateV2(value: Record<string, unknown>): FitnessState | nul
     schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V2,
     ...(passive ? { passiveAerobicTrend: passive } : {}),
   };
+}
+
+/** Permanent corrected Phase D reader contract; independent of future writer aliases. */
+export const PASSIVE_FITNESS_REFINEMENT_READER_V2 = {
+  id: "fitness-refinement-v2",
+  version: 2,
+  metric: "descriptive_workload_trend_in_fixed_hr_window",
+  fixedHrWindowWidthBpm: 2,
+  minimumObservedHeartRateBpm: 80,
+  maximumObservedHeartRateBpm: 200,
+  minimumHeartRateWindowBpm: 80,
+  maximumHeartRateWindowExclusiveBpm: 202,
+  minimumObservedWorkloadWatts: 30,
+  maximumObservedWorkloadWatts: 600,
+  minimumMeasuredSessions: 4,
+  minimumCalibratedSessions: 5,
+  minimumDistinctDates: 4,
+  moderateMinimumSessions: 6,
+  highMinimumSessions: 8,
+  moderateMaximumMadFraction: 0.1,
+  highMaximumMadFraction: 0.05,
+  maximumRecentEvidenceSessionIds: 16,
+  evidenceDigestAlgorithm: "fnv1a32",
+} as const;
+
+function expectedPassiveV2Quality(
+  value: PassiveAerobicObservation,
+  observationCount: number
+): Exclude<FitnessMetricQuality, "unverified"> {
+  const allMeasured =
+    value.workloadSourceClasses.length === 1 && value.workloadSourceClasses[0] === "measured_watts";
+  if (
+    allMeasured &&
+    observationCount >= PASSIVE_FITNESS_REFINEMENT_READER_V2.highMinimumSessions &&
+    value.medianAbsoluteDeviationWatts / value.baselineWorkloadMedianWatts <=
+      PASSIVE_FITNESS_REFINEMENT_READER_V2.highMaximumMadFraction
+  ) return "high";
+  if (
+    allMeasured &&
+    observationCount >= PASSIVE_FITNESS_REFINEMENT_READER_V2.moderateMinimumSessions &&
+    value.medianAbsoluteDeviationWatts / value.baselineWorkloadMedianWatts <=
+      PASSIVE_FITNESS_REFINEMENT_READER_V2.moderateMaximumMadFraction
+  ) return "moderate";
+  return "low";
+}
+
+function roundV2(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function parsePassiveAerobicObservation(value: unknown): PassiveAerobicObservation | null {
+  if (
+    !isObject(value) ||
+    value.metric !== PASSIVE_FITNESS_REFINEMENT_READER_V2.metric ||
+    value.interpretation !== "descriptive_observation_only" ||
+    value.normalizedToReferenceHr !== false ||
+    value.eligibleForPrescription !== false
+  ) return null;
+  if (value.intensityId !== "aerobic_base" && value.intensityId !== "threshold") return null;
+  for (const key of [
+    "heartRateWindowCenterBpm",
+    "heartRateWindowMinBpm",
+    "heartRateWindowMaxExclusiveBpm",
+    "guardedTrendWorkloadWatts",
+    "baselineWorkloadMedianWatts",
+    "observedMinWatts",
+    "observedMaxWatts",
+    "observedMinHeartRateBpm",
+    "observedMaxHeartRateBpm",
+  ] as const) {
+    if (!isPositiveFinite(value[key])) return null;
+  }
+  if (
+    !isFiniteNumber(value.guardedTrendChangeFromBaselinePercent) ||
+    !isFiniteNumber(value.medianAbsoluteDeviationWatts)
+  ) {
+    return null;
+  }
+  if ((value.medianAbsoluteDeviationWatts as number) < 0) return null;
+  const windowMin = value.heartRateWindowMinBpm as number;
+  const windowMax = value.heartRateWindowMaxExclusiveBpm as number;
+  if (
+    !Number.isInteger(windowMin) ||
+    windowMin % PASSIVE_FITNESS_REFINEMENT_READER_V2.fixedHrWindowWidthBpm !== 0 ||
+    windowMax - windowMin !== PASSIVE_FITNESS_REFINEMENT_READER_V2.fixedHrWindowWidthBpm ||
+    windowMin < PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumHeartRateWindowBpm ||
+    windowMax > PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumHeartRateWindowExclusiveBpm ||
+    value.heartRateWindowCenterBpm !== windowMin + PASSIVE_FITNESS_REFINEMENT_READER_V2.fixedHrWindowWidthBpm / 2
+  ) return null;
+  const observedMinHr = value.observedMinHeartRateBpm as number;
+  const observedMaxHr = value.observedMaxHeartRateBpm as number;
+  const observedMinWatts = value.observedMinWatts as number;
+  const observedMaxWatts = value.observedMaxWatts as number;
+  const guardedTrendWatts = value.guardedTrendWorkloadWatts as number;
+  const baselineMedianWatts = value.baselineWorkloadMedianWatts as number;
+  if (
+    observedMinHr < PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumObservedHeartRateBpm ||
+    observedMaxHr > PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumObservedHeartRateBpm ||
+    observedMinHr < windowMin ||
+    observedMaxHr >= windowMax ||
+    observedMinHr > observedMaxHr ||
+    observedMinWatts < PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumObservedWorkloadWatts ||
+    observedMaxWatts > PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumObservedWorkloadWatts ||
+    observedMinWatts > observedMaxWatts ||
+    baselineMedianWatts < PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumObservedWorkloadWatts ||
+    baselineMedianWatts > PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumObservedWorkloadWatts ||
+    guardedTrendWatts < PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumObservedWorkloadWatts ||
+    guardedTrendWatts > PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumObservedWorkloadWatts ||
+    baselineMedianWatts < observedMinWatts ||
+    baselineMedianWatts > observedMaxWatts ||
+    guardedTrendWatts < observedMinWatts ||
+    guardedTrendWatts > observedMaxWatts
+  ) return null;
+  if (
+    value.guardedTrendChangeFromBaselinePercent !==
+    roundV2(((guardedTrendWatts - baselineMedianWatts) / baselineMedianWatts) * 100)
+  ) return null;
+  if (
+    !Array.isArray(value.workloadSourceClasses) ||
+    value.workloadSourceClasses.length === 0 ||
+    value.workloadSourceClasses.length > 2
+  ) return null;
+  const workloadSourceClasses: Array<"measured_watts" | "calibrated_watts"> = [];
+  for (const source of value.workloadSourceClasses) {
+    if (source !== "measured_watts" && source !== "calibrated_watts") return null;
+    if (workloadSourceClasses.includes(source)) return null;
+    workloadSourceClasses.push(source);
+  }
+  if (workloadSourceClasses.some((source, index) => index > 0 && source <= workloadSourceClasses[index - 1])) {
+    return null;
+  }
+  const hasAnchorTime = value.formalAnchorObservedAt !== undefined;
+  const hasAnchorSession = value.formalAnchorSessionId !== undefined;
+  if (hasAnchorTime && !isIsoTimestamp(value.formalAnchorObservedAt)) return null;
+  if (hasAnchorSession && !isEvidenceSessionId(value.formalAnchorSessionId)) return null;
+  if (hasAnchorSession && !hasAnchorTime) return null;
+  return {
+    metric: PASSIVE_FITNESS_REFINEMENT_READER_V2.metric,
+    interpretation: "descriptive_observation_only",
+    normalizedToReferenceHr: false,
+    eligibleForPrescription: false,
+    intensityId: value.intensityId,
+    heartRateWindowCenterBpm: value.heartRateWindowCenterBpm as number,
+    heartRateWindowMinBpm: windowMin,
+    heartRateWindowMaxExclusiveBpm: windowMax,
+    guardedTrendWorkloadWatts: guardedTrendWatts,
+    baselineWorkloadMedianWatts: baselineMedianWatts,
+    guardedTrendChangeFromBaselinePercent: value.guardedTrendChangeFromBaselinePercent as number,
+    workloadSourceClasses,
+    observedMinWatts,
+    observedMaxWatts,
+    observedMinHeartRateBpm: observedMinHr,
+    observedMaxHeartRateBpm: observedMaxHr,
+    medianAbsoluteDeviationWatts: value.medianAbsoluteDeviationWatts as number,
+    ...(hasAnchorTime ? { formalAnchorObservedAt: value.formalAnchorObservedAt as string } : {}),
+    ...(hasAnchorSession ? { formalAnchorSessionId: value.formalAnchorSessionId as string } : {}),
+  };
+}
+
+function parsePassiveEvidenceSummary(value: unknown): PassiveAerobicObservationMetric["evidence"] | null {
+  if (!isObject(value)) return null;
+  if (!isPositiveInteger(value.sessionCount) || !isPositiveInteger(value.observationCount)) return null;
+  if (value.sessionCount !== value.observationCount) return null;
+  if (!isPositiveInteger(value.distinctWorkoutDateCount) || value.distinctWorkoutDateCount > value.sessionCount) {
+    return null;
+  }
+  if (!isIsoTimestamp(value.earliestEvidenceAt) || !isIsoTimestamp(value.latestEvidenceAt)) return null;
+  if (Date.parse(value.earliestEvidenceAt) > Date.parse(value.latestEvidenceAt)) return null;
+  if (!isEvidenceSessionId(value.firstSessionId) || !isEvidenceSessionId(value.latestSessionId)) return null;
+  if (!Array.isArray(value.recentSessionIds)) return null;
+  const expectedRecentCount = Math.min(
+    value.sessionCount as number,
+    PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumRecentEvidenceSessionIds
+  );
+  if (value.recentSessionIds.length !== expectedRecentCount) return null;
+  const recentSessionIds: string[] = [];
+  for (const id of value.recentSessionIds) {
+    if (!isEvidenceSessionId(id) || recentSessionIds.includes(id)) return null;
+    recentSessionIds.push(id);
+  }
+  if (recentSessionIds[recentSessionIds.length - 1] !== value.latestSessionId) return null;
+  if (value.sessionCount <= PASSIVE_FITNESS_REFINEMENT_READER_V2.maximumRecentEvidenceSessionIds) {
+    if (recentSessionIds[0] !== value.firstSessionId) return null;
+  } else if (recentSessionIds.includes(value.firstSessionId as string)) {
+    return null;
+  }
+  if (
+    !isObject(value.digest) ||
+    value.digest.algorithm !== PASSIVE_FITNESS_REFINEMENT_READER_V2.evidenceDigestAlgorithm ||
+    typeof value.digest.value !== "string" ||
+    !/^[0-9a-f]{8}$/.test(value.digest.value)
+  ) return null;
+  return {
+    sessionCount: value.sessionCount as number,
+    observationCount: value.observationCount as number,
+    distinctWorkoutDateCount: value.distinctWorkoutDateCount as number,
+    earliestEvidenceAt: value.earliestEvidenceAt,
+    latestEvidenceAt: value.latestEvidenceAt,
+    firstSessionId: value.firstSessionId,
+    latestSessionId: value.latestSessionId,
+    recentSessionIds,
+    digest: { algorithm: "fnv1a32", value: value.digest.value },
+  };
+}
+
+function parsePassiveAerobicObservationMetric(value: unknown): PassiveAerobicObservationMetric | null {
+  if (!isObject(value)) return null;
+  const parsedValue = parsePassiveAerobicObservation(value.value);
+  const evidence = parsePassiveEvidenceSummary(value.evidence);
+  if (!parsedValue || !evidence) return null;
+  if (
+    value.source !== "workout_observation" ||
+    (value.quality !== "high" && value.quality !== "moderate" && value.quality !== "low") ||
+    !isIsoTimestamp(value.observedAt) ||
+    !isIsoTimestamp(value.updatedAt) ||
+    value.observedAt !== evidence.latestEvidenceAt ||
+    value.updatedAt !== evidence.latestEvidenceAt ||
+    !isObject(value.algorithm) ||
+    value.algorithm.id !== PASSIVE_FITNESS_REFINEMENT_READER_V2.id ||
+    value.algorithm.version !== PASSIVE_FITNESS_REFINEMENT_READER_V2.version
+  ) return null;
+  const requiredSessions = parsedValue.workloadSourceClasses.includes("calibrated_watts")
+    ? PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumCalibratedSessions
+    : PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumMeasuredSessions;
+  if (
+    evidence.sessionCount < requiredSessions ||
+    evidence.distinctWorkoutDateCount < PASSIVE_FITNESS_REFINEMENT_READER_V2.minimumDistinctDates ||
+    value.quality !== expectedPassiveV2Quality(parsedValue, evidence.observationCount)
+  ) return null;
+  return {
+    value: parsedValue,
+    source: "workout_observation",
+    quality: value.quality,
+    observedAt: value.observedAt,
+    updatedAt: value.updatedAt,
+    algorithm: { id: "fitness-refinement-v2", version: 2 },
+    evidence,
+  };
+}
+
+function latestMetricUpdatedAt(state: FitnessState): string | undefined {
+  return [state.vo2Max, state.predictedMaxWatts, state.hrWorkloadCalibration, state.passiveAerobicObservation]
+    .map((metric) => metric?.updatedAt)
+    .filter((timestamp): timestamp is string => !!timestamp)
+    .sort()
+    .slice(-1)[0];
+}
+
+function parseFitnessStateV3(value: Record<string, unknown>): FitnessState | null {
+  if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V3 || value.passiveAerobicTrend !== undefined) return null;
+  const formal = parseFitnessStateV1({
+    ...value,
+    schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
+    passiveAerobicTrend: undefined,
+    passiveAerobicObservation: undefined,
+  });
+  if (!formal) return null;
+  const passive = value.passiveAerobicObservation == null
+    ? undefined
+    : parsePassiveAerobicObservationMetric(value.passiveAerobicObservation);
+  if (value.passiveAerobicObservation != null && !passive) return null;
+  const state: FitnessState = {
+    ...formal,
+    schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V3,
+    ...(passive ? { passiveAerobicObservation: passive } : {}),
+  };
+  if (passive) {
+    const anchor = latestFormalAnchorIdentity(formal);
+    const hasPassiveAnchor = passive.value.formalAnchorObservedAt !== undefined;
+    if (
+      Boolean(anchor) !== hasPassiveAnchor ||
+      (anchor && passive.value.formalAnchorObservedAt !== anchor.observedAt) ||
+      (anchor && passive.value.formalAnchorSessionId !== anchor.sessionId) ||
+      (anchor && Date.parse(anchor.observedAt) >= Date.parse(passive.evidence.earliestEvidenceAt))
+    ) return null;
+  }
+  if (latestMetricUpdatedAt(state) !== value.updatedAt) return null;
+  return state;
 }
 
 /** Dispatch persisted state by historical schema, never by the current writer alias. */
@@ -572,6 +919,8 @@ export function parseFitnessState(value: unknown): FitnessState | null {
       return parseFitnessStateV1(value);
     case FITNESS_STATE_SCHEMA_VERSION_V2:
       return parseFitnessStateV2(value);
+    case FITNESS_STATE_SCHEMA_VERSION_V3:
+      return parseFitnessStateV3(value);
     default:
       return null;
   }
@@ -586,7 +935,8 @@ export function parseAthleteFitnessSnapshot(value: unknown): AthleteFitnessSnaps
   if (hasFitnessVersion) {
     if (
       value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1 &&
-      value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V2
+      value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V2 &&
+      value.fitnessStateSchemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V3
     ) return null;
     if (!isIsoTimestamp(value.fitnessUpdatedAt)) return null;
   }
@@ -597,7 +947,8 @@ export function parseAthleteFitnessSnapshot(value: unknown): AthleteFitnessSnaps
       ? {
           fitnessStateSchemaVersion: value.fitnessStateSchemaVersion as
             | typeof FITNESS_STATE_SCHEMA_VERSION_V1
-            | typeof FITNESS_STATE_SCHEMA_VERSION_V2,
+            | typeof FITNESS_STATE_SCHEMA_VERSION_V2
+            | typeof FITNESS_STATE_SCHEMA_VERSION_V3,
           fitnessUpdatedAt: value.fitnessUpdatedAt as string,
         }
       : {}),
@@ -834,12 +1185,28 @@ function assessmentCanPromote(
   };
 }
 
+function latestFormalAnchorIdentity(
+  state: FitnessState
+): { observedAt: string; sessionId?: string } | undefined {
+  const metrics: Array<FitnessMetric<unknown> | undefined> = [
+    state.vo2Max,
+    state.predictedMaxWatts,
+    state.hrWorkloadCalibration,
+  ];
+  const metric = metrics
+    .filter((candidate): candidate is FitnessMetric<unknown> => candidate?.source === "formal_assessment")
+    .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))[0];
+  return metric
+    ? {
+        observedAt: metric.observedAt,
+        ...(metric.evidenceSessionIds?.[0] ? { sessionId: metric.evidenceSessionIds[0] } : {}),
+      }
+    : undefined;
+}
+
 function latestFormalEvidenceTime(state: FitnessState): number | undefined {
-  const times = [state.vo2Max, state.predictedMaxWatts, state.hrWorkloadCalibration]
-    .filter((metric) => metric?.source === "formal_assessment")
-    .map((metric) => Date.parse((metric as FitnessMetric<unknown>).observedAt))
-    .filter(Number.isFinite);
-  return times.length > 0 ? Math.max(...times) : undefined;
+  const anchor = latestFormalAnchorIdentity(state);
+  return anchor ? Date.parse(anchor.observedAt) : undefined;
 }
 
 /** Pure, fail-closed projection from immutable formal-assessment evidence. */

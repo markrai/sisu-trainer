@@ -22,9 +22,11 @@ import { assessVo2 } from "../dist/vo2Estimator.js";
 import {
   emitWorkoutSummary,
 } from "../dist/workoutSummary.js";
+import { rebuildStoredPassiveFitnessProjection } from "../dist/fitnessRefinement.js";
 import {
   getAllWorkoutSummaries,
   resetWorkoutStorageForTests,
+  storeWorkoutSummary,
 } from "../dist/workoutStorage.js";
 
 function memoryStorage(initial = {}, failKey) {
@@ -172,6 +174,53 @@ function assessmentFixture(options = {}) {
   return { athlete, assessment, summary };
 }
 
+function ordinaryFitnessSummary(sessionId, endedAt, watts = 200, hr = 150) {
+  const duration = 600;
+  const scalar = (value, spread) => ({
+    sampleCount: duration, coverageRatio: 1, mean: value, median: value,
+    min: value - spread, max: value + spread, end: value,
+  });
+  return {
+    external_session_id: sessionId,
+    athlete_id: "athlete-fitness",
+    startedAt: new Date(Date.parse(endedAt) - duration * 1000).toISOString(),
+    endedAt,
+    category: "cardio",
+    intent: "threshold calibration",
+    duration_minutes: 10,
+    primary_zone: 4,
+    stress_profile: "high",
+    zone_minutes: { z1: 0, z2: 0, z3: 0, z4: 10, z5: 0 },
+    hr_trace: { sampling_interval_seconds: 60, samples: [] },
+    activity: "bike",
+    workout_response: {
+      schemaVersion: 1,
+      athleteId: "athlete-fitness",
+      sessionId,
+      completion: {
+        plannedActiveSec: duration, completedActiveSec: duration,
+        completionFraction: 1, cancelled: false, earlyCooldown: false,
+      },
+      evidence: {
+        hr: { expectedDurationSec: duration, validSampleCount: duration, coverageRatio: 1, source: "ble_chest_strap" },
+        bike: {
+          expectedDurationSec: duration, rowCount: duration, freshSampleCount: duration,
+          staleSampleCount: 0, unavailableSampleCount: 0, implicitMissingCount: 0,
+          freshRowCoverageRatio: 1, wattsProvenance: "measured_watts",
+        },
+        rawTelemetry: { store: "ordinary_bike_telemetry", schemaVersion: 1 },
+      },
+      phases: [{
+        phaseInstanceId: `${sessionId}:main`, phaseId: "main", kind: "work", intensityId: "threshold",
+        activeStartSec: 0, activeEndSec: duration, plannedDurationSec: duration, completedDurationSec: duration,
+        hr: scalar(hr, 8),
+        watts: { ...scalar(watts, 4), provenance: "measured_watts" },
+        cadenceRpm: scalar(72, 4),
+      }],
+    },
+  };
+}
+
 function promote(fixture, currentState = null, updatedAt = "2026-09-21T12:31:00.000Z") {
   return promoteVo2AssessmentToFitnessState({
     currentState,
@@ -195,7 +244,7 @@ test("fitness state parser and local persistence reconstruct strict versioned re
   assert.equal(storeFitnessState(promoted, storage), true);
   assert.deepEqual(readFitnessState(fixture.athlete.athleteId, storage), promoted);
   assert.equal(readFitnessState("different-athlete", storage), null);
-  assert.equal(parseFitnessState({ ...promoted, schemaVersion: 3 }), null);
+  assert.equal(parseFitnessState({ ...promoted, schemaVersion: 4 }), null);
   assert.equal(parseFitnessState({ ...promoted, athleteId: "" }), null);
   assert.equal(parseFitnessState({ ...promoted, vo2Max: { ...promoted.vo2Max, value: "bad" } }), null);
   assert.equal(parseFitnessState({ ...promoted, updatedAt: "not-a-date" }), null);
@@ -389,6 +438,67 @@ test("qualified stored promotion persists the athlete-owned current projection",
   assert.ok(stored);
   assert.equal(stored.vo2Max.value, fixture.assessment.estimate_ml_kg_min);
   assert.deepEqual(stored.vo2Max.evidenceSessionIds, [fixture.summary.external_session_id]);
+});
+
+test("real finalization promotes a new formal anchor and forces post-anchor passive requalification", async () => {
+  const previousIndexedDb = globalThis.indexedDB;
+  const previousKeyRange = globalThis.IDBKeyRange;
+  globalThis.indexedDB = indexedDB;
+  globalThis.IDBKeyRange = IDBKeyRange;
+  await resetWorkoutStorageForTests();
+  const previousStorage = globalThis.localStorage;
+  const fixture = assessmentFixture({
+    athleteId: "athlete-fitness",
+    sessionId: "formal-anchor-session",
+    endedAt: "2026-01-10T12:30:00.000Z",
+  });
+  const storage = memoryStorage({
+    [ATHLETE_PROFILE_STORAGE_KEY]: JSON.stringify(fixture.athlete),
+  });
+  globalThis.localStorage = storage;
+  try {
+    const preAnchor = [1, 2, 3, 4].map((day) =>
+      ordinaryFitnessSummary(`pre-anchor-${day}`, `2026-01-0${day}T12:10:00.000Z`, 195 + day)
+    );
+    for (const summary of preAnchor) assert.equal(await storeWorkoutSummary(summary), true);
+    let history = await getAllWorkoutSummaries();
+    assert.equal(rebuildStoredPassiveFitnessProjection(history.map((row) => row.summary), storage), "refined");
+    assert.ok(readFitnessState("athlete-fitness", storage)?.passiveAerobicObservation);
+
+    await emitWorkoutSummary(fixture.summary);
+    const anchored = readFitnessState("athlete-fitness", storage);
+    assert.ok(anchored);
+    assert.equal(anchored.vo2Max.source, "formal_assessment");
+    assert.equal(anchored.predictedMaxWatts.source, "formal_assessment");
+    assert.equal(anchored.hrWorkloadCalibration.source, "formal_assessment");
+    assert.equal(anchored.vo2Max.value, fixture.assessment.estimate_ml_kg_min);
+    assert.equal(anchored.passiveAerobicObservation, undefined);
+    assert.equal(anchored.passiveAerobicTrend, undefined);
+
+    const postAnchor = [11, 12, 13, 14].map((day, index) =>
+      ordinaryFitnessSummary(`post-anchor-${index + 1}`, `2026-01-${day}T12:10:00.000Z`, 205 + index)
+    );
+    assert.equal(await storeWorkoutSummary(postAnchor[0]), true);
+    history = await getAllWorkoutSummaries();
+    rebuildStoredPassiveFitnessProjection(history.map((row) => row.summary), storage);
+    assert.equal(readFitnessState("athlete-fitness", storage).passiveAerobicObservation, undefined);
+
+    for (const summary of postAnchor.slice(1)) assert.equal(await storeWorkoutSummary(summary), true);
+    history = await getAllWorkoutSummaries();
+    assert.equal(rebuildStoredPassiveFitnessProjection(history.map((row) => row.summary), storage), "refined");
+    const rebuilt = readFitnessState("athlete-fitness", storage);
+    assert.deepEqual(rebuilt.vo2Max, anchored.vo2Max);
+    assert.deepEqual(rebuilt.predictedMaxWatts, anchored.predictedMaxWatts);
+    assert.deepEqual(rebuilt.hrWorkloadCalibration, anchored.hrWorkloadCalibration);
+    assert.equal(rebuilt.passiveAerobicObservation.source, "workout_observation");
+    assert.equal(rebuilt.passiveAerobicObservation.value.formalAnchorSessionId, "formal-anchor-session");
+    assert.equal(rebuilt.passiveAerobicObservation.evidence.sessionCount, 4);
+  } finally {
+    globalThis.localStorage = previousStorage;
+    await resetWorkoutStorageForTests();
+    globalThis.indexedDB = previousIndexedDb;
+    globalThis.IDBKeyRange = previousKeyRange;
+  }
 });
 
 test("stored promotion failure leaves an already-saved immutable workout summary intact", async () => {
