@@ -414,8 +414,11 @@ export function rebuildPassiveFitnessProjection(input) {
     const madWatts = median(watts.map((wattsValue) => Math.abs(wattsValue - median(watts))));
     const earliest = selected[0].observedAt;
     const latest = selected[selected.length - 1].observedAt;
+    const storedMinWatts = round(Math.min(...watts));
+    const storedMaxWatts = round(Math.max(...watts));
     const storedGuardedTrendWatts = round(guardedWatts);
     const storedBaselineWatts = round(baselineWatts);
+    const storedMadWatts = round(madWatts);
     const value = {
         metric: "descriptive_workload_trend_in_fixed_hr_window",
         interpretation: "descriptive_observation_only",
@@ -429,11 +432,11 @@ export function rebuildPassiveFitnessProjection(input) {
         baselineWorkloadMedianWatts: storedBaselineWatts,
         guardedTrendChangeFromBaselinePercent: round(((storedGuardedTrendWatts - storedBaselineWatts) / storedBaselineWatts) * 100),
         workloadSourceClasses: sources,
-        observedMinWatts: Math.min(...watts),
-        observedMaxWatts: Math.max(...watts),
+        observedMinWatts: storedMinWatts,
+        observedMaxWatts: storedMaxWatts,
         observedMinHeartRateBpm: Math.min(...hrs),
         observedMaxHeartRateBpm: Math.max(...hrs),
-        medianAbsoluteDeviationWatts: round(madWatts),
+        medianAbsoluteDeviationWatts: storedMadWatts,
         ...(anchor ? { formalAnchorObservedAt: anchor.observedAt } : {}),
         ...((anchor === null || anchor === void 0 ? void 0 : anchor.sessionId) ? { formalAnchorSessionId: anchor.sessionId } : {}),
     };
@@ -442,7 +445,7 @@ export function rebuildPassiveFitnessProjection(input) {
     const passiveAerobicObservation = {
         value,
         source: "workout_observation",
-        quality: projectionQuality(selected, round(madWatts), storedBaselineWatts),
+        quality: projectionQuality(selected, storedMadWatts, storedBaselineWatts),
         observedAt: latest,
         updatedAt: latest,
         algorithm: { id: FITNESS_REFINEMENT_ALGORITHM_V2.id, version: FITNESS_REFINEMENT_ALGORITHM_V2.version },

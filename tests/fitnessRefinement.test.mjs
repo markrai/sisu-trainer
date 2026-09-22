@@ -385,6 +385,34 @@ test("writer derives percentage from persisted rounded watts", () => {
   assert.deepEqual(parseFitnessState(structuredClone(result.state)), result.state);
 });
 
+test("writer canonicalizes stored watt extrema before reader range validation", () => {
+  const uniform = rebuild(trajectory([30.4806, 30.4806, 30.4806, 30.4806])).state;
+  const uniformValue = uniform.passiveAerobicObservation.value;
+  assert.equal(uniformValue.observedMinWatts, 30.481);
+  assert.equal(uniformValue.observedMaxWatts, 30.481);
+  assert.equal(uniformValue.baselineWorkloadMedianWatts, 30.481);
+  assert.equal(uniformValue.guardedTrendWorkloadWatts, 30.481);
+  assert.deepEqual(parseFitnessState(structuredClone(uniform)), uniform);
+
+  const baselineAtMinimum = rebuild(
+    trajectory([30.4806, 30.4806, 30.4806, 30.4806, 40, 40])
+  ).state;
+  assert.equal(
+    baselineAtMinimum.passiveAerobicObservation.value.baselineWorkloadMedianWatts,
+    baselineAtMinimum.passiveAerobicObservation.value.observedMinWatts
+  );
+  assert.deepEqual(parseFitnessState(structuredClone(baselineAtMinimum)), baselineAtMinimum);
+
+  const trendAtMaximum = rebuild(
+    trajectory([30.4806, 30.4806, 30.4806, 30.4806, 30, 30])
+  ).state;
+  assert.equal(
+    trendAtMaximum.passiveAerobicObservation.value.guardedTrendWorkloadWatts,
+    trendAtMaximum.passiveAerobicObservation.value.observedMaxWatts
+  );
+  assert.deepEqual(parseFitnessState(structuredClone(trendAtMaximum)), trendAtMaximum);
+});
+
 test("duplicate processing and out-of-order replay are idempotent", () => {
   const evidence = trajectory([180, 182, 184, 186, 190, 194]);
   const chronological = rebuild(evidence);
