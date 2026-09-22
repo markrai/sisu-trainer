@@ -30,6 +30,9 @@ function parseFiniteNumber(value) {
 function isFiniteNumber(value) {
     return typeof value === "number" && Number.isFinite(value);
 }
+function isObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+}
 function isIsoTimestamp(value) {
     if (typeof value !== "string" || value === "")
         return false;
@@ -77,6 +80,8 @@ function parseUserEnteredVo2Metric(value) {
         return undefined;
     if (!isIsoTimestamp(row.observedAt) || !isIsoTimestamp(row.updatedAt))
         return undefined;
+    if (Date.parse(row.updatedAt) < Date.parse(row.observedAt))
+        return undefined;
     return {
         value: row.value,
         source: "user_entered",
@@ -85,12 +90,10 @@ function parseUserEnteredVo2Metric(value) {
         updatedAt: row.updatedAt,
     };
 }
-/** Strict parser for the canonical versioned athlete record. */
-export function parseAthleteProfile(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-        return null;
+/** Strict reader for the permanent v1 athlete profile schema. */
+function parseAthleteProfileV1(value) {
     const row = value;
-    if (row.schemaVersion !== ATHLETE_PROFILE_SCHEMA_VERSION_V1 || !isAthleteId(row.athleteId))
+    if (!isAthleteId(row.athleteId))
         return null;
     if (!isIsoTimestamp(row.createdAt) || !isIsoTimestamp(row.updatedAt))
         return null;
@@ -131,13 +134,24 @@ export function parseAthleteProfile(value) {
             return null;
     }
     return {
-        schemaVersion: ATHLETE_PROFILE_SCHEMA_VERSION,
+        schemaVersion: ATHLETE_PROFILE_SCHEMA_VERSION_V1,
         athleteId: row.athleteId,
         demographics,
         ...(userEnteredVo2 ? { userEnteredVo2 } : {}),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
     };
+}
+/** Dispatch persisted profiles by historical schema, never by the current writer alias. */
+export function parseAthleteProfile(value) {
+    if (!isObject(value))
+        return null;
+    switch (value.schemaVersion) {
+        case ATHLETE_PROFILE_SCHEMA_VERSION_V1:
+            return parseAthleteProfileV1(value);
+        default:
+            return null;
+    }
 }
 export function parseAthleteIdentity(value) {
     if (!value || typeof value !== "object" || Array.isArray(value))

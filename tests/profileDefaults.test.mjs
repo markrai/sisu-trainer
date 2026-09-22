@@ -19,6 +19,7 @@ import {
 import { calculateZoneMinutes, mapHrToZone } from "../dist/zoneCalculator.js";
 import { adjustedBlockLengths } from "../dist/workoutLogic.js";
 import { assessVo2 } from "../dist/vo2Estimator.js";
+import { ATHLETE_PROFILE_SCHEMA_VERSION_V1 } from "../dist/types.js";
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -164,6 +165,51 @@ test("canonical athlete parser rejects unknown schemas and malformed metrics", (
     parseAthleteProfile({
       ...valid,
       userEnteredVo2: { ...valid.userEnteredVo2, source: "formal_assessment" },
+    }),
+    null
+  );
+});
+
+test("historical athlete reader preserves the permanent v1 schema identity", () => {
+  const persistedV1 = {
+    ...migrateLegacyProfile(
+      { age: 40, weight: 176.37, vo2: 45 },
+      "athlete-historical-v1",
+      "2026-09-20T12:00:00.000Z"
+    ),
+    schemaVersion: ATHLETE_PROFILE_SCHEMA_VERSION_V1,
+  };
+  const parsed = parseAthleteProfile(persistedV1);
+  assert.ok(parsed);
+  assert.equal(parsed.schemaVersion, ATHLETE_PROFILE_SCHEMA_VERSION_V1);
+  assert.equal(parseAthleteProfile({ ...persistedV1, schemaVersion: 2 }), null);
+  assert.equal(parseAthleteProfile({ ...persistedV1, schemaVersion: 999 }), null);
+});
+
+test("user-entered VO2 provenance requires updatedAt to be at or after observedAt", () => {
+  const base = migrateLegacyProfile(
+    { age: 40, weight: 176.37, vo2: 45 },
+    "athlete-vo2-order",
+    "2026-09-20T12:00:00.000Z"
+  );
+  const chronological = {
+    ...base,
+    updatedAt: "2026-09-21T12:00:00.000Z",
+    userEnteredVo2: {
+      ...base.userEnteredVo2,
+      observedAt: "2026-09-20T12:00:00.000Z",
+      updatedAt: "2026-09-21T12:00:00.000Z",
+    },
+  };
+  assert.ok(parseAthleteProfile(chronological));
+  assert.equal(
+    parseAthleteProfile({
+      ...chronological,
+      userEnteredVo2: {
+        ...chronological.userEnteredVo2,
+        observedAt: "2026-09-21T12:00:00.000Z",
+        updatedAt: "2026-09-20T12:00:00.000Z",
+      },
     }),
     null
   );
