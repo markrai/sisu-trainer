@@ -5,6 +5,10 @@ export const LEGACY_HR_TARGET_RESOLVER_VERSION = 1;
 /** Resolver used for new resolutions in this build. */
 export const WORKOUT_PRESCRIPTION_RESOLVER_ID = LEGACY_HR_TARGET_RESOLVER_ID;
 export const WORKOUT_PRESCRIPTION_RESOLVER_VERSION = LEGACY_HR_TARGET_RESOLVER_VERSION;
+/** Permanent Phase E1 shadow schema identity. This record has no control authority. */
+export const PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1 = 1;
+export const PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1 = "personalized-prescription-resolver";
+export const PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1 = 1;
 /** Permanent historical schema identities. Readers must not key old data to current aliases. */
 export const ATHLETE_PROFILE_SCHEMA_VERSION_V1 = 1;
 export const FITNESS_STATE_SCHEMA_VERSION_V1 = 1;

@@ -1,6 +1,13 @@
 import { getHrTargets, getPlan, getWorkoutMetadata } from "./workoutData.js";
 import { todayName } from "./utils/dateTime.js";
-import { Activity, HrTargetsForDay, PlanBlock, WorkoutPhaseState, type OrdinaryBikeTelemetrySample } from "./types.js";
+import {
+  Activity,
+  HrTargetsForDay,
+  PlanBlock,
+  WorkoutPhaseState,
+  type AthleteFitnessSnapshot,
+  type OrdinaryBikeTelemetrySample,
+} from "./types.js";
 import {
   getSession,
   startSession,
@@ -36,6 +43,12 @@ import {
 } from "./bikeTelemetryTrace.js";
 import type { BikeTelemetrySample } from "./vo2Workload.js";
 import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
+import {
+  PHASE_E1_SHADOW_POLICY,
+  evaluatePersonalizedPrescription,
+} from "./personalizedPrescription.js";
+import { loadAthleteProfile } from "./profile.js";
+import { FITNESS_STATE_STORAGE_KEY, parseFitnessState } from "./fitnessState.js";
 import {
   buildOrdinaryBikeTelemetrySample,
   type BuildOrdinaryBikeTelemetrySampleInput,
@@ -338,6 +351,64 @@ function capturePhasePlanSnapshot(day: string, resolvedAt = new Date().toISOStri
   };
 }
 
+interface WorkoutStartContext {
+  phasePlan: PhasePlanSnapshot | null;
+  athleteFitnessSnapshot?: AthleteFitnessSnapshot;
+}
+
+/**
+ * Read athlete evidence once at workout start and freeze the non-authoritative
+ * E1 evaluation beside the already-authoritative legacy prescription.
+ */
+function captureWorkoutStartContext(
+  day: string,
+  activity: Activity,
+  resolvedAt: string,
+  storage?: SessionStorage
+): WorkoutStartContext {
+  const phasePlan = capturePhasePlanSnapshot(day, resolvedAt);
+  if (!phasePlan?.resolvedPrescription) return { phasePlan };
+  const store = storage ?? (typeof localStorage !== "undefined" ? localStorage : undefined);
+  if (!store) return { phasePlan };
+  try {
+    const profile = loadAthleteProfile(store);
+    const storedFitness = store.getItem(FITNESS_STATE_STORAGE_KEY);
+    let rawFitnessState: unknown = null;
+    if (storedFitness) {
+      try {
+        rawFitnessState = JSON.parse(storedFitness);
+      } catch {
+        rawFitnessState = storedFitness;
+      }
+    }
+    const parsedFitness = parseFitnessState(rawFitnessState);
+    const athleteFitnessSnapshot: AthleteFitnessSnapshot = {
+      athleteId: profile.athleteId,
+      profileSchemaVersion: profile.schemaVersion,
+      ...(parsedFitness?.athleteId === profile.athleteId
+        ? {
+            fitnessStateSchemaVersion: parsedFitness.schemaVersion,
+            fitnessUpdatedAt: parsedFitness.updatedAt,
+          }
+        : {}),
+    };
+    phasePlan.shadowPrescriptionEvaluation = evaluatePersonalizedPrescription({
+      legacyPrescription: phasePlan.resolvedPrescription,
+      workoutIntent: getWorkoutMetadata()[day]?.intent ?? "",
+      activity,
+      athleteId: profile.athleteId,
+      profile,
+      fitnessState: rawFitnessState,
+      policy: PHASE_E1_SHADOW_POLICY,
+      resolvedAt,
+    });
+    return { phasePlan, athleteFitnessSnapshot };
+  } catch (error) {
+    console.error("Shadow prescription evaluation failed; continuing with legacy prescription:", error);
+    return { phasePlan };
+  }
+}
+
 function beginWorkout(activity?: Activity) {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
   if (isVo2WorkoutSelector(day)) {
@@ -354,16 +425,16 @@ function beginWorkout(activity?: Activity) {
       : getActiveWorkoutActivity(allowed);
     if (allowed.length > 1 && resolved === undefined) return;
     const startTime = Date.now();
-    const phasePlan = capturePhasePlanSnapshot(day, new Date(startTime).toISOString());
+    const startContext = captureWorkoutStartContext(day, resolved as Activity, new Date(startTime).toISOString());
     const runtime = createVo2ProtocolRuntime(preflight.plan);
     let sessionId: string | null = null;
     if (typeof (window as any).generateUUID === "function") {
       sessionId = (window as any).generateUUID();
       void releaseReplacedSessionTelemetry(day, sessionId);
-      startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
+      startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
     } else {
       void releaseReplacedSessionTelemetry(day, null);
-      startSession(day, startTime, null, resolved, undefined, phasePlan);
+      startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
     }
     persistVo2ProtocolRuntime(day, runtime);
     resetMachineGuidanceRuntime(sessionId);
@@ -382,18 +453,18 @@ function beginWorkout(activity?: Activity) {
     : getActiveWorkoutActivity(allowed);
   if (allowed.length > 1 && resolved === undefined) return;
   const startTime = Date.now();
-  const phasePlan = capturePhasePlanSnapshot(day, new Date(startTime).toISOString());
+  const startContext = captureWorkoutStartContext(day, resolved as Activity, new Date(startTime).toISOString());
   let sessionId: string | null = null;
   if (typeof (window as any).generateUUID === "function") {
     sessionId = (window as any).generateUUID();
     void releaseReplacedSessionTelemetry(day, sessionId);
-    startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
+    startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
     if (typeof (window as any).initDB === "function") {
       (window as any).initDB().catch((err: any) => console.error("Failed to init DB:", err));
     }
   } else {
     void releaseReplacedSessionTelemetry(day, null);
-    startSession(day, startTime, null, resolved, undefined, phasePlan);
+    startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
   }
   resetMachineGuidanceRuntime(sessionId);
 
@@ -760,6 +831,7 @@ export {
   ordinaryActiveBikeTelemetrySample,
   releaseReplacedSessionTelemetry,
   capturePhasePlanSnapshot,
+  captureWorkoutStartContext,
   getPhase,
   formatTime,
   adjustedBlockLengths,

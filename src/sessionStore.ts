@@ -2,6 +2,7 @@ import type {
   Activity,
   AthleteFitnessSnapshot,
   HrTargetsForDay,
+  PersonalizedPrescriptionEvaluationV1,
   PlanBlock,
   ResolvedWorkoutPrescription,
 } from "./types.js";
@@ -13,6 +14,7 @@ import {
   parseResolvedWorkoutPrescription,
   persistedHrTargetsFitBlocks,
 } from "./workoutPrescription.js";
+import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -28,6 +30,8 @@ export interface PhasePlanSnapshot {
   hrTargets: HrTargetsForDay | null;
   /** Versioned, frozen target resolution used by UI, guidance, evidence, and summary. */
   resolvedPrescription?: ResolvedWorkoutPrescription;
+  /** Phase E1 diagnostic only. It is never consulted by UI or machine guidance. */
+  shadowPrescriptionEvaluation?: PersonalizedPrescriptionEvaluationV1;
 }
 
 export interface SessionData {
@@ -129,6 +133,8 @@ function parsePhasePlan(raw: string | null): PhasePlanSnapshot | null {
       blocks,
       hrTargets,
       resolvedPrescription: parseResolvedWorkoutPrescription(parsed?.resolvedPrescription) ?? undefined,
+      shadowPrescriptionEvaluation:
+        parsePersonalizedPrescriptionEvaluation(parsed?.shadowPrescriptionEvaluation) ?? undefined,
     };
   } catch {
     return null;
@@ -209,7 +215,8 @@ export function startSession(
   sessionId?: string | null,
   activity?: Activity,
   storage?: SessionStorage,
-  phasePlan?: PhasePlanSnapshot | null
+  phasePlan?: PhasePlanSnapshot | null,
+  athleteFitnessSnapshotOverride?: AthleteFitnessSnapshot
 ): void {
   const store = storageOrBrowser(storage);
   store.removeItem(earlyCooldownKey(day));
@@ -230,7 +237,7 @@ export function startSession(
   }
   if (activity) store.setItem("activity_" + day, activity);
   else store.removeItem("activity_" + day);
-  const athleteFitnessSnapshot = captureAthleteFitnessSnapshot(store);
+  const athleteFitnessSnapshot = athleteFitnessSnapshotOverride ?? captureAthleteFitnessSnapshot(store);
   store.setItem(athleteIdKey(day), athleteFitnessSnapshot.athleteId);
   store.setItem(athleteFitnessSnapshotKey(day), JSON.stringify(athleteFitnessSnapshot));
   if (phasePlan?.blocks) {
@@ -240,6 +247,7 @@ export function startSession(
         blocks: phasePlan.blocks,
         hrTargets: phasePlan.hrTargets ?? null,
         resolvedPrescription: phasePlan.resolvedPrescription,
+        shadowPrescriptionEvaluation: phasePlan.shadowPrescriptionEvaluation,
       })
     );
   }

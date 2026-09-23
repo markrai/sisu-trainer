@@ -1,6 +1,7 @@
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
+import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 const DB_NAME = "vo2_workout_db";
 const DB_VERSION = 3;
 const STORE_WORKOUTS = "workouts";
@@ -344,7 +345,7 @@ async function getAllWorkoutSummaries() {
             const workouts = [];
             const request = index.openCursor(null, "prev");
             request.onsuccess = (event) => {
-                var _a;
+                var _a, _b;
                 const cursor = event.target.result;
                 if (cursor) {
                     const row = cursor.value;
@@ -358,6 +359,18 @@ async function getAllWorkoutSummaries() {
                             row.summary.workout_response = parsed;
                         else
                             delete row.summary.workout_response;
+                    }
+                    if (((_b = row === null || row === void 0 ? void 0 : row.summary) === null || _b === void 0 ? void 0 : _b.shadow_prescription_evaluation) !== undefined) {
+                        const parsedShadow = parsePersonalizedPrescriptionEvaluation(row.summary.shadow_prescription_evaluation);
+                        row.summary = { ...row.summary };
+                        if (parsedShadow &&
+                            parsedShadow.athleteId === row.summary.athlete_id &&
+                            parsedShadow.workoutSelector === row.summary.day) {
+                            row.summary.shadow_prescription_evaluation = parsedShadow;
+                        }
+                        else {
+                            delete row.summary.shadow_prescription_evaluation;
+                        }
                     }
                     workouts.push(row);
                     cursor.continue();

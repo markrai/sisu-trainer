@@ -2,6 +2,7 @@ import { isActivity } from "./workoutActivity.js";
 import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime } from "./vo2Protocol.js";
 import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import { parsePersistedHrTargetsForDay, parseResolvedWorkoutPrescription, persistedHrTargetsFitBlocks, } from "./workoutPrescription.js";
+import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
@@ -52,7 +53,7 @@ function parseOptionalWallMs(raw) {
     return Number.isFinite(value) && value > 0 ? value : null;
 }
 function parsePhasePlan(raw) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     if (raw == null || raw === "")
         return null;
     try {
@@ -73,6 +74,7 @@ function parsePhasePlan(raw) {
             blocks,
             hrTargets,
             resolvedPrescription: (_d = parseResolvedWorkoutPrescription(parsed === null || parsed === void 0 ? void 0 : parsed.resolvedPrescription)) !== null && _d !== void 0 ? _d : undefined,
+            shadowPrescriptionEvaluation: (_e = parsePersonalizedPrescriptionEvaluation(parsed === null || parsed === void 0 ? void 0 : parsed.shadowPrescriptionEvaluation)) !== null && _e !== void 0 ? _e : undefined,
         };
     }
     catch {
@@ -142,7 +144,7 @@ export function getSession(day, storage) {
         })()),
     };
 }
-export function startSession(day, startTime, sessionId, activity, storage, phasePlan) {
+export function startSession(day, startTime, sessionId, activity, storage, phasePlan, athleteFitnessSnapshotOverride) {
     var _a;
     const store = storageOrBrowser(storage);
     store.removeItem(earlyCooldownKey(day));
@@ -165,7 +167,7 @@ export function startSession(day, startTime, sessionId, activity, storage, phase
         store.setItem("activity_" + day, activity);
     else
         store.removeItem("activity_" + day);
-    const athleteFitnessSnapshot = captureAthleteFitnessSnapshot(store);
+    const athleteFitnessSnapshot = athleteFitnessSnapshotOverride !== null && athleteFitnessSnapshotOverride !== void 0 ? athleteFitnessSnapshotOverride : captureAthleteFitnessSnapshot(store);
     store.setItem(athleteIdKey(day), athleteFitnessSnapshot.athleteId);
     store.setItem(athleteFitnessSnapshotKey(day), JSON.stringify(athleteFitnessSnapshot));
     if (phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.blocks) {
@@ -173,6 +175,7 @@ export function startSession(day, startTime, sessionId, activity, storage, phase
             blocks: phasePlan.blocks,
             hrTargets: (_a = phasePlan.hrTargets) !== null && _a !== void 0 ? _a : null,
             resolvedPrescription: phasePlan.resolvedPrescription,
+            shadowPrescriptionEvaluation: phasePlan.shadowPrescriptionEvaluation,
         }));
     }
 }

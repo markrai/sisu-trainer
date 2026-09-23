@@ -323,7 +323,7 @@ test("blank profile cannot produce a VO2 estimate", () => {
   assert.equal(result.reason_codes.includes("missing_profile_weight"), true);
 });
 
-test("non-VO2 profile consumers do not import getProfile", async () => {
+test("profile consumers do not use the legacy getProfile accessor", async () => {
   const files = [
     "zoneCalculator.ts",
     "workoutData.ts",
@@ -336,10 +336,11 @@ test("non-VO2 profile consumers do not import getProfile", async () => {
   ];
   for (const relative of files) {
     const src = await readFile(new URL("../src/" + relative, import.meta.url), "utf8");
-    assert.equal(src.includes("from \"./profile.js\""), false, relative);
-    assert.equal(src.includes("from \"../profile.js\""), false, relative);
     assert.equal(src.includes("getProfile("), false, relative);
   }
+  const workoutLogic = await readFile(new URL("../src/workoutLogic.ts", import.meta.url), "utf8");
+  assert.equal(workoutLogic.includes("loadAthleteProfile"), true);
+  assert.equal(workoutLogic.includes("getProfile("), false);
   const summary = await readFile(new URL("../src/workoutSummary.ts", import.meta.url), "utf8");
   assert.equal(summary.includes("readExplicitVo2ProfileInputs"), true);
   assert.match(summary, /if \(isVo2WorkoutSelector\(day\)\) \{[\s\S]*readExplicitVo2ProfileInputs/);

@@ -8,6 +8,9 @@ import { advanceVo2Protocol, createVo2ProtocolRuntime, evaluateVo2PreflightForUi
 import { clearOrdinaryBikeTelemetry, getHrSamples } from "./workoutStorage.js";
 import { clearBikeTelemetrySamples, recordBikeTelemetrySample, } from "./bikeTelemetryTrace.js";
 import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
+import { PHASE_E1_SHADOW_POLICY, evaluatePersonalizedPrescription, } from "./personalizedPrescription.js";
+import { loadAthleteProfile } from "./profile.js";
+import { FITNESS_STATE_STORAGE_KEY, parseFitnessState } from "./fitnessState.js";
 import { buildOrdinaryBikeTelemetrySample, } from "./ordinaryWorkoutTelemetry.js";
 const RING_CIRC = 339.292;
 const RING_CIRC_LANDSCAPE = 407.1504;
@@ -263,6 +266,58 @@ function capturePhasePlanSnapshot(day, resolvedAt = new Date().toISOString()) {
         }),
     };
 }
+/**
+ * Read athlete evidence once at workout start and freeze the non-authoritative
+ * E1 evaluation beside the already-authoritative legacy prescription.
+ */
+function captureWorkoutStartContext(day, activity, resolvedAt, storage) {
+    var _a, _b;
+    const phasePlan = capturePhasePlanSnapshot(day, resolvedAt);
+    if (!(phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.resolvedPrescription))
+        return { phasePlan };
+    const store = storage !== null && storage !== void 0 ? storage : (typeof localStorage !== "undefined" ? localStorage : undefined);
+    if (!store)
+        return { phasePlan };
+    try {
+        const profile = loadAthleteProfile(store);
+        const storedFitness = store.getItem(FITNESS_STATE_STORAGE_KEY);
+        let rawFitnessState = null;
+        if (storedFitness) {
+            try {
+                rawFitnessState = JSON.parse(storedFitness);
+            }
+            catch {
+                rawFitnessState = storedFitness;
+            }
+        }
+        const parsedFitness = parseFitnessState(rawFitnessState);
+        const athleteFitnessSnapshot = {
+            athleteId: profile.athleteId,
+            profileSchemaVersion: profile.schemaVersion,
+            ...((parsedFitness === null || parsedFitness === void 0 ? void 0 : parsedFitness.athleteId) === profile.athleteId
+                ? {
+                    fitnessStateSchemaVersion: parsedFitness.schemaVersion,
+                    fitnessUpdatedAt: parsedFitness.updatedAt,
+                }
+                : {}),
+        };
+        phasePlan.shadowPrescriptionEvaluation = evaluatePersonalizedPrescription({
+            legacyPrescription: phasePlan.resolvedPrescription,
+            workoutIntent: (_b = (_a = getWorkoutMetadata()[day]) === null || _a === void 0 ? void 0 : _a.intent) !== null && _b !== void 0 ? _b : "",
+            activity,
+            athleteId: profile.athleteId,
+            profile,
+            fitnessState: rawFitnessState,
+            policy: PHASE_E1_SHADOW_POLICY,
+            resolvedAt,
+        });
+        return { phasePlan, athleteFitnessSnapshot };
+    }
+    catch (error) {
+        console.error("Shadow prescription evaluation failed; continuing with legacy prescription:", error);
+        return { phasePlan };
+    }
+}
 function beginWorkout(activity) {
     var _a, _b, _c, _d;
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
@@ -281,17 +336,17 @@ function beginWorkout(activity) {
         if (allowed.length > 1 && resolved === undefined)
             return;
         const startTime = Date.now();
-        const phasePlan = capturePhasePlanSnapshot(day, new Date(startTime).toISOString());
+        const startContext = captureWorkoutStartContext(day, resolved, new Date(startTime).toISOString());
         const runtime = createVo2ProtocolRuntime(preflight.plan);
         let sessionId = null;
         if (typeof window.generateUUID === "function") {
             sessionId = window.generateUUID();
             void releaseReplacedSessionTelemetry(day, sessionId);
-            startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
+            startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
         }
         else {
             void releaseReplacedSessionTelemetry(day, null);
-            startSession(day, startTime, null, resolved, undefined, phasePlan);
+            startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
         }
         persistVo2ProtocolRuntime(day, runtime);
         resetMachineGuidanceRuntime(sessionId);
@@ -312,19 +367,19 @@ function beginWorkout(activity) {
     if (allowed.length > 1 && resolved === undefined)
         return;
     const startTime = Date.now();
-    const phasePlan = capturePhasePlanSnapshot(day, new Date(startTime).toISOString());
+    const startContext = captureWorkoutStartContext(day, resolved, new Date(startTime).toISOString());
     let sessionId = null;
     if (typeof window.generateUUID === "function") {
         sessionId = window.generateUUID();
         void releaseReplacedSessionTelemetry(day, sessionId);
-        startSession(day, startTime, sessionId, resolved, undefined, phasePlan);
+        startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
         if (typeof window.initDB === "function") {
             window.initDB().catch((err) => console.error("Failed to init DB:", err));
         }
     }
     else {
         void releaseReplacedSessionTelemetry(day, null);
-        startSession(day, startTime, null, resolved, undefined, phasePlan);
+        startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
     }
     resetMachineGuidanceRuntime(sessionId);
     if (typeof window.requestWakeLock === "function") {
@@ -615,4 +670,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, requestVo2LimitReached, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, releaseReplacedSessionTelemetry, capturePhasePlanSnapshot, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, markVo2ProtocolLimitReached, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, requestVo2LimitReached, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, releaseReplacedSessionTelemetry, capturePhasePlanSnapshot, captureWorkoutStartContext, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, markVo2ProtocolLimitReached, };

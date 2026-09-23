@@ -42,6 +42,12 @@ The corrected deterministic `fitness-refinement-v2` reducer assigns each qualify
 
 Formal assessment fields remain unchanged and authoritative. Ordinary evidence at or before the latest formal anchor is excluded, and the passive metric remains `source: workout_observation`, `interpretation: descriptive_observation_only`, `normalizedToReferenceHr: false`, and `eligibleForPrescription: false`; it never becomes or overwrites `formal_assessment`. The permanent schema-v2 reader remains pinned to the historical `fitness-refinement-v1` contract and rejects malformed or forged records, while the current schema-v3 reader is pinned to `fitness-refinement-v2`. Historical v1 passive trends remain readable for storage compatibility but are quarantined from the effective projection because their 10 BPM clustering cannot establish equal-HR comparability. Current profile demographics and legacy device-global learned resistance, HR dynamics, and shadow prediction never enter the reducer. Phase D does not infer VO₂, HRmax, recovery, drift, readiness, illness, sleep, HRV, temperature, or acute fatigue, and it does not change prescriptions or machine behavior.
 
+### Implementation status (Phase E1)
+
+The Phase E design gate is complete and E1 shadow infrastructure is implemented, but personalized control remains inactive. `personalized-prescription-resolver@1` is a pure, deterministic diagnostic resolver with a permanent strict schema-v1 reader. At workout start it freezes the current profile inputs, the full formal HR/workload calibration and points, quality, algorithm/protocol identities, workload provenance, evidence session IDs, timestamps, explicit characterization policy, per-phase legacy HR bounds, structured safety checks, outcome, and finite fallback reason. The record is stored additively as `PhasePlanSnapshot.shadowPrescriptionEvaluation` and copied unchanged into `WorkoutSummary.shadow_prescription_evaluation`; it is never recomputed on render, phase transition, resume, finalization, or passive rebuild. Historical snapshots and summaries do not require the field, and malformed or future shadow schemas are ignored without invalidating a valid legacy prescription.
+
+E1 can produce a descriptive candidate power band only for ordinary bike `work` phases with `aerobic_base` or `threshold` semantics, including the aerobic-volume workout's `aerobic_base` work phase. It inverts the supported formal calibration only when both legacy HR endpoints and both rounded power endpoints remain inside the actual observed assessment domains. No extrapolation or clamping is permitted. The production shadow policy intentionally has no activation-approved assessment lifetime; freshness is recorded as not evaluated and every evaluation has `activationEligible: false`. User-entered VO₂, passive observations, predicted max watts, demographic predicted HRmax, height, sex, and HRV do not drive candidate math. The active resolver remains `legacy-hr-target-resolver@1`; UI HR targets, controller inputs, resistance behavior, workout selection, and durations are unchanged. E2 characterization remains the next phase.
+
 Throughout this review:
 
 - **Current** means directly implemented in active `src/` code or `data.json`.
@@ -684,8 +690,8 @@ Adding multiple Profiles before namespacing history and learned state risks cros
 | localStorage `athlete_profile_v1` | versioned stable athlete ID, explicit demographics, unverified user-entered VO₂ | single local athlete |
 | localStorage `profile` | retained legacy compatibility mirror | migration source / compatibility only |
 | localStorage `fitness_state_v1` | strict schema-v1 formal metrics, historical schema-v2 passive trends, or schema-v3 formal metrics plus the corrected descriptive Phase D observation | owned by athlete ID |
-| localStorage session keys | timing, pause, activity, athlete/snapshot, frozen blocks/legacy inputs/resolved prescription, VO₂ runtime | per day/selector, max 24 h |
-| IndexedDB `workouts` | immutable `WorkoutSummary` wrapper, including athlete/snapshot and resolved prescription on new workouts | legacy rows may be unowned |
+| localStorage session keys | timing, pause, activity, athlete/snapshot, frozen blocks/legacy inputs/resolved prescription, optional E1 shadow evaluation, VO₂ runtime | per day/selector, max 24 h |
+| IndexedDB `workouts` | immutable `WorkoutSummary` wrapper, including athlete/snapshot, active resolved prescription, and optional copied E1 shadow evaluation on new workouts | legacy rows may be unowned |
 | IndexedDB `hr_samples` | one active HR sample/sec | by session |
 | IndexedDB `ordinary_bike_telemetry` | strict v1 ordinary-bike rows keyed by session/active second; fresh measured values plus separate controller audit fields | frozen athlete + session |
 | IndexedDB `sisu_settings` | sync endpoint | device-global |
@@ -788,12 +794,13 @@ Per-second HR is already retained indefinitely. Phase C adds at most one ordinar
 
 ### Phase E — Individualized numeric prescription and bounded live use
 
-- **Scope:** enable approved source hierarchy to resolve relative intensity to workload/HR; use structured targets in the existing controller; retain current bounded behavior and shadow any expanded rule first.
+- **Status:** design gate complete; E1 schema, pure resolver, start-time evidence freeze, persistence, compatibility reader, and zero-authority shadow path implemented. Personalized control is still inactive; E2 characterization is next.
+- **Scope:** characterize the E1 calibration-derived candidate, then enable an approved source hierarchy to resolve relative intensity to workload/HR; use structured targets in the existing controller only after explicit authorization; retain current bounded behavior and shadow every expanded rule first.
 - **Reuse:** machine adapter/runtime, decision audit, learned timing, shadow prediction/validation, Bike Bridge opt-in executor.
 - **New abstractions:** source-quality authorization policy, target explanation, progression budget.
-- **Next step:** consume the slow `FitnessState` projection while retaining safety envelopes and workload-first semantics for short VO₂ intervals. Define whether and how the narrow passive trend may influence a target before granting it controller authority.
-- **Persistence:** resolved targets and every adaptive decision already fit summary/audit; add weekly progression state if approved.
-- **Tests:** source downgrade, HR lag behavior, short-next-rep semantics, bounds, stale/missing inputs, opt-in actuation, explanation text, regression against current controller.
+- **Next step:** E2 derives characterization from immutable summary shadow records without granting candidate power controller authority. Assessment expiry, measured-versus-calibrated activation, and promotion criteria remain unresolved policy gates. The narrow passive trend remains explicitly ineligible.
+- **Persistence:** E1 adds one canonical shadow record to the session snapshot and one durable historical copy to the summary. No append-only diagnostics store exists. Active resolved targets and every controller decision remain separate.
+- **Tests:** E1 covers deterministic interpolation, strict permanent parsing, source/quality/ownership/profile/freshness gates, no extrapolation, phase semantics, persistence/resume, old/malformed/future compatibility, evidence noninterference, and identical active HR/controller output for materially different shadow candidates. E2 still needs population characterization and promotion criteria.
 - **Risks:** exercise safety, target-policy error, excessive progression, interaction between learned start and new target.
 - **Dependencies:** approved physiological policy and Phases A–D. A limited demographic-only HR personalization could ship earlier, but it should not bypass this validation work for automatic resistance.
 

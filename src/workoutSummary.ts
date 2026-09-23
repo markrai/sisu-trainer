@@ -191,6 +191,10 @@ async function generateWorkoutSummary(
       })
     : undefined;
   if (resolvedPrescription) summary.resolved_prescription = resolvedPrescription;
+  if (phasePlan?.shadowPrescriptionEvaluation) {
+    // Copy the workout-start record exactly; never re-read current athlete evidence here.
+    summary.shadow_prescription_evaluation = phasePlan.shadowPrescriptionEvaluation;
+  }
   const activeDurationSec = actualElapsedSeconds(
     session.startTime,
     session.paused,

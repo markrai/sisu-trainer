@@ -163,6 +163,10 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         : undefined;
     if (resolvedPrescription)
         summary.resolved_prescription = resolvedPrescription;
+    if (phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.shadowPrescriptionEvaluation) {
+        // Copy the workout-start record exactly; never re-read current athlete evidence here.
+        summary.shadow_prescription_evaluation = phasePlan.shadowPrescriptionEvaluation;
+    }
     const activeDurationSec = actualElapsedSeconds(session.startTime, session.paused, session.pausedElapsed, endedAt);
     attachVo2Evidence(summary, buildVo2Evidence({
         day,

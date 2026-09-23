@@ -2,6 +2,7 @@ import { HrSample, WorkoutSummary, SisuSettings, type OrdinaryBikeTelemetrySampl
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
+import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 
 const DB_NAME = "vo2_workout_db";
 const DB_VERSION = 3;
@@ -384,6 +385,21 @@ async function getAllWorkoutSummaries(): Promise<Array<{ summary: WorkoutSummary
               parsed.athleteId === row.summary.athlete_id
             ) row.summary.workout_response = parsed;
             else delete row.summary.workout_response;
+          }
+          if (row?.summary?.shadow_prescription_evaluation !== undefined) {
+            const parsedShadow = parsePersonalizedPrescriptionEvaluation(
+              row.summary.shadow_prescription_evaluation
+            );
+            row.summary = { ...row.summary };
+            if (
+              parsedShadow &&
+              parsedShadow.athleteId === row.summary.athlete_id &&
+              parsedShadow.workoutSelector === row.summary.day
+            ) {
+              row.summary.shadow_prescription_evaluation = parsedShadow;
+            } else {
+              delete row.summary.shadow_prescription_evaluation;
+            }
           }
           workouts.push(row);
           cursor.continue();
