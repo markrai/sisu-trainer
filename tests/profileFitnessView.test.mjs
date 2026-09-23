@@ -16,6 +16,7 @@ import {
   updateAthleteProfileFromLegacy,
 } from "../dist/profile.js";
 import { FITNESS_STATE_STORAGE_KEY, storeFitnessState } from "../dist/fitnessState.js";
+import { buildPersonalizationStatus } from "../dist/personalizationStatus.js";
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -68,7 +69,7 @@ function formalState(athleteId = "athlete-profile", options = {}) {
         protocol: { id: "bike-submax-70rpm", version: 1 },
         predictedHrMaxBpm: 179.3,
         predictedHrMaxSource: "demographic_estimate",
-        profileInputSnapshot: { ageYears: 41, bodyMassKg: 80.01 },
+        profileInputSnapshot: { ageYears: 41, bodyMassKg: 176.4 * 0.45359237 },
       },
       ...metric,
     },
@@ -142,8 +143,65 @@ test("blank profile and missing FitnessState produce safe empty presentation", (
   assert.deepEqual(presentation.profileFields, { age: "", weight: "", height: "", sex: "", enteredVo2: "" });
   assert.equal(presentation.assessment, null);
   assert.equal(presentation.observation, null);
+  assert.equal(presentation.personalization.kind, "assessment_missing");
+  assert.equal(presentation.personalization.activePersonalizationEnabled, false);
   assert.equal(JSON.stringify(presentation).includes("undefined"), false);
   assert.equal(JSON.stringify(presentation).includes("NaN"), false);
+});
+
+test("personalization status stays unavailable without a usable formal calibration", () => {
+  const profile = athlete();
+  for (const state of [null, formalState("athlete-profile", { withoutCalibration: true })]) {
+    const status = buildPersonalizationStatus(profile, state, formatOptions);
+    assert.equal(status.title, "Personalized bike targets are not available yet.");
+    assert.equal(status.body, "Complete a Fitbaus VO₂ assessment to establish the calibration used for personalization research.");
+    assert.equal(status.personalizationEvaluationAvailable, false);
+    assert.equal(status.activePersonalizationEnabled, false);
+    assert.equal(status.workoutPersonalization, "Inactive");
+  }
+});
+
+test("self-reported VO2 never becomes personalization evaluation evidence", () => {
+  const status = buildPersonalizationStatus(athlete(), null, formatOptions);
+  assert.equal(status.assessmentAvailable, false);
+  assert.equal(status.kind, "assessment_missing");
+});
+
+test("measured formal calibration is available for evaluation but never active control", () => {
+  const status = buildPersonalizationStatus(athlete(), formalState(), formatOptions);
+  assert.deepEqual(status, {
+    kind: "evaluation_available",
+    assessmentAvailable: true,
+    personalizationEvaluationAvailable: true,
+    activePersonalizationEnabled: false,
+    title: "Personalization data available",
+    body: "Fitbaus can evaluate personalized bike workload targets from your assessment. These targets are currently being validated and do not control your workouts yet.",
+    source: "Fitbaus VO₂ assessment",
+    assessedAt: "Sep 18, 2026",
+    workloadCalibration: "Measured power",
+    workoutPersonalization: "Validation in progress",
+  });
+});
+
+test("cadence-calibrated formal evidence is labeled accurately", () => {
+  const state = formalState();
+  state.hrWorkloadCalibration.value.points = state.hrWorkloadCalibration.value.points.map((point) => ({
+    ...point,
+    workloadSource: "calibrated_at_verified_cadence",
+  }));
+  const status = buildPersonalizationStatus(athlete(), state, formatOptions);
+  assert.equal(status.workloadCalibration, "Estimated from verified cadence");
+  assert.equal(status.activePersonalizationEnabled, false);
+});
+
+test("profile edits that no longer match the assessment snapshot fail closed", () => {
+  const status = buildPersonalizationStatus(
+    athlete("athlete-profile", { age: 42 }),
+    formalState(),
+    formatOptions
+  );
+  assert.equal(status.personalizationEvaluationAvailable, false);
+  assert.equal(status.activePersonalizationEnabled, false);
 });
 
 test("user-entered VO2 alone never appears as a formal assessment", () => {
@@ -207,6 +265,8 @@ test("renderer selects empty and populated states without placeholder measuremen
     "fitnessAssessmentEvidence", "predictedMaxPowerRow", "predictedMaxPower", "fitnessCalibrationRow",
     "fitnessCalibration", "trainingObservationEmpty", "trainingObservationContent", "trainingObservationContext",
     "trainingObservationWorkload", "trainingObservationTrend", "trainingObservationEvidence", "trainingObservationAt",
+    "personalizationStatusTitle", "personalizationStatusBody", "personalizationEvidence", "personalizationSource",
+    "personalizationAssessedAt", "personalizationCalibration", "personalizationActivation",
   ];
   const elements = new Map(ids.map((id) => [id, { id, hidden: false, textContent: "" }]));
   const documentRef = { getElementById: (id) => elements.get(id) ?? null };
@@ -220,6 +280,9 @@ test("renderer selects empty and populated states without placeholder measuremen
   assert.equal(elements.get("assessedVo2").textContent, "46.8 ml/kg/min");
   assert.equal(elements.get("trainingObservationEmpty").hidden, false);
   assert.equal(elements.get("trainingObservationContent").hidden, true);
+  assert.equal(elements.get("personalizationStatusTitle").textContent, "Personalization data available");
+  assert.equal(elements.get("personalizationCalibration").textContent, "Measured power");
+  assert.equal(elements.get("personalizationActivation").textContent, "Validation in progress");
 });
 
 test("ownership-safe reader never returns FitnessState for a different athlete", () => {
@@ -271,6 +334,8 @@ test("Profile markup labels provenance, empty states, and the non-prescription b
   assert.match(html, /Fitbaus assessments/);
   assert.match(html, /No Fitbaus VO₂ assessment yet/);
   assert.match(html, /Informational only\. Not currently used to change workout targets\./);
-  assert.match(html, /Individualized workout targets are not enabled yet\./);
+  assert.match(html, /Workout personalization/);
+  assert.match(html, /Personalized workout control is not active\./);
+  assert.doesNotMatch(html, /personalized targets enabled|adaptive workouts enabled|personalized resistance enabled|your workouts are personalized/i);
   assert.doesNotMatch(html, /sync workouts and HRV baseline/i);
 });

@@ -214,6 +214,179 @@ export interface PersonalizedPrescriptionEvaluationV1 {
   phases: PersonalizedPrescriptionPhaseEvaluationV1[];
 }
 
+/** Permanent Phase E2 diagnostic schema. This record has no control authority. */
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1 = 1 as const;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1 =
+  "personalized-prescription-characterization" as const;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1 = 1 as const;
+
+export type PersonalizedPrescriptionCharacterizationOutcomeV1 =
+  | "characterized"
+  | "insufficient_evidence"
+  | "not_candidate"
+  | "unsupported_observed_provenance"
+  | "telemetry_unavailable";
+
+export type PersonalizedPrescriptionCharacterizationExclusionReasonV1 =
+  | "phase_too_short"
+  | "missing_telemetry"
+  | "insufficient_hr_coverage"
+  | "insufficient_power_coverage"
+  | "insufficient_joint_coverage"
+  | "insufficient_settled_in_band_evidence"
+  | "unsupported_power_provenance"
+  | "phase_evidence_unavailable";
+
+export interface PersonalizedPrescriptionCharacterizationPolicyV1 {
+  id: "e2-characterization-policy";
+  version: 1;
+  minObservedPhaseDurationSec: number;
+  minHrCoverageRatio: number;
+  minPowerCoverageRatio: number;
+  minJointCoverageRatio: number;
+  settlingSeconds: number;
+  minSettledInBandSeconds: number;
+  heartRateChangeWindowSeconds: number;
+  minHeartRateChangeWindowSamples: number;
+  domainEdgeFraction: number;
+}
+
+export interface PersonalizedPrescriptionEvidenceCoverageV1 {
+  plannedDurationSec: number;
+  observedDurationSec: number;
+  hrCoveredSeconds: number;
+  powerCoveredSeconds: number;
+  jointCoveredSeconds: number;
+  hrCoverageRatio: number;
+  powerCoverageRatio: number;
+  jointCoverageRatio: number;
+}
+
+export interface PersonalizedPrescriptionObservedHeartRateV1 {
+  sampleCount: number;
+  meanBpm: number;
+  medianBpm: number;
+  minBpm: number;
+  maxBpm: number;
+  belowBandSeconds: number;
+  insideBandSeconds: number;
+  aboveBandSeconds: number;
+  insideBandRatio: number;
+  earlyWindowMedianBpm?: number;
+  lateWindowMedianBpm?: number;
+  heartRateChangeLateVsEarlyBpm?: number;
+}
+
+export interface PersonalizedPrescriptionObservedPowerV1 {
+  provenance: "measured_watts" | "calibrated_watts";
+  sampleCount: number;
+  medianWatts: number;
+  q1Watts: number;
+  q3Watts: number;
+  minWatts: number;
+  maxWatts: number;
+  belowCandidateSeconds: number;
+  insideCandidateSeconds: number;
+  aboveCandidateSeconds: number;
+  insideCandidateRatio: number;
+}
+
+export interface PersonalizedPrescriptionStableInBandWorkloadV1 {
+  sampleCount: number;
+  medianWatts: number;
+  q1Watts: number;
+  q3Watts: number;
+  minWatts: number;
+  maxWatts: number;
+}
+
+export interface PersonalizedPrescriptionResistanceCoverageV1 {
+  coveredSeconds: number;
+  lowerBoundSeconds: number;
+  upperBoundSeconds: number;
+}
+
+export interface PersonalizedPrescriptionControllerContextV1 {
+  available: boolean;
+  observed: PersonalizedPrescriptionResistanceCoverageV1;
+  desired: PersonalizedPrescriptionResistanceCoverageV1;
+  commanded: PersonalizedPrescriptionResistanceCoverageV1;
+  anyBoundarySaturationSeconds: number;
+  saturationRatio: number;
+  lowerBoundaryDecisionCount: number;
+  upperBoundaryDecisionCount: number;
+}
+
+export interface PersonalizedPrescriptionCandidateDomainMarginsV1 {
+  heartRateToLowerBoundaryBpm: number;
+  heartRateToUpperBoundaryBpm: number;
+  wattsToLowerBoundary: number;
+  wattsToUpperBoundary: number;
+  bucket: "edge" | "interior";
+}
+
+export interface PersonalizedPrescriptionCandidateComparisonV1 {
+  candidateMidpointWatts: number;
+  observedInBandMedianWatts: number;
+  signedDifferenceWatts: number;
+  absoluteDifferenceWatts: number;
+  signedDifferencePercent: number;
+  candidateContainsObservedMedian: boolean;
+  candidateObservedOverlapWatts: number;
+  candidateObservedOverlapRatio: number;
+  agreement: "inside_candidate" | "below_candidate" | "above_candidate";
+}
+
+export interface PersonalizedPrescriptionPhaseCharacterizationV1 {
+  phaseId: string;
+  kind: WorkoutPhaseKind;
+  intensityId?: PhaseIntensityId;
+  detailName?: string;
+  intervalIndex?: number;
+  activeStartSec?: number;
+  activeEndSec?: number;
+  shadowOutcome: "candidate" | "fallback";
+  fallbackReason?: PersonalizedPrescriptionFallbackReasonV1;
+  legacyHeartRate?: ResolvedHeartRateTarget;
+  candidatePower?: { minWatts: number; maxWatts: number };
+  evidenceCoverage: PersonalizedPrescriptionEvidenceCoverageV1;
+  observedHeartRate?: PersonalizedPrescriptionObservedHeartRateV1;
+  observedPowerProvenance: "measured_watts" | "calibrated_watts" | "mixed" | "unavailable";
+  observedPower?: PersonalizedPrescriptionObservedPowerV1;
+  stableInBandWorkload?: PersonalizedPrescriptionStableInBandWorkloadV1;
+  controllerContext: PersonalizedPrescriptionControllerContextV1;
+  candidateDomainMargins?: PersonalizedPrescriptionCandidateDomainMarginsV1;
+  comparison?: PersonalizedPrescriptionCandidateComparisonV1;
+  characterizationOutcome: PersonalizedPrescriptionCharacterizationOutcomeV1;
+  exclusionReason?: PersonalizedPrescriptionCharacterizationExclusionReasonV1;
+}
+
+export interface PersonalizedPrescriptionCharacterizationV1 {
+  schemaVersion: typeof PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1;
+  characterizer: {
+    id: typeof PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1;
+    version: typeof PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1;
+  };
+  mode: "diagnostic";
+  activationEligible: false;
+  sourceShadow: {
+    resolverId: typeof PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1;
+    resolverVersion: typeof PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1;
+    shadowSchemaVersion: typeof PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1;
+    resolvedAt: string;
+  };
+  athleteId: string;
+  workoutSessionId: string;
+  workoutSelector: string;
+  workoutIntent: string;
+  activity: Activity;
+  formalAssessmentQuality?: "low" | "moderate" | "high" | "unverified";
+  calibrationWorkloadProvenance?: PersonalizedPrescriptionWorkloadProvenanceV1;
+  policy: PersonalizedPrescriptionCharacterizationPolicyV1;
+  phases: PersonalizedPrescriptionPhaseCharacterizationV1[];
+  createdAt: string;
+}
+
 export interface WorkoutPhaseState {
   phase: "Warm-Up" | "Sustain" | "Cool-Down" | "Completed";
   kind: WorkoutPhaseKind | "completed";
@@ -860,6 +1033,8 @@ export interface WorkoutSummary {
   resolved_prescription?: ResolvedWorkoutPrescription;
   /** Frozen Phase E1 diagnostic only. It never represents the executed prescription. */
   shadow_prescription_evaluation?: PersonalizedPrescriptionEvaluationV1;
+  /** Frozen Phase E2 diagnostic only. It is never read by prescription or control code. */
+  shadow_prescription_characterization?: PersonalizedPrescriptionCharacterizationV1;
   /**
    * Pause-safe stage-aware physiological evidence for the VO2 estimator.
    * Absent on historical workouts that predate this format.

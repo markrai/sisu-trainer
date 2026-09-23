@@ -17,6 +17,8 @@ import { formatLearnedGuidanceLabel, listLearnedStarts, resetLearnedGuidanceForM
 import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/index.js";
 import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
 import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
+import { loadAthleteProfile } from "./profile.js";
+import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 import { findResolvedPhaseTarget, formatResolvedHeartRateTarget, machineHeartRateTargetFromResolved, resolveWorkoutPrescription, } from "./workoutPrescription.js";
 let selectedDay = null;
@@ -25,6 +27,9 @@ let lastBpmUpdateTime = null;
 const BPM_TIMEOUT_MS = 3000;
 let showElapsedInRing = false;
 let pendingVo2Cues = [];
+let personalizationDiagnosticsRecords = [];
+let personalizationAssessmentContexts = {};
+let personalizationDiagnosticsModel = null;
 let heartPulseTargetBpm = null;
 let heartPulseRafId = null;
 let currentExpectedHeartRate = null;
@@ -1016,6 +1021,79 @@ function loadEquipmentSettings() {
     renderLearnedGuidancePanel();
     renderHrDynamicsPanel();
     renderShadowPredictionPanel();
+    void loadPersonalizationDiagnostics();
+}
+function renderPersonalizationDiagnostics(model) {
+    personalizationDiagnosticsModel = model;
+    const content = document.getElementById("personalizationDiagnosticsContent");
+    if (content)
+        content.innerHTML = personalizationDiagnosticsHtml(model);
+    const exportButton = document.getElementById("exportPersonalizationDiagnosticsButton");
+    if (exportButton)
+        exportButton.disabled = model.sourceRecordCount === 0;
+}
+async function loadPersonalizationDiagnostics() {
+    const content = document.getElementById("personalizationDiagnosticsContent");
+    if (!content)
+        return;
+    content.innerHTML = '<div class="personalization-diagnostics-empty"><span>Loading trusted workout history…</span></div>';
+    try {
+        const history = await getAllWorkoutSummaries();
+        const athleteId = loadAthleteProfile(localStorage).athleteId;
+        personalizationDiagnosticsRecords = extractTrustedPersonalizationCharacterizations(history, athleteId);
+        personalizationAssessmentContexts = extractTrustedPersonalizationAssessmentContexts(history, athleteId);
+        renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts));
+    }
+    catch (error) {
+        console.error("Error loading personalization diagnostics:", error);
+        content.innerHTML = '<div class="personalization-diagnostics-empty personalization-diagnostics-error"><strong>Personalization diagnostics could not be loaded.</strong><span>Workout data was not changed.</span></div>';
+    }
+}
+function currentPersonalizationDiagnosticsFilters() {
+    const value = (id) => { var _a, _b; return (_b = (_a = document.getElementById(id)) === null || _a === void 0 ? void 0 : _a.value) !== null && _b !== void 0 ? _b : "all"; };
+    return {
+        workoutIntent: value("personalizationIntentFilter"),
+        intensity: value("personalizationIntensityFilter"),
+        calibrationProvenance: value("personalizationCalibrationFilter"),
+        observedPowerProvenance: value("personalizationObservedPowerFilter"),
+        assessmentQuality: value("personalizationQualityFilter"),
+        domainBucket: value("personalizationDomainFilter"),
+    };
+}
+function applyPersonalizationDiagnosticsFilters() {
+    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, currentPersonalizationDiagnosticsFilters(), personalizationAssessmentContexts));
+}
+function resetPersonalizationDiagnosticsFilters() {
+    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts));
+}
+function openPersonalizationDiagnostic(index) {
+    const row = personalizationDiagnosticsModel === null || personalizationDiagnosticsModel === void 0 ? void 0 : personalizationDiagnosticsModel.rows[index];
+    const detail = document.getElementById("personalizationDiagnosticDetail");
+    if (!row || !detail)
+        return;
+    detail.innerHTML = personalizationDiagnosticDetailHtml(row);
+    detail.hidden = false;
+    detail.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+function closePersonalizationDiagnostic() {
+    const detail = document.getElementById("personalizationDiagnosticDetail");
+    if (!detail)
+        return;
+    detail.hidden = true;
+    detail.innerHTML = "";
+}
+function exportPersonalizationDiagnostics() {
+    if (!personalizationDiagnosticsModel || personalizationDiagnosticsModel.sourceRecordCount === 0)
+        return;
+    const blob = new Blob([personalizationDiagnosticsExportJson(personalizationDiagnosticsModel)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "fitbaus-personalization-diagnostics.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
 function renderLearnedGuidancePanel() {
     const section = document.getElementById("learnedGuidanceSection");
@@ -1657,6 +1735,9 @@ function displayWorkoutSummaries(workouts) {
         const vo2Detail = vo2Outcome
             ? `<div class="workout-item-detail workout-item-vo2">${vo2Outcome}</div>`
             : "";
+        const personalizationDetail = summary.shadow_prescription_characterization
+            ? '<div class="workout-item-detail workout-item-personalization"><strong>Personalization evaluation recorded</strong><span>This workout contributed data toward validating individualized bike targets.</span></div>'
+            : "";
         workoutItem.innerHTML = `
       <div class="swipe-left-indicator"></div>
       <div class="swipe-right-indicator"></div>
@@ -1672,6 +1753,7 @@ function displayWorkoutSummaries(workouts) {
         <div class="workout-item-detail">Primary Zone: ${summary.primary_zone}</div>
         <div class="workout-item-detail">Stress: ${summary.stress_profile}</div>
         ${vo2Detail}
+        ${personalizationDetail}
       </div>
       <div class="workout-item-actions">
         <button class="button" onclick="viewWorkoutSummary('${summary.external_session_id}')">View</button>
@@ -1849,6 +1931,12 @@ function registerUiGlobals(phaseBoxEl) {
     window.closeResetShadowPredictionsModal = closeResetShadowPredictionsModal;
     window.confirmResetShadowPredictions = confirmResetShadowPredictions;
     window.exportMachineDiagnostics = exportMachineDiagnostics;
+    window.loadPersonalizationDiagnostics = loadPersonalizationDiagnostics;
+    window.applyPersonalizationDiagnosticsFilters = applyPersonalizationDiagnosticsFilters;
+    window.resetPersonalizationDiagnosticsFilters = resetPersonalizationDiagnosticsFilters;
+    window.openPersonalizationDiagnostic = openPersonalizationDiagnostic;
+    window.closePersonalizationDiagnostic = closePersonalizationDiagnostic;
+    window.exportPersonalizationDiagnostics = exportPersonalizationDiagnostics;
     window.loadWorkoutSummaries = loadWorkoutSummaries;
     window.viewWorkoutSummary = viewWorkoutSummary;
     window.showWorkoutSummaryModal = showWorkoutSummaryModal;

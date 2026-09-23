@@ -258,6 +258,7 @@ function buildSisuWorkoutPayload(summary) {
     delete payload.vo2_assessment;
     delete payload.resolved_prescription;
     delete payload.shadow_prescription_evaluation;
+    delete payload.shadow_prescription_characterization;
     delete payload.athlete_id;
     delete payload.athlete_fitness_snapshot;
     delete payload.workout_response;

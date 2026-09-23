@@ -1,6 +1,7 @@
 import { readFitnessState } from "./fitnessState.js";
 import { loadAthleteProfile } from "./profile.js";
 import { formatVo2EstimateMlKgMin, vo2FitQualityText } from "./vo2AssessmentView.js";
+import { buildPersonalizationStatus } from "./personalizationStatus.js";
 function finiteText(value) {
     return typeof value === "number" && Number.isFinite(value) ? String(value) : "";
 }
@@ -90,6 +91,7 @@ export function buildProfileFitnessPresentation(athleteProfile, fitnessState, op
                 observedAt: formatDateTime(observationMetric.observedAt, options),
             }
             : null,
+        personalization: buildPersonalizationStatus(athleteProfile, fitnessState, options),
     };
 }
 function setText(documentRef, id, value) {
@@ -103,6 +105,7 @@ function setHidden(documentRef, id, hidden) {
         element.hidden = hidden;
 }
 export function renderProfileFitness(data, documentRef = document, options = {}) {
+    var _a, _b, _c;
     const presentation = buildProfileFitnessPresentation(data.athleteProfile, data.fitnessState, options);
     const assessment = presentation.assessment;
     setHidden(documentRef, "fitnessAssessmentEmpty", assessment !== null);
@@ -128,6 +131,16 @@ export function renderProfileFitness(data, documentRef = document, options = {})
         setText(documentRef, "trainingObservationEvidence", observation.evidence);
         setText(documentRef, "trainingObservationAt", observation.observedAt);
     }
+    const personalization = presentation.personalization;
+    setText(documentRef, "personalizationStatusTitle", personalization.title);
+    setText(documentRef, "personalizationStatusBody", personalization.body);
+    setHidden(documentRef, "personalizationEvidence", !personalization.personalizationEvaluationAvailable);
+    if (personalization.personalizationEvaluationAvailable) {
+        setText(documentRef, "personalizationSource", (_a = personalization.source) !== null && _a !== void 0 ? _a : "");
+        setText(documentRef, "personalizationAssessedAt", (_b = personalization.assessedAt) !== null && _b !== void 0 ? _b : "");
+        setText(documentRef, "personalizationCalibration", (_c = personalization.workloadCalibration) !== null && _c !== void 0 ? _c : "");
+    }
+    setText(documentRef, "personalizationActivation", personalization.workoutPersonalization);
     return presentation;
 }
 export function loadProfileFitness() {

@@ -1,6 +1,7 @@
 import { HrSample, WorkoutSummary, SisuSettings, type OrdinaryBikeTelemetrySample } from "./types.js";
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
+import { parsePersonalizedPrescriptionCharacterization } from "./personalizedPrescriptionCharacterization.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 
@@ -399,6 +400,27 @@ async function getAllWorkoutSummaries(): Promise<Array<{ summary: WorkoutSummary
               row.summary.shadow_prescription_evaluation = parsedShadow;
             } else {
               delete row.summary.shadow_prescription_evaluation;
+            }
+          }
+          if (row?.summary?.shadow_prescription_characterization !== undefined) {
+            const parsedCharacterization = row.summary.workout_response === undefined
+              ? null
+              : parsePersonalizedPrescriptionCharacterization(
+                  row.summary.shadow_prescription_characterization,
+                  row.summary.shadow_prescription_evaluation,
+                  {
+                    athleteId: row.summary.athlete_id,
+                    sessionId: row.summary.external_session_id,
+                    workoutSelector: row.summary.day,
+                    activity: row.summary.activity,
+                    workoutResponse: row.summary.workout_response,
+                  }
+                );
+            row.summary = { ...row.summary };
+            if (parsedCharacterization) {
+              row.summary.shadow_prescription_characterization = parsedCharacterization;
+            } else {
+              delete row.summary.shadow_prescription_characterization;
             }
           }
           workouts.push(row);

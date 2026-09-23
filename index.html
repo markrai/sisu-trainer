@@ -198,7 +198,33 @@
         <div class="profile-helper profile-informational">Informational only. Not currently used to change workout targets.</div>
       </div>
 
-      <div class="personalization-status">Your assessments are being recorded. Individualized workout targets are not enabled yet.</div>
+      <div class="modal-section profile-card profile-readonly-card personalization-card" aria-labelledby="workoutPersonalizationTitle">
+        <div class="profile-section-heading">
+          <div id="workoutPersonalizationTitle" class="modal-section-title">Workout personalization</div>
+          <span class="profile-origin">Research validation</span>
+        </div>
+        <div class="profile-empty personalization-status-copy">
+          <strong id="personalizationStatusTitle"></strong>
+          <span id="personalizationStatusBody"></span>
+        </div>
+        <dl id="personalizationEvidence" class="profile-metrics" hidden>
+          <div class="profile-metric-row profile-metric-row-stacked">
+            <dt>Source</dt>
+            <dd><span id="personalizationSource"></span><br><span id="personalizationAssessedAt" class="profile-metric-note"></span></dd>
+          </div>
+          <div class="profile-metric-row">
+            <dt>Workload calibration</dt>
+            <dd id="personalizationCalibration"></dd>
+          </div>
+        </dl>
+        <dl class="profile-metrics personalization-activation">
+          <div class="profile-metric-row">
+            <dt>Workout personalization</dt>
+            <dd id="personalizationActivation">Inactive</dd>
+          </div>
+        </dl>
+        <div class="profile-helper profile-informational">Personalized workout control is not active.</div>
+      </div>
     </div>
     
     <!-- Preferences Tab -->
@@ -266,6 +292,23 @@
         <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Export the local machine-learning state used for equipment guidance.</div>
         <button type="button" class="button secondary" onclick="exportMachineDiagnostics()">Export diagnostics</button>
       </div>
+      <details id="personalizationDiagnosticsSection" class="modal-section developer-diagnostics">
+        <summary>
+          <span>Personalization diagnostics</span>
+          <span class="developer-diagnostics-badge">Developer</span>
+        </summary>
+        <div class="developer-diagnostics-body">
+          <p class="developer-diagnostics-note"><strong>Candidate watts are experimental predictions calculated after your formal assessment. They did not control the workout.</strong></p>
+          <p class="developer-diagnostics-note">Observed in-band watts represent settled workload while heart rate was within the legacy target range.</p>
+          <div class="personalization-diagnostics-actions">
+            <button id="exportPersonalizationDiagnosticsButton" type="button" class="button secondary" onclick="exportPersonalizationDiagnostics()" disabled>Export personalization diagnostics</button>
+            <button type="button" class="button secondary" onclick="resetPersonalizationDiagnosticsFilters()">Clear filters</button>
+          </div>
+          <div id="personalizationDiagnosticsContent" aria-live="polite">
+            <div class="personalization-diagnostics-empty"><span>Open Equipment settings to load trusted workout history.</span></div>
+          </div>
+        </div>
+      </details>
     </div>
     
     <!-- Workouts Tab -->

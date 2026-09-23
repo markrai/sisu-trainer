@@ -7,6 +7,7 @@ import type {
   PassiveAerobicObservationMetric,
 } from "./types.js";
 import { formatVo2EstimateMlKgMin, vo2FitQualityText } from "./vo2AssessmentView.js";
+import { buildPersonalizationStatus, type PersonalizationStatus } from "./personalizationStatus.js";
 
 export interface ProfileFitnessData {
   athleteProfile: AthleteProfile;
@@ -35,6 +36,7 @@ export interface ProfileFitnessPresentation {
     evidence: string;
     observedAt: string;
   };
+  personalization: PersonalizationStatus;
 }
 
 export interface PresentationFormatOptions {
@@ -138,6 +140,7 @@ export function buildProfileFitnessPresentation(
           observedAt: formatDateTime(observationMetric.observedAt, options),
         }
       : null,
+    personalization: buildPersonalizationStatus(athleteProfile, fitnessState, options),
   };
 }
 
@@ -180,6 +183,16 @@ export function renderProfileFitness(
     setText(documentRef, "trainingObservationEvidence", observation.evidence);
     setText(documentRef, "trainingObservationAt", observation.observedAt);
   }
+  const personalization = presentation.personalization;
+  setText(documentRef, "personalizationStatusTitle", personalization.title);
+  setText(documentRef, "personalizationStatusBody", personalization.body);
+  setHidden(documentRef, "personalizationEvidence", !personalization.personalizationEvaluationAvailable);
+  if (personalization.personalizationEvaluationAvailable) {
+    setText(documentRef, "personalizationSource", personalization.source ?? "");
+    setText(documentRef, "personalizationAssessedAt", personalization.assessedAt ?? "");
+    setText(documentRef, "personalizationCalibration", personalization.workloadCalibration ?? "");
+  }
+  setText(documentRef, "personalizationActivation", personalization.workoutPersonalization);
   return presentation;
 }
 

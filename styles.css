@@ -100,7 +100,63 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .profile-metric-row-stacked dd { margin-top: 5px; text-align: left; font-weight: 450; line-height: 1.4; }
 .profile-readonly-card > .profile-helper { margin: 12px 0 0; }
 .profile-informational { color: #9dbbff; }
-.personalization-status { margin: 16px 2px 0; padding: 11px 12px; border-left: 3px solid #3d7cff; border-radius: 0 9px 9px 0; background: rgba(61,124,255,0.09); color: rgba(255,255,255,0.76); font-size: 0.8rem; line-height: 1.45; }
+.personalization-card { border-left: 3px solid #3d7cff; background: linear-gradient(90deg, rgba(61,124,255,0.09), #202020 42%); }
+.personalization-status-copy { margin-bottom: 12px; }
+.personalization-activation { margin-top: 12px; }
+.profile-metric-note { color: rgba(255,255,255,0.58); font-size: 0.76rem; font-weight: 450; }
+
+/* Settings -> Equipment -> developer-only personalization diagnostics */
+.developer-diagnostics { border: 1px solid #333; border-radius: 12px; background: #1d1d1d; overflow: hidden; }
+.developer-diagnostics > summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 48px; padding: 4px 14px; cursor: pointer; font-size: 0.88rem; font-weight: 650; list-style-position: inside; }
+.developer-diagnostics-badge { padding: 3px 7px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; color: rgba(255,255,255,0.62); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; }
+.developer-diagnostics-body { padding: 4px 14px 16px; min-width: 0; }
+.developer-diagnostics-note { margin: 8px 0; color: rgba(255,255,255,0.72); font-size: 0.78rem; line-height: 1.45; }
+.personalization-diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+.personalization-diagnostics-actions .button { min-height: 44px; width: auto; flex: 1 1 180px; }
+.personalization-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.personalization-filter-grid label { display: grid; gap: 5px; min-width: 0; color: rgba(255,255,255,0.68); font-size: 0.72rem; }
+.personalization-filter { min-width: 0; width: 100%; min-height: 44px; font-size: 0.82rem; }
+.personalization-count-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.personalization-count-grid > div { display: grid; gap: 3px; padding: 10px; border: 1px solid #333; border-radius: 9px; background: #242424; }
+.personalization-count-grid strong { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.personalization-count-grid span { color: rgba(255,255,255,0.62); font-size: 0.69rem; line-height: 1.3; }
+.personalization-cohorts { display: grid; gap: 10px; margin: 14px 0; }
+.personalization-cohort { padding: 11px; border: 1px solid #333; border-radius: 9px; background: #202020; }
+.personalization-cohort h4, .personalization-exclusions h4, .personalization-detail-heading h4 { margin: 0 0 8px; font-size: 0.88rem; }
+.personalization-cohort-tags { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 10px; }
+.personalization-cohort-tags span { padding: 3px 6px; border-radius: 999px; background: rgba(61,124,255,0.12); color: #a9c2ff; font-size: 0.63rem; }
+.personalization-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
+.personalization-metric-grid > div { display: grid; gap: 2px; padding: 8px; border-radius: 7px; background: rgba(255,255,255,0.035); min-width: 0; }
+.personalization-metric-grid label, .personalization-metric-grid span { color: rgba(255,255,255,0.58); font-size: 0.64rem; line-height: 1.3; }
+.personalization-metric-grid strong { font-size: 0.82rem; font-variant-numeric: tabular-nums; }
+.personalization-exclusions { margin: 14px 0; }
+.personalization-exclusions > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 2px; border-bottom: 1px solid #303030; font-size: 0.73rem; }
+.personalization-exclusions strong { font-variant-numeric: tabular-nums; }
+.personalization-table-scroll { max-width: 100%; overflow-x: auto; border: 1px solid #333; border-radius: 9px; overscroll-behavior-x: contain; }
+.personalization-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 0.69rem; }
+.personalization-table th, .personalization-table td { padding: 8px; border-bottom: 1px solid #303030; text-align: left; white-space: nowrap; }
+.personalization-table th { position: sticky; top: 0; background: #292929; color: rgba(255,255,255,0.72); }
+.personalization-detail-button { min-height: 40px; padding: 7px 10px; width: auto; font-size: 0.72rem; }
+.personalization-diagnostic-detail { margin-top: 12px; padding: 12px; border: 1px solid #3d7cff; border-radius: 9px; background: #20242d; }
+.personalization-detail-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.personalization-detail-heading span { color: rgba(255,255,255,0.58); font-size: 0.7rem; }
+.personalization-detail-heading .button { width: auto; min-height: 40px; padding: 7px 10px; }
+.personalization-diagnostic-detail section { margin-top: 14px; }
+.personalization-diagnostic-detail h5 { margin: 0 0 6px; color: #9dbbff; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.personalization-diagnostic-detail dl { margin: 0; }
+.personalization-diagnostic-detail dl > div { display: grid; grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr); gap: 10px; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.07); font-size: 0.7rem; }
+.personalization-diagnostic-detail dt { color: rgba(255,255,255,0.58); }
+.personalization-diagnostic-detail dd { margin: 0; overflow-wrap: anywhere; }
+.personalization-diagnostics-empty { display: grid; gap: 6px; padding: 18px 8px; color: rgba(255,255,255,0.68); font-size: 0.8rem; line-height: 1.45; text-align: center; }
+.personalization-diagnostics-error { color: #ff8b8b; }
+.workout-item-personalization { display: grid; gap: 2px; flex-basis: 100%; padding-top: 5px; color: #9dbbff; }
+.workout-item-personalization span { color: rgba(255,255,255,0.62); font-size: 0.72rem; }
+
+@media (max-width: 520px) {
+  .personalization-filter-grid, .personalization-metric-grid { grid-template-columns: 1fr; }
+  .developer-diagnostics-body { padding-inline: 10px; }
+  .personalization-diagnostic-detail dl > div { grid-template-columns: 1fr; gap: 2px; }
+}
 
 /* Tab styles */
 .tab-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #333; }

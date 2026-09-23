@@ -18,6 +18,7 @@ import { resolveWorkoutPrescription } from "./workoutPrescription.js";
 import { promoteVo2SummaryToStoredFitnessState } from "./fitnessState.js";
 import { generateUUID } from "./utils/uuid.js";
 import { deriveWorkoutResponse } from "./workoutResponse.js";
+import { characterizePersonalizedPrescription, PHASE_E2_CHARACTERIZATION_POLICY_V1, } from "./personalizedPrescriptionCharacterization.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 export function buildHrTrace(hrSamples) {
     if (!hrSamples || hrSamples.length === 0) {
@@ -209,8 +210,24 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
                 hrSamples,
                 bikeSamples,
             });
-            if (response)
+            if (response) {
                 summary.workout_response = response;
+                if (summary.shadow_prescription_evaluation) {
+                    const characterization = characterizePersonalizedPrescription({
+                        summary,
+                        shadowEvaluation: summary.shadow_prescription_evaluation,
+                        workoutResponse: response,
+                        hrSamples,
+                        bikeSamples,
+                        machineDecisionAudit: summary.machine_decision_audit,
+                        policy: PHASE_E2_CHARACTERIZATION_POLICY_V1,
+                        createdAt: summary.endedAt,
+                    });
+                    if (characterization) {
+                        summary.shadow_prescription_characterization = characterization;
+                    }
+                }
+            }
         }
         catch (error) {
             console.error("Error deriving ordinary workout response:", error);
