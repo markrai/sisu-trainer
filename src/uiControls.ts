@@ -308,6 +308,8 @@ function applyPhaseStyle(key: string) {
 }
 
 function openModal() {
+  if (typeof (window as any).loadProfile === "function") (window as any).loadProfile();
+  if (typeof (window as any).loadProfileFitness === "function") (window as any).loadProfileFitness();
   const bg = document.getElementById("modalBg");
   if (bg) bg.style.display = "flex";
   settingsModalEscHandler = (e) => {
@@ -1054,6 +1056,8 @@ function switchTab(tabName: string) {
   if (tabName === "personal") {
     document.getElementById("personalTab")?.classList.add("active");
     (buttons[tabIndex.personal] as HTMLElement | undefined)?.classList.add("active");
+    if (typeof (window as any).loadProfile === "function") (window as any).loadProfile();
+    if (typeof (window as any).loadProfileFitness === "function") (window as any).loadProfileFitness();
   } else if (tabName === "preferences") {
     document.getElementById("preferencesTab")?.classList.add("active");
     (buttons[tabIndex.preferences] as HTMLElement | undefined)?.classList.add("active");

@@ -224,6 +224,10 @@ function applyPhaseStyle(key) {
     }
 }
 function openModal() {
+    if (typeof window.loadProfile === "function")
+        window.loadProfile();
+    if (typeof window.loadProfileFitness === "function")
+        window.loadProfileFitness();
     const bg = document.getElementById("modalBg");
     if (bg)
         bg.style.display = "flex";
@@ -937,6 +941,10 @@ function switchTab(tabName) {
     if (tabName === "personal") {
         (_a = document.getElementById("personalTab")) === null || _a === void 0 ? void 0 : _a.classList.add("active");
         (_b = buttons[tabIndex.personal]) === null || _b === void 0 ? void 0 : _b.classList.add("active");
+        if (typeof window.loadProfile === "function")
+            window.loadProfile();
+        if (typeof window.loadProfileFitness === "function")
+            window.loadProfileFitness();
     }
     else if (tabName === "preferences") {
         (_c = document.getElementById("preferencesTab")) === null || _c === void 0 ? void 0 : _c.classList.add("active");

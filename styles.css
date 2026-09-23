@@ -49,6 +49,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .hamburger { position: fixed; top: 10px; right: 12px; font-size: 28px; cursor: pointer; padding: 6px 10px; z-index: 20; }
 .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: none; align-items: center; justify-content: center; z-index: 30; }
 .modal { background: #1a1a1a; padding: 24px; border-radius: 14px; width: 90%; max-width: 400px; position: relative; }
+#modalBg .modal { box-sizing: border-box; max-height: calc(100vh - 32px); overflow-y: auto; }
 .modal-title { font-size: 1.4rem; margin-bottom: 20px; text-align: center; font-weight: 600; }
 .close-btn { float: right; cursor: pointer; font-size: 22px; margin-top: -6px; opacity: 0.7; }
 .close-btn:hover { opacity: 1; }
@@ -74,6 +75,32 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .modal-input::placeholder { opacity: 0.5; }
 .modal-section { margin-bottom: 16px; }
 .modal-section-title { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.6; margin-bottom: 10px; font-weight: 600; }
+
+/* Settings -> Profile */
+#personalTab { padding-bottom: 18px; }
+.profile-card { margin-top: 16px; padding: 14px; border: 1px solid #333; border-radius: 12px; background: #202020; }
+.profile-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.profile-section-heading .modal-section-title { margin-bottom: 0; }
+.profile-origin { flex-shrink: 0; padding: 3px 7px; border-radius: 999px; background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.72); font-size: 0.68rem; line-height: 1.2; }
+.profile-origin-assessed { background: rgba(61,124,255,0.16); color: #9dbbff; }
+.profile-origin-observed { background: rgba(16,185,129,0.14); color: #77deb7; }
+.profile-helper { margin: -2px 0 14px; color: rgba(255,255,255,0.62); font-size: 0.78rem; line-height: 1.4; }
+.profile-card .modal-field:last-of-type { margin-bottom: 0; }
+.profile-card .modal-label { min-width: 118px; }
+.profile-card .modal-input { min-width: 0; }
+.profile-readonly-card { background: #1d1d1d; }
+.profile-empty { display: flex; flex-direction: column; gap: 5px; padding: 11px 12px; border-radius: 9px; background: rgba(255,255,255,0.035); color: rgba(255,255,255,0.65); font-size: 0.82rem; line-height: 1.4; }
+.profile-empty strong { color: rgba(255,255,255,0.9); font-size: 0.88rem; }
+.profile-metrics { margin: 0; }
+.profile-metric-row { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; padding: 9px 0; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.profile-metric-row:last-child { border-bottom: 0; }
+.profile-metric-row dt { flex: 0 0 42%; color: rgba(255,255,255,0.62); font-size: 0.78rem; }
+.profile-metric-row dd { margin: 0; color: rgba(255,255,255,0.94); font-size: 0.86rem; font-weight: 550; text-align: right; font-variant-numeric: tabular-nums; }
+.profile-metric-row-stacked { display: block; }
+.profile-metric-row-stacked dd { margin-top: 5px; text-align: left; font-weight: 450; line-height: 1.4; }
+.profile-readonly-card > .profile-helper { margin: 12px 0 0; }
+.profile-informational { color: #9dbbff; }
+.personalization-status { margin: 16px 2px 0; padding: 11px 12px; border-left: 3px solid #3d7cff; border-radius: 0 9px 9px 0; background: rgba(61,124,255,0.09); color: rgba(255,255,255,0.76); font-size: 0.8rem; line-height: 1.45; }
 
 /* Tab styles */
 .tab-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #333; }

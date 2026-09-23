@@ -32,6 +32,16 @@ function primaryReason(codes) {
 export function formatVo2EstimateMlKgMin(value) {
     return value.toFixed(1);
 }
+/** Shared user-facing language for formal VO2 fit/evidence quality. */
+export function vo2FitQualityText(quality) {
+    if (quality === "high")
+        return "Strong heart-rate/workload fit";
+    if (quality === "moderate")
+        return "Adequate heart-rate/workload fit";
+    if (quality === "low")
+        return "Limited heart-rate/workload fit";
+    return "Fit quality unavailable";
+}
 export function vo2SelectorOptionText() {
     return VO2_WORKOUT_LABEL + " (up to 30 min)";
 }
@@ -126,13 +136,7 @@ export function vo2InsufficientDetail(result) {
     }
 }
 function fitQualityLine(result) {
-    if (result.fit_quality === "high")
-        return "Strong heart-rate/workload fit.";
-    if (result.fit_quality === "moderate")
-        return "Adequate heart-rate/workload fit.";
-    if (result.fit_quality === "low")
-        return "Limited heart-rate/workload fit.";
-    return "";
+    return result.fit_quality ? vo2FitQualityText(result.fit_quality) + "." : "";
 }
 function workloadSourceLine(result) {
     var _a;

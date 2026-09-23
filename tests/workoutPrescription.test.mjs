@@ -320,6 +320,44 @@ test("Phase B athlete capture leaves the Phase A legacy prescription byte-for-by
   assert.equal(restored.phasePlan.resolvedPrescription.resolver.version, 1);
 });
 
+test("profile and FitnessState changes leave ordinary resolved prescription byte-for-byte unchanged", () => {
+  const document = parseWorkoutTemplateDocument(rawData);
+  transformWorkoutData(document, new Date("2024-01-01T12:00:00Z").getTime());
+  const before = capturePhasePlanSnapshot("Monday", "2026-09-22T12:00:00.000Z").resolvedPrescription;
+  const previousStorage = globalThis.localStorage;
+  const storage = memoryStorage({
+    athlete_profile_v1: JSON.stringify({
+      schemaVersion: 1,
+      athleteId: "prescription-boundary",
+      demographics: { ageYears: 70, bodyMassLbs: 220 },
+      userEnteredVo2: {
+        value: 62,
+        source: "user_entered",
+        quality: "unverified",
+        observedAt: "2026-09-22T11:00:00.000Z",
+        updatedAt: "2026-09-22T11:00:00.000Z",
+      },
+      createdAt: "2026-09-22T11:00:00.000Z",
+      updatedAt: "2026-09-22T11:00:00.000Z",
+    }),
+    fitness_state_v1: JSON.stringify({
+      schemaVersion: 3,
+      athleteId: "prescription-boundary",
+      vo2Max: { value: 64 },
+      passiveAerobicObservation: { value: { guardedTrendWorkloadWatts: 300, eligibleForPrescription: false } },
+      updatedAt: "2026-09-22T11:30:00.000Z",
+    }),
+  });
+  globalThis.localStorage = storage;
+  try {
+    const after = capturePhasePlanSnapshot("Monday", "2026-09-22T12:00:00.000Z").resolvedPrescription;
+    assert.deepEqual(after, before);
+    assert.equal(after.resolver.id, "legacy-hr-target-resolver");
+  } finally {
+    globalThis.localStorage = previousStorage;
+  }
+});
+
 test("resolved prescription survives session serialization and old snapshots remain readable", () => {
   const document = parseWorkoutTemplateDocument(rawData);
   transformWorkoutData(document, new Date("2024-01-01T12:00:00Z").getTime());

@@ -1,4 +1,4 @@
-import type { PlanBlock, Vo2AssessmentReasonCode, Vo2AssessmentResult } from "./types.js";
+import type { FitnessMetricQuality, PlanBlock, Vo2AssessmentReasonCode, Vo2AssessmentResult } from "./types.js";
 import { VO2_MIN_ACCEPTED_STAGES, VO2_MIN_ELIGIBLE_STAGES } from "./vo2Estimator.js";
 import { VO2_WORKOUT_LABEL } from "./vo2Protocol.js";
 
@@ -42,6 +42,14 @@ function primaryReason(codes: readonly Vo2AssessmentReasonCode[]): Vo2Assessment
 
 export function formatVo2EstimateMlKgMin(value: number): string {
   return value.toFixed(1);
+}
+
+/** Shared user-facing language for formal VO2 fit/evidence quality. */
+export function vo2FitQualityText(quality: FitnessMetricQuality | undefined): string {
+  if (quality === "high") return "Strong heart-rate/workload fit";
+  if (quality === "moderate") return "Adequate heart-rate/workload fit";
+  if (quality === "low") return "Limited heart-rate/workload fit";
+  return "Fit quality unavailable";
 }
 
 export function vo2SelectorOptionText(): string {
@@ -155,10 +163,7 @@ export function vo2InsufficientDetail(
 }
 
 function fitQualityLine(result: Vo2AssessmentResult): string {
-  if (result.fit_quality === "high") return "Strong heart-rate/workload fit.";
-  if (result.fit_quality === "moderate") return "Adequate heart-rate/workload fit.";
-  if (result.fit_quality === "low") return "Limited heart-rate/workload fit.";
-  return "";
+  return result.fit_quality ? vo2FitQualityText(result.fit_quality) + "." : "";
 }
 
 function workloadSourceLine(result: Vo2AssessmentResult): string {

@@ -60,7 +60,17 @@
     
     <!-- Profile Tab -->
     <div id="personalTab" class="tab-content active">
-      <div class="modal-section">
+      <div class="modal-section profile-card" aria-labelledby="athleteDetailsTitle">
+        <div class="profile-section-heading">
+          <div id="athleteDetailsTitle" class="modal-section-title">Athlete details</div>
+          <span class="profile-origin">You entered</span>
+        </div>
+        <div class="profile-helper">Age and weight are used for the VO₂ Max Estimation workout. Height and sex are stored but do not currently affect training.</div>
+        <div class="modal-field">
+          <label class="modal-label" for="age">Age</label>
+          <input id="age" class="modal-input" type="number" placeholder="years">
+        </div>
+
         <div class="modal-field">
           <label class="modal-label" for="weight">Weight</label>
           <input id="weight" class="modal-input" type="number" placeholder="lbs">
@@ -97,11 +107,6 @@
         </div>
 
         <div class="modal-field">
-          <label class="modal-label" for="age">Age</label>
-          <input id="age" class="modal-input" type="number" placeholder="years">
-        </div>
-
-        <div class="modal-field">
           <label class="modal-label" for="sex">Sex</label>
           <select id="sex" class="modal-input">
             <option value="">Select</option>
@@ -111,15 +116,89 @@
         </div>
       </div>
 
-      <div class="modal-section">
-        <div class="modal-field">
-          <label class="modal-label" for="vo2">VO₂ Max</label>
-          <input id="vo2" class="modal-input" type="number" placeholder="optional">
+      <div class="modal-section profile-card" aria-labelledby="selfReportedFitnessTitle">
+        <div class="profile-section-heading">
+          <div id="selfReportedFitnessTitle" class="modal-section-title">Self-reported fitness</div>
+          <span class="profile-origin">You entered</span>
         </div>
+        <div class="modal-field">
+          <label class="modal-label" for="vo2">Entered VO₂ max</label>
+          <input id="vo2" class="modal-input" type="number" placeholder="ml/kg/min (optional)">
+        </div>
+        <div class="profile-helper">Optional value supplied by you. It is separate from a Fitbaus assessment.</div>
       </div>
 
       <button class="button" onclick="saveProfile()">Save Profile</button>
-      <div class="label" style="margin-top: 12px; text-align: left;">Age and weight are required for the VO₂ Max Estimation workout.</div>
+
+      <div class="modal-section profile-card profile-readonly-card" aria-labelledby="fitbausAssessmentsTitle">
+        <div class="profile-section-heading">
+          <div id="fitbausAssessmentsTitle" class="modal-section-title">Fitbaus assessments</div>
+          <span class="profile-origin profile-origin-assessed">Fitbaus assessment</span>
+        </div>
+        <div id="fitnessAssessmentEmpty" class="profile-empty">
+          <strong>No Fitbaus VO₂ assessment yet.</strong>
+          <span>Complete the VO₂ Max Estimation workout to establish this measurement.</span>
+        </div>
+        <dl id="fitnessAssessmentContent" class="profile-metrics" hidden>
+          <div class="profile-metric-row">
+            <dt>Assessed VO₂ max</dt>
+            <dd id="assessedVo2"></dd>
+          </div>
+          <div class="profile-metric-row">
+            <dt>Assessed</dt>
+            <dd id="fitnessAssessedAt"></dd>
+          </div>
+          <div class="profile-metric-row">
+            <dt>Evidence</dt>
+            <dd id="fitnessAssessmentEvidence"></dd>
+          </div>
+          <div id="predictedMaxPowerRow" class="profile-metric-row" hidden>
+            <dt>Predicted max power</dt>
+            <dd id="predictedMaxPower"></dd>
+          </div>
+          <div id="fitnessCalibrationRow" class="profile-metric-row profile-metric-row-stacked" hidden>
+            <dt>HR-workload calibration</dt>
+            <dd id="fitnessCalibration"></dd>
+          </div>
+        </dl>
+        <div class="profile-helper">Assessment power is estimated from the protocol; it is not a directly measured maximum.</div>
+      </div>
+
+      <div class="modal-section profile-card profile-readonly-card" aria-labelledby="trainingObservationsTitle">
+        <div class="profile-section-heading">
+          <div id="trainingObservationsTitle" class="modal-section-title">Training observations</div>
+          <span class="profile-origin profile-origin-observed">Workout observation</span>
+        </div>
+        <div id="trainingObservationEmpty" class="profile-empty">
+          <strong>No stable aerobic trend yet.</strong>
+          <span>Fitbaus will summarize consistent heart-rate and cycling-power evidence from eligible workouts.</span>
+        </div>
+        <dl id="trainingObservationContent" class="profile-metrics" hidden>
+          <div class="profile-metric-row">
+            <dt>Workout context</dt>
+            <dd id="trainingObservationContext"></dd>
+          </div>
+          <div class="profile-metric-row">
+            <dt>Observed workload</dt>
+            <dd id="trainingObservationWorkload"></dd>
+          </div>
+          <div class="profile-metric-row">
+            <dt>Trend</dt>
+            <dd id="trainingObservationTrend"></dd>
+          </div>
+          <div class="profile-metric-row profile-metric-row-stacked">
+            <dt>Evidence</dt>
+            <dd id="trainingObservationEvidence"></dd>
+          </div>
+          <div class="profile-metric-row">
+            <dt>Last observed</dt>
+            <dd id="trainingObservationAt"></dd>
+          </div>
+        </dl>
+        <div class="profile-helper profile-informational">Informational only. Not currently used to change workout targets.</div>
+      </div>
+
+      <div class="personalization-status">Your assessments are being recorded. Individualized workout targets are not enabled yet.</div>
     </div>
     
     <!-- Preferences Tab -->
@@ -208,7 +287,7 @@
         </div>
         <div class="modal-section" style="margin-top: 24px;">
           <div class="label" style="text-align: center; opacity: 0.7; margin-bottom: 20px;">
-            Connect to SISU to sync workouts and HRV baseline.
+            Connect to SISU to sync workouts.
           </div>
           <div class="modal-field">
             <label class="modal-label" for="sisuProtocol">Protocol</label>
