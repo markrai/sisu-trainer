@@ -1005,6 +1005,8 @@ export interface Vo2AssessmentResult {
 
 export interface WorkoutSummary {
   external_session_id: string;
+  /** App build that finalized this local workout. Absent on historical summaries. */
+  app_version?: string;
   /** Stable owner for new local evidence. Absent on legacy summaries. */
   athlete_id?: string;
   /** Future prescription input pointer. Phase A resolution does not consume it. */

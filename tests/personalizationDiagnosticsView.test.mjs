@@ -8,9 +8,11 @@ import {
   createPersonalizationDiagnosticsExport,
   extractTrustedPersonalizationAssessmentContexts,
   extractTrustedPersonalizationCharacterizations,
+  extractTrustedPersonalizationWorkoutContexts,
   personalizationDiagnosticDetailHtml,
   personalizationDiagnosticsExportJson,
   personalizationDiagnosticsHtml,
+  summarizePersonalizationEvidenceCollection,
 } from "../dist/personalizationDiagnosticsView.js";
 
 function phase(overrides = {}) {
@@ -159,6 +161,113 @@ test("detail context comes from the frozen trusted E1 snapshot, never current Fi
   assert.match(personalizationDiagnosticDetailHtml(model.rows[0]), /100–150 W/);
 });
 
+test("diagnostics expose persisted machine, app, schema, and assessment identity without inventing missing values", () => {
+  const characterization = record();
+  const frozenEvaluation = evaluation({
+    schemaVersion: 1,
+    fitnessEvidenceSnapshot: {
+      fitnessStateSchemaVersion: 3,
+      metricObservedAt: "2026-09-18T14:30:00.000Z",
+      quality: "high",
+      algorithm: { id: "bike-submax-linear-hr-workload", version: 1 },
+      evidenceSessionIds: ["formal-session-a"],
+      calibration: {
+        workloadProvenance: "measured_watts",
+        observedMinWatts: 100,
+        observedMaxWatts: 150,
+        protocol: { id: "bike-submax-70rpm", version: 1 },
+        points: [{ heartRateBpm: 120 }, { heartRateBpm: 140 }],
+      },
+    },
+  });
+  const history = [historyRow(characterization, {
+    app_version: "0.9.11",
+    machine_id: "proform-smart-power-10",
+    machine_profile_version: 1,
+    resolved_prescription: { schemaVersion: 1 },
+    shadow_prescription_evaluation: frozenEvaluation,
+  })];
+  const assessmentContexts = extractTrustedPersonalizationAssessmentContexts(history, "athlete-a");
+  const workoutContexts = extractTrustedPersonalizationWorkoutContexts(history, "athlete-a");
+  const model = buildPersonalizationDiagnosticsModel(
+    [characterization], EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, assessmentContexts, workoutContexts
+  );
+  assert.deepEqual(workoutContexts["session-a"], {
+    appVersion: "0.9.11",
+    machineId: "proform-smart-power-10",
+    machineProfileVersion: 1,
+    activePrescriptionSchemaVersion: 1,
+    shadowSchemaVersion: 1,
+    characterizationSchemaVersion: 1,
+  });
+  assert.deepEqual(assessmentContexts["session-a"].evidenceSessionIds, ["formal-session-a"]);
+  assert.match(personalizationDiagnosticDetailHtml(model.rows[0]), /bike-submax-linear-hr-workload@1/);
+  assert.equal(createPersonalizationDiagnosticsExport(model).diagnosticRows[0].workoutContext.appVersion, "0.9.11");
+
+  const historical = extractTrustedPersonalizationWorkoutContexts([historyRow(characterization)], "athlete-a");
+  assert.equal(historical["session-a"].appVersion, null);
+  assert.equal(historical["session-a"].machineId, null);
+});
+
+test("all-record evidence summary distinguishes readiness cohorts, intents, domains, exclusions, and determinate saturation", () => {
+  const measured = record("measured", { workoutIntent: "aerobic_base" });
+  const calibrated = record("calibrated", {
+    workoutIntent: "aerobic_volume",
+    calibrationWorkloadProvenance: "calibrated_at_verified_cadence",
+    phases: [phase({
+      observedPowerProvenance: "calibrated_watts",
+      observedPower: { ...phase().observedPower, provenance: "calibrated_watts" },
+      candidateDomainMargins: { ...phase().candidateDomainMargins, bucket: "interior" },
+      controllerContext: {
+        ...phase().controllerContext,
+        anyBoundarySaturationSeconds: 10,
+        saturationRatio: 10 / 180,
+        upperBoundaryDecisionCount: 1,
+      },
+    })],
+  });
+  const excluded = record("excluded", {
+    workoutIntent: "threshold",
+    phases: [phase({
+      shadowOutcome: "fallback",
+      candidatePower: undefined,
+      comparison: undefined,
+      characterizationOutcome: "not_candidate",
+      exclusionReason: "phase_evidence_unavailable",
+    })],
+  });
+  const summary = summarizePersonalizationEvidenceCollection([measured, calibrated, excluded]);
+  assert.deepEqual(summary, {
+    completedWorkoutsWithE2: 3,
+    candidatePhases: 2,
+    evaluableCandidatePhases: 2,
+    measuredToMeasuredObservations: 1,
+    cadenceCalibratedObservations: 1,
+    aerobicBaseCandidatePhases: 1,
+    aerobicVolumeCandidatePhases: 1,
+    interiorCandidatePhases: 1,
+    edgeCandidatePhases: 1,
+    saturatedCandidatePhases: 1,
+    saturationDeterminateCandidatePhases: 2,
+    saturationIncidence: 0.5,
+    exclusionCounts: {
+      phase_too_short: 0,
+      missing_telemetry: 0,
+      insufficient_hr_coverage: 0,
+      insufficient_power_coverage: 0,
+      insufficient_joint_coverage: 0,
+      insufficient_settled_in_band_evidence: 0,
+      unsupported_power_provenance: 0,
+      phase_evidence_unavailable: 1,
+    },
+  });
+  const html = personalizationDiagnosticsHtml(buildPersonalizationDiagnosticsModel([measured, calibrated, excluded]));
+  assert.match(html, /All persisted E2 evidence/);
+  assert.match(html, /Measured → measured observations/);
+  assert.match(html, /Aerobic-volume candidate phases/);
+  assert.match(html, /Saturated \/ saturation-determinate candidates/);
+});
+
 test("diagnostics preserve measured and cadence-calibrated cohorts rather than pooling them", () => {
   const calibrated = record("session-b", {
     calibrationWorkloadProvenance: "calibrated_at_verified_cadence",
@@ -185,6 +294,7 @@ test("all six cohort filters affect only visible phases and visible aggregates",
     })],
   });
   const records = [record(), alternate];
+  const before = structuredClone(records);
   const filters = [
     ["workoutIntent", "Threshold"], ["intensity", "threshold"],
     ["calibrationProvenance", "calibrated_at_verified_cadence"],
@@ -198,7 +308,11 @@ test("all six cohort filters affect only visible phases and visible aggregates",
     assert.equal(model.aggregate.workoutCount, 1, `${key} filter`);
     assert.equal(model.rows.length, 1, `${key} rows`);
     assert.equal(model.rows[0].record.workoutSessionId, "session-b", `${key} record`);
+    assert.equal(model.evidenceCollectionSummary.completedWorkoutsWithE2, 2, `${key} all-evidence count`);
   }
+  assert.deepEqual(records, before);
+  const unfiltered = buildPersonalizationDiagnosticsModel(records);
+  assert.equal(createPersonalizationDiagnosticsExport(unfiltered).characterizationRecords.length, 2);
 });
 
 test("insufficient evidence remains visible with its exclusion count and no invented comparison", () => {
@@ -244,6 +358,12 @@ test("diagnostic export is deterministic, provenance-preserving, and excludes pr
   assert.deepEqual(model.records, before);
   const exported = createPersonalizationDiagnosticsExport(model);
   assert.equal(exported.characterizationRecords[0].calibrationWorkloadProvenance, "measured_watts");
+  assert.equal(exported.characterizationRecords[0].phases[0].candidatePower.minWatts, 110);
+  assert.equal(exported.characterizationRecords[0].phases[0].evidenceCoverage.jointCoverageRatio, 1);
+  assert.equal(exported.characterizationRecords[0].phases[0].stableInBandWorkload.medianWatts, 125);
+  assert.equal(exported.characterizationRecords[0].phases[0].comparison.absoluteDifferenceWatts, 0);
+  assert.equal(exported.characterizationRecords[0].phases[0].candidateDomainMargins.bucket, "edge");
+  assert.equal(exported.characterizationRecords[0].phases[0].controllerContext.saturationRatio, 0);
   assert.equal(first.includes("hr_trace"), false);
   assert.equal(first.includes("demographics"), false);
   assert.equal(first.includes("FitnessState"), false);
@@ -253,9 +373,10 @@ test("E3 presentation has no import path into prescription, machine control, fit
   const diagnosticsSource = await readFile(new URL("../src/personalizationDiagnosticsView.ts", import.meta.url), "utf8");
   const statusSource = await readFile(new URL("../src/personalizationStatus.ts", import.meta.url), "utf8");
   const uiSource = await readFile(new URL("../src/uiControls.ts", import.meta.url), "utf8");
-  assert.doesNotMatch(diagnosticsSource, /workoutPrescription|bikeBridge|fitnessState|fitnessRefinement|sisuSync|indexedDB|parsePersonalizedPrescription/);
+  assert.doesNotMatch(diagnosticsSource, /from ["']\.\/(?:workoutPrescription|bikeBridge|fitnessState|fitnessRefinement|sisuSync)|indexedDB|parsePersonalizedPrescription/);
   assert.doesNotMatch(statusSource, /personalizedPrescription|workoutPrescription|bikeBridge|fitnessRefinement|sisuSync/);
   assert.match(uiSource, /getAllWorkoutSummaries\(\)[\s\S]*extractTrustedPersonalizationCharacterizations/);
+  assert.match(uiSource, /exportPersonalizationDiagnostics\(\)[\s\S]*EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS/);
   assert.doesNotMatch(uiSource, /parsePersonalizedPrescriptionCharacterization/);
 });
 

@@ -18,7 +18,7 @@ import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/
 import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
 import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
 import { loadAthleteProfile } from "./profile.js";
-import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
+import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, extractTrustedPersonalizationWorkoutContexts, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 import { findResolvedPhaseTarget, formatResolvedHeartRateTarget, machineHeartRateTargetFromResolved, resolveWorkoutPrescription, } from "./workoutPrescription.js";
 let selectedDay = null;
@@ -29,6 +29,7 @@ let showElapsedInRing = false;
 let pendingVo2Cues = [];
 let personalizationDiagnosticsRecords = [];
 let personalizationAssessmentContexts = {};
+let personalizationWorkoutContexts = {};
 let personalizationDiagnosticsModel = null;
 let heartPulseTargetBpm = null;
 let heartPulseRafId = null;
@@ -1042,7 +1043,8 @@ async function loadPersonalizationDiagnostics() {
         const athleteId = loadAthleteProfile(localStorage).athleteId;
         personalizationDiagnosticsRecords = extractTrustedPersonalizationCharacterizations(history, athleteId);
         personalizationAssessmentContexts = extractTrustedPersonalizationAssessmentContexts(history, athleteId);
-        renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts));
+        personalizationWorkoutContexts = extractTrustedPersonalizationWorkoutContexts(history, athleteId);
+        renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts));
     }
     catch (error) {
         console.error("Error loading personalization diagnostics:", error);
@@ -1061,10 +1063,10 @@ function currentPersonalizationDiagnosticsFilters() {
     };
 }
 function applyPersonalizationDiagnosticsFilters() {
-    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, currentPersonalizationDiagnosticsFilters(), personalizationAssessmentContexts));
+    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, currentPersonalizationDiagnosticsFilters(), personalizationAssessmentContexts, personalizationWorkoutContexts));
 }
 function resetPersonalizationDiagnosticsFilters() {
-    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts));
+    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts));
 }
 function openPersonalizationDiagnostic(index) {
     const row = personalizationDiagnosticsModel === null || personalizationDiagnosticsModel === void 0 ? void 0 : personalizationDiagnosticsModel.rows[index];
@@ -1085,7 +1087,8 @@ function closePersonalizationDiagnostic() {
 function exportPersonalizationDiagnostics() {
     if (!personalizationDiagnosticsModel || personalizationDiagnosticsModel.sourceRecordCount === 0)
         return;
-    const blob = new Blob([personalizationDiagnosticsExportJson(personalizationDiagnosticsModel)], { type: "application/json" });
+    const unfiltered = buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts);
+    const blob = new Blob([personalizationDiagnosticsExportJson(unfiltered)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;

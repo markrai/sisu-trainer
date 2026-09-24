@@ -247,6 +247,7 @@ function adjustedBlockLengthsFromSISU(base, todayHRV, baselineHRV) {
 }
 function buildSisuWorkoutPayload(summary) {
     const payload = { ...summary };
+    delete payload.app_version;
     delete payload.machine_id;
     delete payload.machine_profile_version;
     delete payload.machine_guidance_trace;

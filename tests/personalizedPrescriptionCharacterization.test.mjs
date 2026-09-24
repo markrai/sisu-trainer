@@ -23,6 +23,13 @@ import { buildSisuWorkoutPayload } from "../dist/sisuSync.js";
 import { startSession } from "../dist/sessionStore.js";
 import { generateWorkoutSummary } from "../dist/workoutSummary.js";
 import {
+  buildPersonalizationDiagnosticsModel,
+  createPersonalizationDiagnosticsExport,
+  extractTrustedPersonalizationAssessmentContexts,
+  extractTrustedPersonalizationCharacterizations,
+  extractTrustedPersonalizationWorkoutContexts,
+} from "../dist/personalizationDiagnosticsView.js";
+import {
   getAllWorkoutSummaries,
   resetWorkoutStorageForTests,
   storeHrSample,
@@ -31,6 +38,7 @@ import {
 } from "../dist/workoutStorage.js";
 import { parseWorkoutTemplateDocument } from "../dist/workoutTemplate.js";
 import { transformWorkoutData } from "../dist/workoutData.js";
+import { APP_VERSION } from "../dist/version.js";
 
 globalThis.indexedDB = indexedDB;
 globalThis.IDBKeyRange = IDBKeyRange;
@@ -563,15 +571,78 @@ test("ordinary workout finalization creates the E2 summary record deterministica
   assert.ok(first.shadow_prescription_characterization);
   assert.deepEqual(second.shadow_prescription_characterization, first.shadow_prescription_characterization);
   assert.deepEqual(first.shadow_prescription_characterization.sourceShadow.resolvedAt, e1.resolvedAt);
+  assert.equal(first.app_version, APP_VERSION);
+
+  first.machine_id = "proform-smart-power-10";
+  first.machine_profile_version = 1;
+  assert.equal(await storeWorkoutSummary(first), true);
+  globalThis.localStorage = memoryStorage({
+    fitness_state_v1: JSON.stringify(fitness("measured_watts", { interceptBpm: 5 })),
+  });
+  const reloadedHistory = await getAllWorkoutSummaries();
+  const records = extractTrustedPersonalizationCharacterizations(reloadedHistory, ATHLETE);
+  const model = buildPersonalizationDiagnosticsModel(
+    records,
+    undefined,
+    extractTrustedPersonalizationAssessmentContexts(reloadedHistory, ATHLETE),
+    extractTrustedPersonalizationWorkoutContexts(reloadedHistory, ATHLETE)
+  );
+  const exported = createPersonalizationDiagnosticsExport(model);
+  assert.equal(records.length, 1);
+  assert.equal(model.evidenceCollectionSummary.completedWorkoutsWithE2, 1);
+  assert.equal(model.evidenceCollectionSummary.measuredToMeasuredObservations, 1);
+  assert.deepEqual(exported.characterizationRecords, records);
+  assert.equal(exported.diagnosticRows[0].workoutContext.appVersion, APP_VERSION);
+  assert.equal(exported.diagnosticRows[0].workoutContext.machineId, "proform-smart-power-10");
+});
+
+test("persisted E2 evidence from multiple sessions accumulates and reloads without overwriting", async () => {
+  await resetWorkoutStorageForTests();
+  const { characterization, e1, response } = fixture();
+  const summaryFor = (sessionId, startedAt) => {
+    const linkedResponse = { ...clone(response), sessionId };
+    const linkedCharacterization = { ...clone(characterization), workoutSessionId: sessionId };
+    return {
+      external_session_id: sessionId,
+      app_version: APP_VERSION,
+      athlete_id: ATHLETE,
+      startedAt,
+      endedAt: CREATED_AT,
+      category: "cardio",
+      intent: "aerobic_base",
+      duration_minutes: 3,
+      primary_zone: 2,
+      stress_profile: "low",
+      zone_minutes: { z1: 0, z2: 3, z3: 0, z4: 0, z5: 0 },
+      hr_trace: { sampling_interval_seconds: 60, samples: [] },
+      day: "Tuesday",
+      activity: "bike",
+      shadow_prescription_evaluation: clone(e1),
+      shadow_prescription_characterization: linkedCharacterization,
+      workout_response: linkedResponse,
+    };
+  };
+  assert.equal(await storeWorkoutSummary(summaryFor("e2-session-one", "2026-09-20T11:00:00.000Z")), true);
+  assert.equal(await storeWorkoutSummary(summaryFor("e2-session-two", "2026-09-20T12:00:00.000Z")), true);
+
+  const history = await getAllWorkoutSummaries();
+  const records = extractTrustedPersonalizationCharacterizations(history, ATHLETE);
+  const exported = createPersonalizationDiagnosticsExport(buildPersonalizationDiagnosticsModel(records));
+  assert.deepEqual(new Set(records.map((record) => record.workoutSessionId)),
+    new Set(["e2-session-one", "e2-session-two"]));
+  assert.equal(exported.aggregate.workoutCount, 2);
+  assert.equal(exported.characterizationRecords.length, 2);
 });
 
 test("SISU payload explicitly strips E1 and E2 diagnostics", () => {
   const { characterization, e1 } = fixture();
   const payload = buildSisuWorkoutPayload({
     external_session_id: SESSION,
+    app_version: APP_VERSION,
     shadow_prescription_evaluation: e1,
     shadow_prescription_characterization: characterization,
   });
+  assert.equal("app_version" in payload, false);
   assert.equal("shadow_prescription_evaluation" in payload, false);
   assert.equal("shadow_prescription_characterization" in payload, false);
 });

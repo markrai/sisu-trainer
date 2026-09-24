@@ -92,6 +92,7 @@ import {
   buildPersonalizationDiagnosticsModel,
   extractTrustedPersonalizationAssessmentContexts,
   extractTrustedPersonalizationCharacterizations,
+  extractTrustedPersonalizationWorkoutContexts,
   personalizationDiagnosticDetailHtml,
   personalizationDiagnosticsExportJson,
   personalizationDiagnosticsHtml,
@@ -121,6 +122,7 @@ let showElapsedInRing = false;
 let pendingVo2Cues: string[] = [];
 let personalizationDiagnosticsRecords: ReturnType<typeof extractTrustedPersonalizationCharacterizations> = [];
 let personalizationAssessmentContexts: ReturnType<typeof extractTrustedPersonalizationAssessmentContexts> = {};
+let personalizationWorkoutContexts: ReturnType<typeof extractTrustedPersonalizationWorkoutContexts> = {};
 let personalizationDiagnosticsModel: PersonalizationDiagnosticsModel | null = null;
 
 let heartPulseTargetBpm: number | null = null;
@@ -1159,10 +1161,12 @@ async function loadPersonalizationDiagnostics() {
     const athleteId = loadAthleteProfile(localStorage).athleteId;
     personalizationDiagnosticsRecords = extractTrustedPersonalizationCharacterizations(history, athleteId);
     personalizationAssessmentContexts = extractTrustedPersonalizationAssessmentContexts(history, athleteId);
+    personalizationWorkoutContexts = extractTrustedPersonalizationWorkoutContexts(history, athleteId);
     renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(
       personalizationDiagnosticsRecords,
       EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
-      personalizationAssessmentContexts
+      personalizationAssessmentContexts,
+      personalizationWorkoutContexts
     ));
   } catch (error) {
     console.error("Error loading personalization diagnostics:", error);
@@ -1186,7 +1190,8 @@ function applyPersonalizationDiagnosticsFilters() {
   renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(
     personalizationDiagnosticsRecords,
     currentPersonalizationDiagnosticsFilters(),
-    personalizationAssessmentContexts
+    personalizationAssessmentContexts,
+    personalizationWorkoutContexts
   ));
 }
 
@@ -1194,7 +1199,8 @@ function resetPersonalizationDiagnosticsFilters() {
   renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(
     personalizationDiagnosticsRecords,
     EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
-    personalizationAssessmentContexts
+    personalizationAssessmentContexts,
+    personalizationWorkoutContexts
   ));
 }
 
@@ -1216,7 +1222,13 @@ function closePersonalizationDiagnostic() {
 
 function exportPersonalizationDiagnostics() {
   if (!personalizationDiagnosticsModel || personalizationDiagnosticsModel.sourceRecordCount === 0) return;
-  const blob = new Blob([personalizationDiagnosticsExportJson(personalizationDiagnosticsModel)], { type: "application/json" });
+  const unfiltered = buildPersonalizationDiagnosticsModel(
+    personalizationDiagnosticsRecords,
+    EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
+    personalizationAssessmentContexts,
+    personalizationWorkoutContexts
+  );
+  const blob = new Blob([personalizationDiagnosticsExportJson(unfiltered)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;

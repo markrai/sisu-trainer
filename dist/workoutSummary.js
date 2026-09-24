@@ -20,6 +20,7 @@ import { generateUUID } from "./utils/uuid.js";
 import { deriveWorkoutResponse } from "./workoutResponse.js";
 import { characterizePersonalizedPrescription, PHASE_E2_CHARACTERIZATION_POLICY_V1, } from "./personalizedPrescriptionCharacterization.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
+import { APP_VERSION } from "./version.js";
 export function buildHrTrace(hrSamples) {
     if (!hrSamples || hrSamples.length === 0) {
         return { sampling_interval_seconds: 60, samples: [] };
@@ -126,6 +127,7 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
     }
     const summary = {
         external_session_id: sessionId,
+        app_version: APP_VERSION,
         startedAt: formatISO8601UTC(startedAt),
         endedAt: formatISO8601UTC(endedAt),
         category: "cardio",

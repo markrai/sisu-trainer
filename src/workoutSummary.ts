@@ -30,6 +30,7 @@ import {
   PHASE_E2_CHARACTERIZATION_POLICY_V1,
 } from "./personalizedPrescriptionCharacterization.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
+import { APP_VERSION } from "./version.js";
 
 export function buildHrTrace(hrSamples: any[]) {
   if (!hrSamples || hrSamples.length === 0) {
@@ -157,6 +158,7 @@ async function generateWorkoutSummary(
 
   const summary: WorkoutSummary = {
     external_session_id: sessionId,
+    app_version: APP_VERSION,
     startedAt: formatISO8601UTC(startedAt),
     endedAt: formatISO8601UTC(endedAt),
     category: "cardio",
