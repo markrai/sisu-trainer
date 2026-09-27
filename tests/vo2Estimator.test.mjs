@@ -323,23 +323,28 @@ test("finalization attaches assessment and survives HR cleanup", async () => {
   const sessionId = "vo2-finalize-hr";
   const startedAt = Date.now() - 900_000;
   const plan = buildVo2ProtocolPlan();
-  let runtime = createVo2ProtocolRuntime(plan);
+  let runtime = createVo2ProtocolRuntime(plan, profile40_80);
   runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
   for (let i = 0; i < 3; i++) {
     const start = runtime.stages[i].active_start_sec;
+    const watts = runtime.plan.workloads[runtime.stages[i].workloadIndex].calibrated_watts_at_70rpm;
+    const bpm = 80 + 0.5 * watts;
     const samples = [];
     for (let t = start + 60; t <= start + 179; t++) {
-      samples.push({ timestamp_sec: t, hr: 120 + i * 10 });
-      await storeHrSample(sessionId, t, 120 + i * 10);
+      samples.push({ timestamp_sec: t, hr: bpm });
+      await storeHrSample(sessionId, t, bpm);
     }
-    runtime = advanceVo2Protocol(runtime, { elapsedSec: start + 180, paused: false, samples });
-    const stage = runtime.stages[i];
-    const watts = runtime.plan.workloads[stage.workloadIndex].calibrated_watts_at_70rpm;
-    const end = stage.active_end_sec;
-    const windowStart = Math.max(stage.active_start_sec, end - 119);
-    for (let t = windowStart; t <= end; t++) {
+    const telemetrySamples = [];
+    for (let t = start + 61; t <= start + 180; t++) {
+      telemetrySamples.push({ timestamp_sec: t, rpm: 70, watts });
       recordBikeTelemetrySample(sessionId, { timestamp_sec: t, rpm: 70, watts });
     }
+    runtime = advanceVo2Protocol(runtime, {
+      elapsedSec: start + 180,
+      paused: false,
+      samples,
+      telemetrySamples,
+    });
   }
   startSession(VO2_WORKOUT_SELECTOR_ID, startedAt, sessionId, "bike", storage, {
     blocks: vo2PlanBlocks(),

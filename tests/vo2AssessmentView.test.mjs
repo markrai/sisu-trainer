@@ -126,9 +126,52 @@ test("too_few_eligible_stages describes eligible_stage_count not accepted_stage_
     accepted_stage_count: result.accepted_stage_count,
     eligible_stage_count: result.eligible_stage_count,
   });
-  assert.match(detail, /Only 2 of your stable work stages had usable heart-rate and workload data/);
+  assert.match(detail, /3 stages reached stable heart rate, but only 2 were valid for VO₂ estimation/);
   assert.match(detail, /At least 3 valid submaximal stages are required/);
   assert.equal(detail.includes("Only 3 stable work stages"), false);
+  const view = vo2AssessmentPresentation(result);
+  assert.match(view.body, /3 stages reached stable heart rate, but only 2 were valid/);
+  assert.equal(view.stages.length, 3);
+  assert.match(view.stages[0].detail, /HR stability: passed/);
+  assert.match(view.stages[0].detail, /Workload evidence: passed/);
+  assert.match(view.stages[0].detail, /Ineligible/);
+  assert.match(view.stages[0].headline, /Stage 1.*resistance 2.*100 W/);
+  assert.match(view.stages[0].detail, /measured watts/);
+  assert.match(view.stages[0].detail, /109 bpm/);
+  assert.match(view.stages[0].detail, /Ineligible.*below the 110 bpm usable floor/);
+});
+
+test("result diagnostics surface high-HR and cadence rejection reasons per stage", () => {
+  const highStages = [
+    acceptedStage("vo2-stage:1", 100, 120),
+    acceptedStage("vo2-stage:2", 125, 130),
+    acceptedStage("vo2-stage:3", 150, 153),
+  ];
+  const high = vo2AssessmentPresentation(assessVo2(evidence(highStages, "submax_hr_ceiling"), {
+    age_years: 40,
+    weight_kg: 80,
+  }));
+  assert.match(high.detail, /Stage 3 was excluded because steady heart rate reached 153 bpm/);
+  assert.match(high.stages[2].detail, /Submaximal HR: failed/);
+  assert.match(high.stages[2].detail, /at or above the 153 bpm submaximal ceiling/);
+
+  const cadenceStages = linearThree.map((stage) => structuredClone(stage));
+  cadenceStages[1].workload = {
+    source: "prescribed_only",
+    calibrated_watts_at_70rpm: 125,
+    measured_watts_sample_count: 0,
+    measured_cadence_median_rpm: 90,
+    measured_cadence_sample_count: 90,
+    cadence_in_band_ratio: 0,
+    cadence_measured: true,
+    watts_measured: false,
+  };
+  const cadence = vo2AssessmentPresentation(assessVo2(evidence(cadenceStages), {
+    age_years: 40,
+    weight_kg: 80,
+  }));
+  assert.match(cadence.stages[1].detail, /Workload evidence: failed/);
+  assert.match(cadence.stages[1].detail, /cadence was outside the verified 70 ± 5 RPM range/);
 });
 
 test("three accepted and eligible stages are not described as insufficient", () => {

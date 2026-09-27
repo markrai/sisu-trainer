@@ -12,6 +12,12 @@ import {
   type Vo2ProtocolStageEvidence,
   type Vo2ProtocolTerminationReason,
 } from "./types.js";
+import {
+  VO2_CADENCE_MIN_IN_BAND_RATIO,
+  VO2_CADENCE_TOLERANCE_RPM,
+  VO2_PRESCRIBED_CADENCE_RPM,
+  VO2_WORKLOAD_MIN_SAMPLES,
+} from "./vo2Workload.js";
 
 /** Permanent historical identity for the v1 submaximal cycle-ergometer estimator; keep readable after newer estimators ship. */
 export const LEGACY_VO2_ESTIMATOR_ID = "bike-submax-linear-hr-workload" as const;
@@ -91,25 +97,66 @@ function copyPoint(point: Vo2AssessmentPoint): Vo2AssessmentPoint {
   };
 }
 
-function classifyAcceptedStage(
+function stageNumber(stage: Vo2ProtocolStageEvidence, fallback?: number): number {
+  const match = /(?:^|:)(\d+)$/.exec(stage.stage_id);
+  const parsed = match ? Number(match[1]) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : Math.max(1, fallback ?? 1);
+}
+
+function workloadIneligibilityReasons(
   stage: Vo2ProtocolStageEvidence,
-  predictedHrMax: number | undefined
+  source: Vo2AssessmentPoint["workload_source"],
+  estimatorWatts: number | undefined
+): Vo2AssessmentReasonCode[] {
+  if (source !== "prescribed_only" && estimatorWatts != null) {
+    if (!isPositiveFinite(stage.calibrated_watts_at_70rpm) && source !== "measured_watts") {
+      return ["invalid_workload"];
+    }
+    return [];
+  }
+  const workload = stage.workload;
+  const cadenceHasCoverage = (workload?.measured_cadence_sample_count ?? 0) >= VO2_WORKLOAD_MIN_SAMPLES;
+  const cadenceOutsideRange = cadenceHasCoverage && (
+    (workload?.cadence_in_band_ratio ?? 0) < VO2_CADENCE_MIN_IN_BAND_RATIO ||
+    !isPositiveFinite(workload?.measured_cadence_median_rpm) ||
+    Math.abs((workload?.measured_cadence_median_rpm as number) - VO2_PRESCRIBED_CADENCE_RPM) >
+      VO2_CADENCE_TOLERANCE_RPM
+  );
+  return [
+    "unverified_performed_workload",
+    cadenceOutsideRange ? "cadence_outside_verified_range" : "insufficient_workload_samples",
+  ];
+}
+
+/** Shared collection/estimator classification for one attempted protocol stage. */
+export function classifyVo2ProtocolStage(
+  stage: Vo2ProtocolStageEvidence,
+  predictedHrMax: number | undefined,
+  fallbackStageNumber?: number
 ): Vo2AssessmentPoint {
   const reasons: Vo2AssessmentReasonCode[] = [];
   const workload = stage.workload;
   const source = workload?.source ?? "prescribed_only";
   const estimatorWatts = isPositiveFinite(workload?.estimator_watts) ? workload.estimator_watts : undefined;
   const hr = isPositiveFinite(stage.hr?.steady_state_bpm) ? stage.hr.steady_state_bpm : undefined;
+  const protocolAccepted = stage.status === "accepted";
+  const workloadReasons = workloadIneligibilityReasons(stage, source, estimatorWatts);
   const point: Vo2AssessmentPoint = {
     stage_id: stage.stage_id,
-    protocol_accepted: true,
+    stage_number: stageNumber(stage, fallbackStageNumber),
+    protocol_stage_status: stage.status,
+    protocol_accepted: protocolAccepted,
+    hr_stability_passed: protocolAccepted,
+    workload_evidence_passed: workloadReasons.length === 0,
     estimator_eligible: false,
     ineligibility_reasons: reasons,
+    prescribed_resistance: stage.prescribed_resistance,
     workload_source: source,
     calibrated_watts_at_70rpm: stage.calibrated_watts_at_70rpm,
     cadence_measured: workload?.cadence_measured ?? false,
     watts_measured: workload?.watts_measured ?? false,
   };
+  if (stage.requested_watts != null) point.requested_watts = stage.requested_watts;
   if (hr != null) point.steady_state_bpm = hr;
   if (estimatorWatts != null) point.watts = estimatorWatts;
   if (workload?.measured_cadence_median_rpm != null) {
@@ -124,21 +171,26 @@ function classifyAcceptedStage(
   }
   if (workload?.cadence_in_band_ratio != null) point.cadence_in_band_ratio = workload.cadence_in_band_ratio;
 
-  if (hr == null) reasons.push("missing_stage_hr");
-  if (source === "prescribed_only" || estimatorWatts == null) {
-    reasons.push("unverified_performed_workload");
-  } else if (!isPositiveFinite(stage.calibrated_watts_at_70rpm) && source !== "measured_watts") {
-    reasons.push("invalid_workload");
+  if (!protocolAccepted) {
+    if (stage.status === "unstable_hr") reasons.push("stage_unstable_hr");
+    else if (stage.status === "insufficient_hr") reasons.push("insufficient_stage_hr_samples");
+    else reasons.push("stage_incomplete");
+  } else if (hr == null) {
+    reasons.push("missing_stage_hr");
   }
+  reasons.push(...workloadReasons);
 
   if (hr != null) {
-    if (hr < VO2_ESTIMATOR_MIN_HR_BPM) reasons.push("hr_below_estimator_range");
-    if (predictedHrMax != null && hr >= estimatorSubmaxHrCeilingBpm(predictedHrMax)) {
+    const belowFloor = hr < VO2_ESTIMATOR_MIN_HR_BPM;
+    const aboveCeiling = predictedHrMax != null && hr >= estimatorSubmaxHrCeilingBpm(predictedHrMax);
+    if (belowFloor) reasons.push("hr_below_estimator_range");
+    if (aboveCeiling) {
       reasons.push("hr_above_submax_ceiling");
     }
+    point.submax_hr_eligible = predictedHrMax == null && !belowFloor ? undefined : !belowFloor && !aboveCeiling;
   }
 
-  point.estimator_eligible = reasons.length === 0;
+  point.estimator_eligible = protocolAccepted && reasons.length === 0;
   return point;
 }
 
@@ -233,6 +285,7 @@ function baseDiagnostics(
   extra: Partial<Vo2AssessmentDiagnostics> = {}
 ): Vo2AssessmentDiagnostics {
   return {
+    stage_points: extra.stage_points ?? [],
     accepted_points: extra.accepted_points ?? [],
     eligible_points: extra.eligible_points ?? [],
     min_r_squared: VO2_MIN_R_SQUARED,
@@ -350,14 +403,17 @@ export function assessVo2(
   }
 
   const predictedHrMax = ageValid(profile.age_years) ? predictedHrMaxBpm(profile.age_years) : undefined;
-  const acceptedStages = (protocol?.stages ?? []).filter((stage) => stage.status === "accepted");
-  const acceptedPoints = acceptedStages.map((stage) => classifyAcceptedStage(stage, predictedHrMax));
+  const stagePoints = (protocol?.stages ?? []).map((stage, index) =>
+    classifyVo2ProtocolStage(stage, predictedHrMax, index + 1)
+  );
+  const acceptedPoints = stagePoints.filter((point) => point.protocol_accepted);
   const eligiblePoints = acceptedPoints.filter((point) => point.estimator_eligible);
+  diagnostics.stage_points = stagePoints.map(copyPoint);
   diagnostics.accepted_points = acceptedPoints.map(copyPoint);
   diagnostics.eligible_points = eligiblePoints.map(copyPoint);
 
   const stageReasons: Vo2AssessmentReasonCode[] = [];
-  for (const point of acceptedPoints) stageReasons.push(...point.ineligibility_reasons);
+  for (const point of stagePoints) stageReasons.push(...point.ineligibility_reasons);
 
   const stages_used = eligiblePoints.map((point) => point.stage_id);
   const highest =

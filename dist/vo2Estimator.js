@@ -1,4 +1,5 @@
 import { VO2_ASSESSMENT_SCHEMA_VERSION, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
+import { VO2_CADENCE_MIN_IN_BAND_RATIO, VO2_CADENCE_TOLERANCE_RPM, VO2_PRESCRIBED_CADENCE_RPM, VO2_WORKLOAD_MIN_SAMPLES, } from "./vo2Workload.js";
 /** Permanent historical identity for the v1 submaximal cycle-ergometer estimator; keep readable after newer estimators ship. */
 export const LEGACY_VO2_ESTIMATOR_ID = "bike-submax-linear-hr-workload";
 export const LEGACY_VO2_ESTIMATOR_VERSION = 1;
@@ -60,23 +61,57 @@ function copyPoint(point) {
         ineligibility_reasons: [...point.ineligibility_reasons],
     };
 }
-function classifyAcceptedStage(stage, predictedHrMax) {
+function stageNumber(stage, fallback) {
+    const match = /(?:^|:)(\d+)$/.exec(stage.stage_id);
+    const parsed = match ? Number(match[1]) : Number.NaN;
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : Math.max(1, fallback !== null && fallback !== void 0 ? fallback : 1);
+}
+function workloadIneligibilityReasons(stage, source, estimatorWatts) {
+    var _a, _b;
+    if (source !== "prescribed_only" && estimatorWatts != null) {
+        if (!isPositiveFinite(stage.calibrated_watts_at_70rpm) && source !== "measured_watts") {
+            return ["invalid_workload"];
+        }
+        return [];
+    }
+    const workload = stage.workload;
+    const cadenceHasCoverage = ((_a = workload === null || workload === void 0 ? void 0 : workload.measured_cadence_sample_count) !== null && _a !== void 0 ? _a : 0) >= VO2_WORKLOAD_MIN_SAMPLES;
+    const cadenceOutsideRange = cadenceHasCoverage && (((_b = workload === null || workload === void 0 ? void 0 : workload.cadence_in_band_ratio) !== null && _b !== void 0 ? _b : 0) < VO2_CADENCE_MIN_IN_BAND_RATIO ||
+        !isPositiveFinite(workload === null || workload === void 0 ? void 0 : workload.measured_cadence_median_rpm) ||
+        Math.abs((workload === null || workload === void 0 ? void 0 : workload.measured_cadence_median_rpm) - VO2_PRESCRIBED_CADENCE_RPM) >
+            VO2_CADENCE_TOLERANCE_RPM);
+    return [
+        "unverified_performed_workload",
+        cadenceOutsideRange ? "cadence_outside_verified_range" : "insufficient_workload_samples",
+    ];
+}
+/** Shared collection/estimator classification for one attempted protocol stage. */
+export function classifyVo2ProtocolStage(stage, predictedHrMax, fallbackStageNumber) {
     var _a, _b, _c, _d;
     const reasons = [];
     const workload = stage.workload;
     const source = (_a = workload === null || workload === void 0 ? void 0 : workload.source) !== null && _a !== void 0 ? _a : "prescribed_only";
     const estimatorWatts = isPositiveFinite(workload === null || workload === void 0 ? void 0 : workload.estimator_watts) ? workload.estimator_watts : undefined;
     const hr = isPositiveFinite((_b = stage.hr) === null || _b === void 0 ? void 0 : _b.steady_state_bpm) ? stage.hr.steady_state_bpm : undefined;
+    const protocolAccepted = stage.status === "accepted";
+    const workloadReasons = workloadIneligibilityReasons(stage, source, estimatorWatts);
     const point = {
         stage_id: stage.stage_id,
-        protocol_accepted: true,
+        stage_number: stageNumber(stage, fallbackStageNumber),
+        protocol_stage_status: stage.status,
+        protocol_accepted: protocolAccepted,
+        hr_stability_passed: protocolAccepted,
+        workload_evidence_passed: workloadReasons.length === 0,
         estimator_eligible: false,
         ineligibility_reasons: reasons,
+        prescribed_resistance: stage.prescribed_resistance,
         workload_source: source,
         calibrated_watts_at_70rpm: stage.calibrated_watts_at_70rpm,
         cadence_measured: (_c = workload === null || workload === void 0 ? void 0 : workload.cadence_measured) !== null && _c !== void 0 ? _c : false,
         watts_measured: (_d = workload === null || workload === void 0 ? void 0 : workload.watts_measured) !== null && _d !== void 0 ? _d : false,
     };
+    if (stage.requested_watts != null)
+        point.requested_watts = stage.requested_watts;
     if (hr != null)
         point.steady_state_bpm = hr;
     if (estimatorWatts != null)
@@ -94,22 +129,29 @@ function classifyAcceptedStage(stage, predictedHrMax) {
     }
     if ((workload === null || workload === void 0 ? void 0 : workload.cadence_in_band_ratio) != null)
         point.cadence_in_band_ratio = workload.cadence_in_band_ratio;
-    if (hr == null)
+    if (!protocolAccepted) {
+        if (stage.status === "unstable_hr")
+            reasons.push("stage_unstable_hr");
+        else if (stage.status === "insufficient_hr")
+            reasons.push("insufficient_stage_hr_samples");
+        else
+            reasons.push("stage_incomplete");
+    }
+    else if (hr == null) {
         reasons.push("missing_stage_hr");
-    if (source === "prescribed_only" || estimatorWatts == null) {
-        reasons.push("unverified_performed_workload");
     }
-    else if (!isPositiveFinite(stage.calibrated_watts_at_70rpm) && source !== "measured_watts") {
-        reasons.push("invalid_workload");
-    }
+    reasons.push(...workloadReasons);
     if (hr != null) {
-        if (hr < VO2_ESTIMATOR_MIN_HR_BPM)
+        const belowFloor = hr < VO2_ESTIMATOR_MIN_HR_BPM;
+        const aboveCeiling = predictedHrMax != null && hr >= estimatorSubmaxHrCeilingBpm(predictedHrMax);
+        if (belowFloor)
             reasons.push("hr_below_estimator_range");
-        if (predictedHrMax != null && hr >= estimatorSubmaxHrCeilingBpm(predictedHrMax)) {
+        if (aboveCeiling) {
             reasons.push("hr_above_submax_ceiling");
         }
+        point.submax_hr_eligible = predictedHrMax == null && !belowFloor ? undefined : !belowFloor && !aboveCeiling;
     }
-    point.estimator_eligible = reasons.length === 0;
+    point.estimator_eligible = protocolAccepted && reasons.length === 0;
     return point;
 }
 function lastDefinedWatts(points) {
@@ -197,10 +239,11 @@ function uniqueReasons(codes) {
     return out;
 }
 function baseDiagnostics(extra = {}) {
-    var _a, _b;
+    var _a, _b, _c;
     return {
-        accepted_points: (_a = extra.accepted_points) !== null && _a !== void 0 ? _a : [],
-        eligible_points: (_b = extra.eligible_points) !== null && _b !== void 0 ? _b : [],
+        stage_points: (_a = extra.stage_points) !== null && _a !== void 0 ? _a : [],
+        accepted_points: (_b = extra.accepted_points) !== null && _b !== void 0 ? _b : [],
+        eligible_points: (_c = extra.eligible_points) !== null && _c !== void 0 ? _c : [],
         min_r_squared: VO2_MIN_R_SQUARED,
         estimator_min_hr_bpm: VO2_ESTIMATOR_MIN_HR_BPM,
         estimator_submax_hrmax_fraction: VO2_ESTIMATOR_SUBMAX_HRMAX_FRACTION,
@@ -297,13 +340,14 @@ export function assessVo2(evidence, profile = {}) {
         reasons.push("invalid_profile_weight");
     }
     const predictedHrMax = ageValid(profile.age_years) ? predictedHrMaxBpm(profile.age_years) : undefined;
-    const acceptedStages = ((_c = protocol === null || protocol === void 0 ? void 0 : protocol.stages) !== null && _c !== void 0 ? _c : []).filter((stage) => stage.status === "accepted");
-    const acceptedPoints = acceptedStages.map((stage) => classifyAcceptedStage(stage, predictedHrMax));
+    const stagePoints = ((_c = protocol === null || protocol === void 0 ? void 0 : protocol.stages) !== null && _c !== void 0 ? _c : []).map((stage, index) => classifyVo2ProtocolStage(stage, predictedHrMax, index + 1));
+    const acceptedPoints = stagePoints.filter((point) => point.protocol_accepted);
     const eligiblePoints = acceptedPoints.filter((point) => point.estimator_eligible);
+    diagnostics.stage_points = stagePoints.map(copyPoint);
     diagnostics.accepted_points = acceptedPoints.map(copyPoint);
     diagnostics.eligible_points = eligiblePoints.map(copyPoint);
     const stageReasons = [];
-    for (const point of acceptedPoints)
+    for (const point of stagePoints)
         stageReasons.push(...point.ineligibility_reasons);
     const stages_used = eligiblePoints.map((point) => point.stage_id);
     const highest = eligiblePoints.length > 0

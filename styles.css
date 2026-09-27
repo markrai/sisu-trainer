@@ -347,6 +347,12 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .vo2-assessment-value { font-size: 2rem; text-align: center; font-weight: 600; margin: 8px 0 16px; }
 .vo2-summary-title { font-size: 1rem; font-weight: 600; text-align: center; margin-bottom: 8px; }
 .vo2-summary-block { text-align: center; }
+.vo2-stage-diagnostics { display: grid; gap: 8px; margin-top: 14px; text-align: left; }
+.vo2-stage-diagnostic { border: 1px solid rgba(127, 127, 127, 0.28); border-left: 4px solid #8a8a8a; border-radius: 8px; padding: 9px 10px; }
+.vo2-stage-diagnostic.eligible { border-left-color: #2f9e64; }
+.vo2-stage-diagnostic.ineligible { border-left-color: #c85c4a; }
+.vo2-stage-diagnostic strong, .vo2-stage-diagnostic span { display: block; }
+.vo2-stage-diagnostic span { margin-top: 4px; font-size: 0.82rem; line-height: 1.35; opacity: 0.88; }
 .workout-item-details { font-size: 0.85rem; opacity: 0.8; margin-top: 8px; display: flex; gap: 16px; flex-wrap: wrap; }
 .workout-item-detail { }
 .workout-item-actions { display: flex; gap: 8px; margin-top: 12px; }

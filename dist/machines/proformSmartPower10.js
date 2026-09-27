@@ -5,6 +5,9 @@ export const TARGET_HR_ADJUST_MARGIN_BPM = 3;
 export const HIGH_RESISTANCE_INCREASE_DEFICIT_BPM = 5;
 export const HIGH_RESISTANCE_INCREASE_FROM = 13;
 export const HOLD_EVALUATION_COOLDOWN_SECONDS = 60;
+/** Four-minute VO2 work must leave enough time for bounded one-level feedback. */
+export const VO2_PRIORITY_INITIAL_EVALUATION_SECONDS = 60;
+export const VO2_PRIORITY_FAST_RESPONSE_MAX_PHASE_SECONDS = 240;
 export const estimatedWattsAt70Rpm = Object.freeze({
     1: 66,
     2: 69,
@@ -351,16 +354,20 @@ function deferredEvaluationObservation(context, resistance, eligibleSincePhaseEl
         eligibleSincePhaseElapsedSeconds,
     };
 }
-function initialWaitSeconds(state, phaseDurationSeconds) {
-    var _a, _b;
-    if (phaseDurationSeconds <= 75)
-        return Math.max(0, phaseDurationSeconds - 1);
-    if (phaseDurationSeconds <= 150)
+function initialWaitSeconds(state, context) {
+    var _a, _b, _c;
+    if (context.phaseDurationSeconds <= 75)
+        return Math.max(0, context.phaseDurationSeconds - 1);
+    if (context.phaseDurationSeconds <= 150)
         return (_a = state.initialEvaluationSeconds) !== null && _a !== void 0 ? _a : 60;
-    return (_b = state.initialEvaluationSeconds) !== null && _b !== void 0 ? _b : 90;
+    if (context.intent === "vo2_priority" &&
+        context.phaseDurationSeconds <= VO2_PRIORITY_FAST_RESPONSE_MAX_PHASE_SECONDS) {
+        return Math.min((_b = state.initialEvaluationSeconds) !== null && _b !== void 0 ? _b : VO2_PRIORITY_INITIAL_EVALUATION_SECONDS, VO2_PRIORITY_INITIAL_EVALUATION_SECONDS);
+    }
+    return (_c = state.initialEvaluationSeconds) !== null && _c !== void 0 ? _c : 90;
 }
 function workPhaseStartedObservation(context, state, resistance) {
-    const initialWait = initialWaitSeconds(state, context.phaseDurationSeconds);
+    const initialWait = initialWaitSeconds(state, context);
     const observation = {
         phaseKind: context.phaseKind,
         phaseId: context.phaseId,
@@ -382,7 +389,7 @@ function workPhaseStartedObservation(context, state, resistance) {
     return observation;
 }
 function workGuidance(context, state, phaseChanged) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const start = workStartResistance(context);
     const usingLearnedStart = phaseChanged && state.nextWorkResistance === undefined && start.learned;
     let resistance = phaseChanged
@@ -462,15 +469,15 @@ function workGuidance(context, state, phaseChanged) {
         }
     }
     else {
-        const initialWait = (_g = nextState.initialEvaluationSeconds) !== null && _g !== void 0 ? _g : 90;
-        const cooldown = (_h = nextState.currentEvaluationCooldownSeconds) !== null && _h !== void 0 ? _h : 60;
+        const initialWait = initialWaitSeconds(nextState, context);
+        const cooldown = (_g = nextState.currentEvaluationCooldownSeconds) !== null && _g !== void 0 ? _g : 60;
         const lastEvaluation = nextState.lastEvaluationPhaseElapsedSeconds;
         const canEvaluate = context.phaseElapsedSeconds >= initialWait &&
             (lastEvaluation === undefined || context.phaseElapsedSeconds - lastEvaluation >= cooldown);
         if (canEvaluate) {
             const adapted = adaptWorkResistance(context, resistance);
             if (adapted.evaluated) {
-                const resistanceBefore = (_j = nextState.currentResistance) !== null && _j !== void 0 ? _j : resistance;
+                const resistanceBefore = (_h = nextState.currentResistance) !== null && _h !== void 0 ? _h : resistance;
                 resistance = adapted.resistance;
                 action = actionForResistance(nextState.currentResistance, resistance, false);
                 nextState.currentResistance = resistance;

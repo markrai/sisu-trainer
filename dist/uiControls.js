@@ -1633,6 +1633,7 @@ function showWorkoutSummaryModal(summary) {
                     (view.valueText ? `<div class="vo2-assessment-value">${view.valueText}</div>` : "") +
                     `<div class="label">${view.body}</div>` +
                     (view.detail ? `<div class="label" style="margin-top:8px;">${view.detail}</div>` : "");
+            renderVo2StageDiagnostics(vo2El, view.stages);
         }
         else {
             vo2El.style.display = "none";
@@ -1642,6 +1643,26 @@ function showWorkoutSummaryModal(summary) {
     const bg = document.getElementById("workoutSummaryModalBg");
     if (bg)
         bg.style.display = "flex";
+}
+function renderVo2StageDiagnostics(container, stages) {
+    const existing = container.querySelector(".vo2-stage-diagnostics");
+    if (existing)
+        existing.remove();
+    if (stages.length === 0)
+        return;
+    const list = document.createElement("div");
+    list.className = "vo2-stage-diagnostics";
+    for (const stage of stages) {
+        const row = document.createElement("div");
+        row.className = `vo2-stage-diagnostic ${stage.eligible ? "eligible" : "ineligible"}`;
+        const headline = document.createElement("strong");
+        headline.textContent = stage.headline;
+        const detail = document.createElement("span");
+        detail.textContent = stage.detail;
+        row.append(headline, detail);
+        list.appendChild(row);
+    }
+    container.appendChild(list);
 }
 function presentVo2Assessment(summary) {
     const view = vo2AssessmentPresentation(summary === null || summary === void 0 ? void 0 : summary.vo2_assessment);
@@ -1661,6 +1682,9 @@ function presentVo2Assessment(summary) {
         detailEl.textContent = view.detail;
         detailEl.style.display = view.detail ? "" : "none";
     }
+    const stagesEl = document.getElementById("vo2AssessmentStages");
+    if (stagesEl)
+        renderVo2StageDiagnostics(stagesEl, view.stages);
     const bg = document.getElementById("vo2AssessmentModalBg");
     if (bg)
         bg.style.display = "flex";

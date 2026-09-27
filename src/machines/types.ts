@@ -55,6 +55,8 @@ export interface MachineGuidanceContext {
   heartRateBpm?: number;
   targetHeartRateMin?: number;
   targetHeartRateMax?: number;
+  /** Frozen legacy workout intent; never a personalization candidate or prediction. */
+  intent?: string;
   recentHeartRates: readonly MachineHeartRateSample[];
   previousGuidance?: MachineGuidance;
   completedShortWork?: CompletedShortWorkPhase;

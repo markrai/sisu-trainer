@@ -130,7 +130,8 @@ Current ProForm policy is deterministic and bounded:
 - HR at least 3 BPM above the target causes a one-level decrease when allowed;
 - HR at least 3 BPM below causes a one-level increase, with a 5 BPM deficit required at resistance 13+;
 - automatic guidance is clamped to resistance 1–15;
-- short intervals adjust the next repetition, medium intervals adjust at most once, and long intervals use evaluation cooldowns.
+- short intervals adjust the next repetition, medium intervals adjust at most once, and long intervals use evaluation cooldowns;
+- four-minute `vo2_priority` work gets its first legacy HR evaluation at 60 seconds, while longer aerobic work retains the 90-second default.
 
 The current architecture already separates the template, phase runtime, machine recommendation, and Bike Bridge actuation. It does **not** yet separate a relative physiological prescription from its resolved per-athlete target.
 
@@ -156,26 +157,27 @@ This separation is sound for equipment configuration, but learned physiological 
 
 The active assessment is the versioned `bike-submax-70rpm` protocol in `src/vo2Protocol.ts`, with estimation in `src/vo2Estimator.ts`. Earlier generic `vo2_evidence` support remains active for all workouts; it is not a competing estimator. The root legacy JavaScript is inactive.
 
-Protocol v1 requires a fresh chest-strap HR signal and the selected ProForm calibration profile. It does **not** require age/weight at preflight even though the final estimate does. The current calibration table in `src/machines/proformSmartPower10.ts::estimatedWattsAt70Rpm` resolves to:
+Protocol v1 requires a fresh chest-strap HR signal, explicit valid age/body weight, and the selected ProForm calibration profile. The current calibration table in `src/machines/proformSmartPower10.ts::estimatedWattsAt70Rpm` resolves to:
 
 - five-minute warm-up at resistance 1 / approximately 66 W / 70 RPM;
 - stage 1 at resistance 6 / approximately 86 W;
 - stage 2 at resistance 8 / approximately 108 W;
-- stage 3 at resistance 10 / approximately 123 W;
+- stage 3 at resistance 9 / approximately 114 W;
+- a reserved fourth attempt at resistance 10 / approximately 123 W when fewer than three prior stages are estimator-eligible;
 - five-minute cooldown at the warm-up load.
 
-The planner requests roughly +25 W steps but chooses the nearest unused calibrated resistance above the previous workload. Protocol v1 caps itself at resistance 10 and therefore currently resolves three work stages, even though the runtime supports up to four.
+The planner requests roughly +25 W steps, chooses unused increasing calibrated resistance, and reserves enough higher levels to support four attempts under the resistance-10 protocol ceiling. Collection normally stops after three estimator-eligible stages.
 
 Each stage is nominally three active minutes and may extend to four or five. `evaluateStageHr` compares two consecutive 60-second windows, requires at least 45 samples in each, and accepts the stage when the mean difference is at most 5 BPM. At five minutes an unsteady or sparsely sampled stage is rejected. Pause stops protocol advancement because the same active clock is used for phase, HR, and telemetry.
 
-The protocol holds prescribed resistance/cadence; it does not use the normal HR target controller. The user can choose “Limit Reached” or early cooldown. Although termination reason names include `submax_hr_ceiling` and `hr_lost`, protocol v1 has no authoritative HRmax and does not currently execute automatic HR-ceiling termination. `authoritativeHrMaxBpm` returns `undefined`, and evidence records `automatic_submax_hr_ceiling_available: false`.
+The protocol holds prescribed resistance/cadence; it does not use the normal HR target controller. The user can choose “Limit Reached” or early cooldown. Protocol v1 still has no authoritative measured HRmax (`authoritativeHrMaxBpm` returns `undefined`), but collection and estimation now share the estimator's existing age-predicted 85% submaximal validity ceiling. That prediction is frozen from explicit profile input and used as a conservative exclusion/termination policy, not represented as ground truth. A stable stage at or above the ceiling is retained diagnostically and ends further escalation with `submax_hr_ceiling`.
 
-Bike Bridge connectivity/automatic control is not required by preflight. That is useful for manual execution, but without measured watts or enough measured cadence the final workload source remains `prescribed_only` and the estimator rejects the stages as unverified. A user can therefore finish the protocol yet receive an insufficient-evidence result.
+Bike Bridge connectivity/automatic control is not required by preflight. At each stability decision the collector freezes the already-polled stage workload evidence. Without measured watts or enough measured cadence the source remains `prescribed_only`, the shared classifier marks the stable stage estimator-ineligible, and collection continues to the reserved fourth workload when safe. Exhausting all attempts ends with `insufficient_eligible_stages`; the protocol no longer reports normal collection completion with fewer than three estimator-eligible stages.
 
 At finalization, `src/workoutSummary.ts::generateWorkoutSummary` builds protocol evidence and calls `assessVo2` only for the standalone selector. The estimator:
 
 - requires explicit valid age (10–100) and weight (20–250 kg);
-- considers only protocol-accepted stages;
+- retains diagnostics for every attempted stage and estimates from protocol-accepted, estimator-eligible stages only;
 - requires performed workload to be verified by measured watts or by measured cadence near 70 RPM plus the calibration table;
 - requires at least three accepted and eligible stages;
 - requires stage HR at least 110 BPM and below 85% of Tanaka age-predicted HRmax;
@@ -876,7 +878,7 @@ This order differs from a direct “individualize BPM first” approach because 
 3. Should numeric HR disappear when only generic fallback exists, or must legacy targets remain visible with an explicit “generic” label?
 4. What constitutes an authoritative known HRmax, and how is its source/date captured? The assessment does not measure it.
 5. How should resting HR be collected (manual, dedicated resting protocol, or external source) before HR reserve is allowed?
-6. Should age/weight be required at assessment preflight rather than allowing a completed protocol with an insufficient estimate?
+6. Should a future protocol accept a provenance-bearing measured HRmax so the age-predicted ceiling is no longer the only available submaximal policy?
 7. What user-reported context, if any, should qualify illness, heat, sleep, medication, caffeine, or perceived exertion?
 8. What automatic progression limits per workout/week are acceptable for this product?
 

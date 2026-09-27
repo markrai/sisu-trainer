@@ -9,7 +9,12 @@ const REASON_PRIORITY = [
     "unsupported_protocol_version",
     "too_few_accepted_stages",
     "too_few_eligible_stages",
+    "stage_unstable_hr",
+    "insufficient_stage_hr_samples",
+    "stage_incomplete",
     "missing_stage_hr",
+    "cadence_outside_verified_range",
+    "insufficient_workload_samples",
     "unverified_performed_workload",
     "invalid_workload",
     "invalid_workload_progression",
@@ -107,15 +112,21 @@ export function vo2InsufficientDetail(result) {
                 VO2_MIN_ACCEPTED_STAGES +
                 " are required.");
         case "too_few_eligible_stages":
-            return ("Only " +
-                result.eligible_stage_count +
-                " of your stable work stages had usable heart-rate and workload data. At least " +
-                VO2_MIN_ELIGIBLE_STAGES +
-                " valid submaximal stages are required.");
+            return eligibleStageFailureDetail(result);
+        case "stage_unstable_hr":
+            return "One or more work stages did not reach stable heart rate within five minutes.";
+        case "insufficient_stage_hr_samples":
+            return "One or more work stages did not record enough heart-rate samples to verify stability.";
+        case "stage_incomplete":
+            return "One or more work stages ended before stability could be evaluated.";
         case "missing_stage_hr":
             return "One or more stages is missing a stable heart-rate reading.";
         case "unverified_performed_workload":
             return "Performed workload could not be validated from bike telemetry.";
+        case "insufficient_workload_samples":
+            return "There were not enough measured watts or cadence samples to verify performed workload.";
+        case "cadence_outside_verified_range":
+            return "Cadence was outside the verified range for using the bike's 70-RPM workload calibration.";
         case "invalid_workload":
         case "invalid_workload_progression":
             return "Stage workloads did not increase as required.";
@@ -138,6 +149,92 @@ export function vo2InsufficientDetail(result) {
 function fitQualityLine(result) {
     return result.fit_quality ? vo2FitQualityText(result.fit_quality) + "." : "";
 }
+function pointStageNumber(point, index) {
+    return Number.isInteger(point.stage_number) && point.stage_number > 0 ? point.stage_number : index + 1;
+}
+function stageReasonText(point, result) {
+    var _a;
+    const reasons = point.ineligibility_reasons;
+    if (reasons.includes("hr_above_submax_ceiling")) {
+        const ceiling = result.input_snapshot.predicted_hr_max != null
+            ? result.input_snapshot.predicted_hr_max * result.diagnostics.estimator_submax_hrmax_fraction
+            : undefined;
+        return ceiling != null
+            ? `steady heart rate reached ${Math.round((_a = point.steady_state_bpm) !== null && _a !== void 0 ? _a : ceiling)} bpm, at or above the ${Math.round(ceiling)} bpm submaximal ceiling`
+            : "steady heart rate was above the estimator's submaximal ceiling";
+    }
+    if (reasons.includes("hr_below_estimator_range")) {
+        return `steady heart rate was below the ${result.diagnostics.estimator_min_hr_bpm} bpm usable floor`;
+    }
+    if (reasons.includes("cadence_outside_verified_range")) {
+        return "cadence was outside the verified 70 ± 5 RPM range and measured watts were unavailable";
+    }
+    if (reasons.includes("insufficient_workload_samples")) {
+        return "there were not enough measured watts or cadence samples to verify performed workload";
+    }
+    if (reasons.includes("stage_unstable_hr"))
+        return "heart rate did not stabilize within five minutes";
+    if (reasons.includes("insufficient_stage_hr_samples"))
+        return "there were not enough heart-rate samples to verify stability";
+    if (reasons.includes("stage_incomplete"))
+        return "the stage ended before stability could be evaluated";
+    if (reasons.includes("missing_stage_hr"))
+        return "a steady heart-rate reading was missing";
+    if (reasons.includes("invalid_workload"))
+        return "the performed workload was invalid";
+    if (reasons.includes("unverified_performed_workload"))
+        return "performed workload could not be verified";
+    return reasons.length > 0 ? "it did not meet the estimator's validity policy" : "no exclusion was recorded";
+}
+function eligibleStageFailureDetail(result) {
+    var _a, _b;
+    let detail = result.accepted_stage_count +
+        " stage" +
+        (result.accepted_stage_count === 1 ? " reached" : "s reached") +
+        " stable heart rate, but only " +
+        result.eligible_stage_count +
+        (result.eligible_stage_count === 1 ? " was" : " were") +
+        " valid for VO₂ estimation. At least " +
+        VO2_MIN_ELIGIBLE_STAGES +
+        " valid submaximal stages are required.";
+    const rejected = (_b = (_a = result.diagnostics) === null || _a === void 0 ? void 0 : _a.stage_points) === null || _b === void 0 ? void 0 : _b.find((point) => point.protocol_accepted && !point.estimator_eligible);
+    if (rejected && result.diagnostics && result.input_snapshot) {
+        detail += ` Stage ${rejected.stage_number} was excluded because ${stageReasonText(rejected, result)}.`;
+    }
+    return detail;
+}
+function workloadSourceText(source) {
+    if (source === "measured_watts")
+        return "measured watts";
+    if (source === "calibrated_at_verified_cadence")
+        return "70-RPM calibration with verified cadence";
+    return "prescription only";
+}
+function passText(value) {
+    return value === undefined ? "not assessed" : value ? "passed" : "failed";
+}
+export function vo2StageDiagnostics(result) {
+    var _a, _b;
+    const points = ((_a = result.diagnostics.stage_points) === null || _a === void 0 ? void 0 : _a.length)
+        ? result.diagnostics.stage_points
+        : (_b = result.diagnostics.accepted_points) !== null && _b !== void 0 ? _b : [];
+    return points.map((point, index) => {
+        var _a, _b, _c;
+        const number = pointStageNumber(point, index);
+        const watts = (_a = point.watts) !== null && _a !== void 0 ? _a : point.calibrated_watts_at_70rpm;
+        const headline = `Stage ${number} · resistance ${(_b = point.prescribed_resistance) !== null && _b !== void 0 ? _b : "—"}` +
+            (watts != null ? ` · ${Math.round(watts)} W` : "");
+        const facts = [
+            `Workload: ${workloadSourceText(point.workload_source)}`,
+            `Steady HR: ${point.steady_state_bpm != null ? `${Math.round(point.steady_state_bpm)} bpm` : "unavailable"}`,
+            `HR stability: ${passText((_c = point.hr_stability_passed) !== null && _c !== void 0 ? _c : point.protocol_accepted)}`,
+            `Workload evidence: ${passText(point.workload_evidence_passed)}`,
+            `Submaximal HR: ${passText(point.submax_hr_eligible)}`,
+            point.estimator_eligible ? "Eligible" : `Ineligible — ${stageReasonText(point, result)}`,
+        ];
+        return { stageNumber: number, headline, detail: facts.join(" · "), eligible: point.estimator_eligible };
+    });
+}
 function workloadSourceLine(result) {
     var _a;
     const sources = new Set(((_a = result.diagnostics.eligible_points) !== null && _a !== void 0 ? _a : [])
@@ -159,6 +256,7 @@ export function vo2AssessmentPresentation(result) {
             body: "No VO₂ assessment was recorded for this workout.",
             detail: "",
             estimated: false,
+            stages: [],
         };
     }
     if (result.status === "estimated" && result.estimate_ml_kg_min != null && Number.isFinite(result.estimate_ml_kg_min)) {
@@ -174,13 +272,17 @@ export function vo2AssessmentPresentation(result) {
                 workloadSourceLine(result),
             detail: fitQualityLine(result),
             estimated: true,
+            stages: vo2StageDiagnostics(result),
         };
     }
     return {
         title: "Not enough data to estimate VO₂ max",
         valueText: "",
-        body: "We recorded the test, but there wasn't enough stable workload and heart-rate data to produce a reliable estimate.",
+        body: result.accepted_stage_count >= VO2_MIN_ACCEPTED_STAGES && result.eligible_stage_count < VO2_MIN_ELIGIBLE_STAGES
+            ? `${result.accepted_stage_count} stages reached stable heart rate, but only ${result.eligible_stage_count} were valid for VO₂ estimation.`
+            : "We recorded the test, but there wasn't enough stable workload and heart-rate data to produce a reliable estimate.",
         detail: vo2InsufficientDetail(result),
         estimated: false,
+        stages: vo2StageDiagnostics(result),
     };
 }

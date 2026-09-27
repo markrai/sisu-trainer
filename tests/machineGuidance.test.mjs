@@ -5,6 +5,7 @@ import {
   clampAutomaticResistance,
   getEstimatedWattsAt70Rpm,
   getProFormSmartPower10Guidance,
+  VO2_PRIORITY_INITIAL_EVALUATION_SECONDS,
 } from "../dist/machines/proformSmartPower10.js";
 import { createMachineGuidanceState, getMachineGuidance } from "../dist/machines/guidance.js";
 import { getMachineDefinition, listMachinesForActivity } from "../dist/machines/registry.js";
@@ -237,6 +238,80 @@ test("long intervals stabilize for 90 seconds and enforce a 60-second cooldown",
     result.state
   );
   assert.equal(result.guidance.resistance, 9);
+});
+
+test("four-minute VO2-priority work evaluates at 60 seconds when HR is clearly low", () => {
+  let result = getProFormSmartPower10Guidance(
+    context({
+      intent: "vo2_priority",
+      phaseDurationSeconds: 240,
+      personalizedTiming: { initialEvaluationSeconds: 100 },
+    }),
+    createMachineGuidanceState()
+  );
+  assert.equal(result.guidance.resistance, 8);
+  assert.equal(result.workPhaseStarted.initialEvaluationWaitSeconds, VO2_PRIORITY_INITIAL_EVALUATION_SECONDS);
+  result = getProFormSmartPower10Guidance(
+    context({ intent: "vo2_priority", phaseDurationSeconds: 240, phaseElapsedSeconds: 59, recentHeartRates: recent(130) }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 8);
+  result = getProFormSmartPower10Guidance(
+    context({ intent: "vo2_priority", phaseDurationSeconds: 240, phaseElapsedSeconds: 60, recentHeartRates: recent(130) }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 9);
+  assert.equal(result.guidance.action, "increase");
+
+  result = getProFormSmartPower10Guidance(
+    context({ intent: "vo2_priority", phaseDurationSeconds: 240, phaseElapsedSeconds: 119, recentHeartRates: recent(130) }),
+    result.state
+  );
+  assert.equal(result.guidance.resistance, 9);
+  assert.equal(result.guidance.action, "hold");
+});
+
+test("longer aerobic work retains 90-second stabilization and learned start keeps precedence", () => {
+  let aerobic = getProFormSmartPower10Guidance(
+    context({ intent: "aerobic_volume", phaseDurationSeconds: 600 }),
+    createMachineGuidanceState()
+  );
+  assert.equal(aerobic.workPhaseStarted.initialEvaluationWaitSeconds, 90);
+  aerobic = getProFormSmartPower10Guidance(
+    context({ intent: "aerobic_volume", phaseDurationSeconds: 600, phaseElapsedSeconds: 60, recentHeartRates: recent(130) }),
+    aerobic.state
+  );
+  assert.equal(aerobic.guidance.resistance, 8);
+
+  const learned = getProFormSmartPower10Guidance(
+    context({ intent: "vo2_priority", phaseDurationSeconds: 240, learnedStartingResistance: 10 }),
+    createMachineGuidanceState()
+  );
+  assert.equal(learned.guidance.resistance, 10);
+  assert.match(learned.guidance.reason, /Learned starting resistance/);
+  assert.equal(learned.workPhaseStarted.initialEvaluationWaitSeconds, 60);
+});
+
+test("shadow prescription and machine-prediction values have no controller input", async () => {
+  const runtimeSource = await readFile(new URL("../src/machines/runtime.ts", import.meta.url), "utf8");
+  assert.equal(runtimeSource.includes("candidatePower"), false);
+  assert.equal(runtimeSource.includes("shadowSuggestedResistance"), false);
+  assert.equal(runtimeSource.includes("shadowPrescription"), false);
+
+  const baseline = getProFormSmartPower10Guidance(
+    context({ intent: "vo2_priority", phaseDurationSeconds: 240 }),
+    createMachineGuidanceState()
+  );
+  const forged = getProFormSmartPower10Guidance(
+    context({
+      intent: "vo2_priority",
+      phaseDurationSeconds: 240,
+      personalizationCandidateWatts: 999,
+      shadowSuggestedResistance: 15,
+    }),
+    createMachineGuidanceState()
+  );
+  assert.deepEqual(forged.guidance, baseline.guidance);
 });
 
 test("missing HR or targets does not consume work evaluations", () => {

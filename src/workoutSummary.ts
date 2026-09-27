@@ -235,7 +235,7 @@ async function generateWorkoutSummary(
   );
 
   if (isVo2WorkoutSelector(day)) {
-    const profile = options?.vo2Profile ?? readExplicitVo2ProfileInputs();
+    const profile = options?.vo2Profile ?? session.vo2ProtocolRuntime?.assessment_profile ?? readExplicitVo2ProfileInputs();
     summary.vo2_assessment = assessVo2(summary.vo2_evidence, profile);
   } else if (
     session.activity === "bike" &&

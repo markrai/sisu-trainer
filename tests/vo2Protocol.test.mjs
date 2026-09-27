@@ -63,6 +63,7 @@ import { updateMachineGuidanceRuntime, resetMachineGuidanceRuntime } from "../di
 import { setSelectedMachine } from "../dist/machines/selection.js";
 import { VO2_EVIDENCE_SCHEMA_VERSION } from "../dist/types.js";
 import { buildVo2Evidence } from "../dist/vo2Evidence.js";
+import { assessVo2 } from "../dist/vo2Estimator.js";
 import {
   getAllWorkoutSummaries,
   getHrSamples,
@@ -104,6 +105,51 @@ function stageHr(stageStart, minute2Bpm, minute3Bpm) {
   ];
 }
 
+function stageTelemetry(stageStart, durationSec, watts, rpm = 70) {
+  const end = stageStart + durationSec;
+  const samples = [];
+  for (let t = end - 119; t <= end; t++) samples.push({ timestamp_sec: t, rpm, watts });
+  return samples;
+}
+
+const assessmentProfile = { age_years: 40, weight_kg: 80 };
+
+function completeStableStage(runtime, bpm, options = {}) {
+  const open = runtime.stages.find((stage) => stage.status === "open");
+  assert.ok(open);
+  const planned = runtime.plan.workloads[open.workloadIndex];
+  const telemetrySamples = options.telemetrySamples ?? stageTelemetry(
+    open.active_start_sec,
+    180,
+    options.includeWatts === false ? undefined : planned.calibrated_watts_at_70rpm,
+    options.rpm ?? 70
+  );
+  return advanceVo2Protocol(runtime, {
+    elapsedSec: open.active_start_sec + 180,
+    paused: false,
+    samples: stageHr(open.active_start_sec, bpm, bpm),
+    telemetrySamples,
+  });
+}
+
+function assessmentFromRuntime(runtime) {
+  const protocol = buildVo2ProtocolEvidence(runtime);
+  return assessVo2(
+    {
+      schema_version: 1,
+      active_duration_sec: runtime.cooldown_start_sec ?? 0,
+      paused_duration_sec: 0,
+      work_end_active_sec: runtime.cooldown_start_sec,
+      cooldown_start_active_sec: runtime.cooldown_start_sec,
+      early_cooldown: false,
+      phases: [],
+      hr: { source: "ble_chest_strap", sample_count: 360 },
+      protocol,
+    },
+    assessmentProfile
+  );
+}
+
 function freshHrInput(overrides = {}) {
   const now = Date.now();
   return {
@@ -112,6 +158,7 @@ function freshHrInput(overrides = {}) {
     lastBpmUpdateTime: now,
     now,
     activityMachineId: "proform-smart-power-10",
+    profile: { age_years: 40, weight_kg: 80 },
     ...overrides,
   };
 }
@@ -145,7 +192,7 @@ test("standalone selector maps to the versioned bike protocol", () => {
   assert.equal(getPlan().Monday, monday);
 });
 
-test("preflight requires recent HR, calibrated bike profile, and three workloads", () => {
+test("preflight requires recent HR, explicit profile, calibrated bike profile, and three workloads", () => {
   const ok = evaluateVo2Preflight(freshHrInput());
   assert.equal(ok.ok, true);
 
@@ -155,6 +202,10 @@ test("preflight requires recent HR, calibrated bike profile, and three workloads
 
   const stale = evaluateVo2Preflight(freshHrInput({ lastBpmUpdateTime: Date.now() - 4000 }));
   assert.equal(stale.ok, false);
+
+  const noProfile = evaluateVo2Preflight(freshHrInput({ profile: undefined }));
+  assert.equal(noProfile.ok, false);
+  assert.match(noProfile.message, /Settings → Profile/);
 
   const noMachine = evaluateVo2Preflight(freshHrInput({ activityMachineId: undefined }));
   assert.equal(noMachine.ok, false);
@@ -201,6 +252,114 @@ test("nominal watts resolve through canonical calibration and strictly increase"
     assert.equal(row.calibrated_watts_at_70rpm, getEstimatedWattsAt70Rpm(row.prescribed_resistance));
     lastWatts = row.calibrated_watts_at_70rpm;
   }
+});
+
+test("three stable estimator-eligible stages complete collection and estimate", () => {
+  const plan = buildVo2ProtocolPlan();
+  assert.equal(plan.workloads.length, 4);
+  assert.deepEqual(plan.workloads.map((stage) => stage.prescribed_resistance), [6, 8, 9, 10]);
+  let runtime = createVo2ProtocolRuntime(plan, assessmentProfile);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  for (let i = 0; i < 3; i++) {
+    const open = runtime.stages.find((stage) => stage.status === "open");
+    const watts = runtime.plan.workloads[open.workloadIndex].calibrated_watts_at_70rpm;
+    runtime = completeStableStage(runtime, 77 + 0.5 * watts);
+  }
+  assert.equal(runtime.segment, "cooldown");
+  assert.equal(runtime.termination.reason, "protocol_complete");
+  assert.equal(runtime.stages.filter((stage) => stage.status === "accepted").length, 3);
+  const assessment = assessmentFromRuntime(runtime);
+  assert.equal(assessment.status, "estimated");
+  assert.equal(assessment.eligible_stage_count, 3);
+});
+
+test("three stable stages with only two eligible continue to the reserved fourth workload", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan, assessmentProfile);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = completeStableStage(runtime, 120);
+  runtime = completeStableStage(runtime, 125, { telemetrySamples: [] });
+  runtime = completeStableStage(runtime, 134);
+  assert.equal(runtime.segment, "work");
+  assert.equal(runtime.stages.length, 4);
+  assert.equal(runtime.stages[3].status, "open");
+  assert.equal(plan.workloads[runtime.stages[3].workloadIndex].prescribed_resistance, 10);
+
+  runtime = completeStableStage(runtime, 138.5);
+  assert.equal(runtime.segment, "cooldown");
+  assert.equal(runtime.termination.reason, "protocol_complete");
+  const assessment = assessmentFromRuntime(runtime);
+  assert.equal(assessment.eligible_stage_count, 3);
+  assert.equal(assessment.diagnostics.stage_points[1].estimator_eligible, false);
+  assert.equal(
+    assessment.diagnostics.stage_points[1].ineligibility_reasons.includes("insufficient_workload_samples"),
+    true
+  );
+});
+
+test("collection terminates explicitly when four attempts still yield fewer than three eligible stages", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan, assessmentProfile);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = completeStableStage(runtime, 120);
+  runtime = completeStableStage(runtime, 125, { telemetrySamples: [] });
+  runtime = completeStableStage(runtime, 134);
+  runtime = completeStableStage(runtime, 138.5, { telemetrySamples: [] });
+  assert.equal(runtime.segment, "cooldown");
+  assert.equal(runtime.termination.reason, "insufficient_eligible_stages");
+  const assessment = assessmentFromRuntime(runtime);
+  assert.equal(assessment.accepted_stage_count, 4);
+  assert.equal(assessment.eligible_stage_count, 2);
+  assert.equal(assessment.status, "insufficient_evidence");
+});
+
+test("stable stage at the predicted submaximal ceiling stops safely with its reason preserved", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan, assessmentProfile);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = completeStableStage(runtime, 120);
+  runtime = completeStableStage(runtime, 131);
+  runtime = completeStableStage(runtime, 153);
+  assert.equal(runtime.segment, "cooldown");
+  assert.equal(runtime.termination.reason, "submax_hr_ceiling");
+  assert.equal(runtime.stages.length, 3);
+  assert.equal(buildVo2ProtocolEvidence(runtime).automatic_submax_hr_ceiling_available, true);
+  const assessment = assessmentFromRuntime(runtime);
+  assert.equal(assessment.eligible_stage_count, 2);
+  assert.equal(assessment.diagnostics.stage_points[2].hr_stability_passed, true);
+  assert.equal(assessment.diagnostics.stage_points[2].submax_hr_eligible, false);
+  assert.deepEqual(assessment.diagnostics.stage_points[2].ineligibility_reasons, ["hr_above_submax_ceiling"]);
+});
+
+test("cadence-qualified workload rejection is explicit and does not count as collection success", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan, assessmentProfile);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = completeStableStage(runtime, 120);
+  runtime = completeStableStage(runtime, 131, { includeWatts: false, rpm: 90 });
+  runtime = completeStableStage(runtime, 134);
+  assert.equal(runtime.segment, "work");
+  const attempted = assessmentFromRuntime({
+    ...runtime,
+    segment: "cooldown",
+    cooldown_start_sec: runtime.stages[2].active_end_sec,
+    termination: { reason: "insufficient_eligible_stages" },
+  });
+  const rejected = attempted.diagnostics.stage_points[1];
+  assert.equal(rejected.hr_stability_passed, true);
+  assert.equal(rejected.workload_evidence_passed, false);
+  assert.equal(rejected.ineligibility_reasons.includes("cadence_outside_verified_range"), true);
+});
+
+test("protocol_complete always implies at least three stages under the estimator's shared eligibility policy", () => {
+  const plan = buildVo2ProtocolPlan();
+  let runtime = createVo2ProtocolRuntime(plan, assessmentProfile);
+  runtime = advanceVo2Protocol(runtime, { elapsedSec: 300, paused: false, samples: [] });
+  runtime = completeStableStage(runtime, 120);
+  runtime = completeStableStage(runtime, 131);
+  runtime = completeStableStage(runtime, 134);
+  assert.equal(runtime.termination.reason, "protocol_complete");
+  assert.ok(assessmentFromRuntime(runtime).eligible_stage_count >= VO2_TARGET_WORK_STAGES);
 });
 
 test("duplicate calibrated resistance is not emitted twice and no extrapolation occurs", () => {

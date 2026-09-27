@@ -239,6 +239,7 @@ export function updateMachineGuidanceRuntime(
       heartRateBpm: input.heartRateBpm,
       targetHeartRateMin: input.targetHeartRateMin,
       targetHeartRateMax: input.targetHeartRateMax,
+      intent: input.intent,
       recentHeartRates: runtime.recentHeartRates,
       previousGuidance: runtime.previousGuidance,
       completedShortWork,

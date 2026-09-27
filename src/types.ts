@@ -833,6 +833,7 @@ export type Vo2ProtocolStageStatus =
 export type Vo2ProtocolTerminationReason =
   | "protocol_complete"
   | "submax_hr_ceiling"
+  | "insufficient_eligible_stages"
   | "early_cooldown"
   | "limit_reached"
   | "user_cancelled"
@@ -911,8 +912,13 @@ export type Vo2AssessmentReasonCode =
   | "too_few_accepted_stages"
   | "too_few_eligible_stages"
   | "missing_stage_hr"
+  | "stage_unstable_hr"
+  | "insufficient_stage_hr_samples"
+  | "stage_incomplete"
   | "invalid_workload"
   | "unverified_performed_workload"
+  | "insufficient_workload_samples"
+  | "cadence_outside_verified_range"
   | "invalid_workload_progression"
   | "invalid_hr_progression"
   | "hr_below_estimator_range"
@@ -945,9 +951,16 @@ export interface Vo2ProtocolStageWorkloadEvidence {
 
 export interface Vo2AssessmentPoint {
   stage_id: string;
+  stage_number: number;
+  protocol_stage_status: Vo2ProtocolStageStatus;
   protocol_accepted: boolean;
+  hr_stability_passed: boolean;
+  workload_evidence_passed: boolean;
+  submax_hr_eligible?: boolean;
   estimator_eligible: boolean;
   ineligibility_reasons: Vo2AssessmentReasonCode[];
+  prescribed_resistance: number;
+  requested_watts?: number;
   workload_source?: Vo2WorkloadSource;
   watts?: number;
   calibrated_watts_at_70rpm?: number;
@@ -970,6 +983,8 @@ export interface Vo2AssessmentInputSnapshot {
 }
 
 export interface Vo2AssessmentDiagnostics {
+  /** Every attempted work stage, including stages that never stabilized. */
+  stage_points: Vo2AssessmentPoint[];
   accepted_points: Vo2AssessmentPoint[];
   eligible_points: Vo2AssessmentPoint[];
   slope?: number;

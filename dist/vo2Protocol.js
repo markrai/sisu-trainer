@@ -3,7 +3,9 @@ export { VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION } from "./types.js";
 import { getEstimatedWattsAt70Rpm, AUTOMATIC_RESISTANCE_MIN, AUTOMATIC_RESISTANCE_MAX } from "./machines/proformSmartPower10.js";
 import { getMachineDefinition } from "./machines/registry.js";
 import { getSelectedMachineId } from "./machines/selection.js";
+import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { summarizeVo2StageWorkload, VO2_PRESCRIBED_CADENCE_RPM } from "./vo2Workload.js";
+import { VO2_AGE_YEARS_MAX, VO2_AGE_YEARS_MIN, VO2_WEIGHT_KG_MAX, VO2_WEIGHT_KG_MIN, classifyVo2ProtocolStage, predictedHrMaxBpm, } from "./vo2Estimator.js";
 export { VO2_PRESCRIBED_CADENCE_RPM };
 export const VO2_WORKOUT_SELECTOR_ID = "VO2MaxEstimation";
 export const VO2_WORKOUT_LABEL = "VO2 Max Estimation";
@@ -27,6 +29,7 @@ export const VO2_EVAL_RELATIVE_SECONDS = [0, 180, 240, 300];
 const VO2_TERMINATION_REASONS = [
     "protocol_complete",
     "submax_hr_ceiling",
+    "insufficient_eligible_stages",
     "early_cooldown",
     "limit_reached",
     "user_cancelled",
@@ -96,13 +99,20 @@ export function resolveProtocolWorkloads(getWatts = getEstimatedWattsAt70Rpm, ma
     const used = new Set([warmup.prescribed_resistance]);
     const resolved = [];
     let lastWatts = warmup.calibrated_watts_at_70rpm;
-    while (resolved.length < maxStages) {
+    const targetCount = Math.min(maxStages, Math.max(0, calibrated.length - 1));
+    while (resolved.length < targetCount) {
         const requested = lastWatts + VO2_NOMINAL_WATT_STEP;
-        const next = resolveNearestCalibratedWorkload(requested, {
-            getWatts,
-            usedResistances: used,
-            minWattsExclusive: lastWatts,
+        const remainingAfterSelection = targetCount - resolved.length - 1;
+        const increasing = calibrated.filter((entry) => !used.has(entry.prescribed_resistance) && entry.calibrated_watts_at_70rpm > lastWatts);
+        const selectable = increasing.slice(0, Math.max(0, increasing.length - remainingAfterSelection));
+        selectable.sort((a, b) => {
+            const delta = Math.abs(a.calibrated_watts_at_70rpm - requested) - Math.abs(b.calibrated_watts_at_70rpm - requested);
+            return delta !== 0 ? delta : a.prescribed_resistance - b.prescribed_resistance;
         });
+        const selected = selectable[0];
+        const next = selected
+            ? { ...selected, requested_watts: requested }
+            : undefined;
         if (!next)
             break;
         used.add(next.prescribed_resistance);
@@ -130,7 +140,7 @@ export function buildVo2ProtocolPlan(getWatts = getEstimatedWattsAt70Rpm) {
         workloads,
     };
 }
-export function createVo2ProtocolRuntime(plan) {
+export function createVo2ProtocolRuntime(plan, assessmentProfile) {
     return {
         plan,
         segment: "warmup",
@@ -138,10 +148,11 @@ export function createVo2ProtocolRuntime(plan) {
         cooldown_start_sec: null,
         start_announced: false,
         upcoming_warmup_announced: false,
+        ...(assessmentProfile ? { assessment_profile: { ...assessmentProfile } } : {}),
     };
 }
 export function evaluateVo2Preflight(input) {
-    var _a;
+    var _a, _b, _c;
     const now = (_a = input.now) !== null && _a !== void 0 ? _a : Date.now();
     const hrFresh = input.hrDeviceConnected &&
         input.liveBpm != null &&
@@ -159,11 +170,19 @@ export function evaluateVo2Preflight(input) {
     if (!machine || machine.activity !== "bike" || machine.id !== VO2_CALIBRATION_MACHINE_ID) {
         return { ok: false, reason: "no_machine", message: "No calibrated 70 RPM bike profile selected" };
     }
+    const age = (_b = input.profile) === null || _b === void 0 ? void 0 : _b.age_years;
+    const weight = (_c = input.profile) === null || _c === void 0 ? void 0 : _c.weight_kg;
+    if (!(typeof age === "number" && Number.isFinite(age) && age >= VO2_AGE_YEARS_MIN && age <= VO2_AGE_YEARS_MAX)) {
+        return { ok: false, reason: "profile_required", message: "Add a valid age in Settings → Profile before starting the test" };
+    }
+    if (!(typeof weight === "number" && Number.isFinite(weight) && weight >= VO2_WEIGHT_KG_MIN && weight <= VO2_WEIGHT_KG_MAX)) {
+        return { ok: false, reason: "profile_required", message: "Add a valid body weight in Settings → Profile before starting the test" };
+    }
     const plan = buildVo2ProtocolPlan(input.getWatts);
     if (!plan) {
         return { ok: false, reason: "insufficient_workloads", message: "Not enough calibrated workload levels for this test" };
     }
-    return { ok: true, plan };
+    return { ok: true, plan, assessmentProfile: { age_years: age, weight_kg: weight } };
 }
 export function evaluateVo2PreflightForUi(now = Date.now()) {
     return evaluateVo2Preflight({
@@ -172,6 +191,7 @@ export function evaluateVo2PreflightForUi(now = Date.now()) {
         lastBpmUpdateTime: window.lastBpmUpdateTime,
         now,
         activityMachineId: getSelectedMachineId("bike"),
+        profile: readExplicitVo2ProfileInputs(),
     });
 }
 function validHrSamplesInWindow(samples, startInclusive, endInclusive) {
@@ -246,9 +266,6 @@ export function evaluateStageHr(samples, stageStartSec, elapsedSec) {
 function cloneRuntime(runtime) {
     return JSON.parse(JSON.stringify(runtime));
 }
-function acceptedCount(runtime) {
-    return runtime.stages.filter((stage) => stage.status === "accepted").length;
-}
 function openStage(runtime) {
     return runtime.stages.find((stage) => stage.status === "open");
 }
@@ -268,8 +285,6 @@ function startNextStage(runtime, elapsedSec) {
     const index = runtime.stages.length;
     if (index >= runtime.plan.workloads.length || index >= VO2_MAX_WORK_STAGES)
         return false;
-    if (index >= VO2_TARGET_WORK_STAGES && acceptedCount(runtime) >= VO2_TARGET_WORK_STAGES)
-        return false;
     runtime.segment = "work";
     runtime.stages.push({
         stage_id: `vo2-stage:${index + 1}`,
@@ -284,7 +299,7 @@ function startNextStage(runtime, elapsedSec) {
     });
     return true;
 }
-function closeOpenStage(runtime, elapsedSec, status, hr) {
+function closeOpenStage(runtime, elapsedSec, status, hr, workload) {
     const open = openStage(runtime);
     if (!open)
         return;
@@ -292,6 +307,58 @@ function closeOpenStage(runtime, elapsedSec, status, hr) {
     open.status = status;
     if (hr)
         open.hr = hr;
+    if (workload)
+        open.workload = workload;
+}
+function evidenceForRuntimeStage(runtime, stage) {
+    var _a;
+    const workload = runtime.plan.workloads[stage.workloadIndex];
+    if (!workload)
+        return undefined;
+    const end = (_a = stage.active_end_sec) !== null && _a !== void 0 ? _a : stage.active_start_sec;
+    const evidence = {
+        stage_id: stage.stage_id,
+        active_start_sec: stage.active_start_sec,
+        active_end_sec: end,
+        requested_watts: workload.requested_watts,
+        prescribed_resistance: workload.prescribed_resistance,
+        calibrated_watts_at_70rpm: workload.calibrated_watts_at_70rpm,
+        status: stage.status === "open" ? "incomplete" : stage.status,
+        nominal_duration_sec: VO2_NOMINAL_STAGE_DURATION_SEC,
+        actual_duration_sec: Math.max(0, end - stage.active_start_sec),
+    };
+    if (stage.hr)
+        evidence.hr = stage.hr;
+    if (stage.workload)
+        evidence.workload = stage.workload;
+    return evidence;
+}
+function runtimePredictedHrMax(runtime) {
+    var _a;
+    const age = (_a = runtime.assessment_profile) === null || _a === void 0 ? void 0 : _a.age_years;
+    if (!(typeof age === "number" && Number.isFinite(age) && age >= VO2_AGE_YEARS_MIN && age <= VO2_AGE_YEARS_MAX)) {
+        return undefined;
+    }
+    return predictedHrMaxBpm(age);
+}
+function runtimeStagePoint(runtime, stage) {
+    const evidence = evidenceForRuntimeStage(runtime, stage);
+    return evidence
+        ? classifyVo2ProtocolStage(evidence, runtimePredictedHrMax(runtime), stage.workloadIndex + 1)
+        : undefined;
+}
+function estimatorEligibleCount(runtime) {
+    return runtime.stages.filter((stage) => { var _a; return ((_a = runtimeStagePoint(runtime, stage)) === null || _a === void 0 ? void 0 : _a.estimator_eligible) === true; }).length;
+}
+function workloadAtStageClose(runtime, stage, elapsedSec, telemetrySamples) {
+    const planned = runtime.plan.workloads[stage.workloadIndex];
+    if (!planned)
+        return undefined;
+    return summarizeVo2StageWorkload({
+        active_start_sec: stage.active_start_sec,
+        active_end_sec: Math.max(stage.active_start_sec, elapsedSec),
+        calibrated_watts_at_70rpm: planned.calibrated_watts_at_70rpm,
+    }, telemetrySamples, runtime.plan.prescribed_cadence_rpm);
 }
 function evalAtRelative(relative) {
     if (relative >= VO2_MAX_STAGE_DURATION_SEC)
@@ -325,6 +392,7 @@ export function isStaleVo2ProtocolTick(runtime, elapsedSec) {
     return false;
 }
 export function advanceVo2Protocol(runtime, input) {
+    var _a, _b;
     const next = cloneRuntime(runtime);
     const elapsed = Math.max(0, Math.floor(input.elapsedSec));
     if (!input.paused && !next.start_announced)
@@ -373,7 +441,9 @@ export function advanceVo2Protocol(runtime, input) {
     if (next.segment === "work") {
         const open = openStage(next);
         if (!open) {
-            enterCooldown(next, elapsed, "protocol_complete");
+            enterCooldown(next, elapsed, estimatorEligibleCount(next) >= VO2_TARGET_WORK_STAGES
+                ? "protocol_complete"
+                : "insufficient_eligible_stages");
             return next;
         }
         const relative = elapsed - open.active_start_sec;
@@ -398,16 +468,25 @@ export function advanceVo2Protocol(runtime, input) {
             if (evaluation.steady_state_bpm != null)
                 hr.steady_state_bpm = evaluation.steady_state_bpm;
             if (evaluation.steady) {
-                closeOpenStage(next, elapsed, "accepted", hr);
-                if (!startNextStage(next, elapsed)) {
+                const workload = workloadAtStageClose(next, open, elapsed, (_a = input.telemetrySamples) !== null && _a !== void 0 ? _a : []);
+                closeOpenStage(next, elapsed, "accepted", hr, workload);
+                const point = runtimeStagePoint(next, open);
+                if (point === null || point === void 0 ? void 0 : point.ineligibility_reasons.includes("hr_above_submax_ceiling")) {
+                    enterCooldown(next, elapsed, "submax_hr_ceiling");
+                }
+                else if (estimatorEligibleCount(next) >= VO2_TARGET_WORK_STAGES) {
                     enterCooldown(next, elapsed, "protocol_complete");
+                }
+                else if (!startNextStage(next, elapsed)) {
+                    enterCooldown(next, elapsed, "insufficient_eligible_stages");
                 }
             }
             else if (evalAt >= VO2_MAX_STAGE_DURATION_SEC) {
                 const status = evaluation.coverage_ok ? "unstable_hr" : "insufficient_hr";
-                closeOpenStage(next, elapsed, status, hr);
+                const workload = workloadAtStageClose(next, open, elapsed, (_b = input.telemetrySamples) !== null && _b !== void 0 ? _b : []);
+                closeOpenStage(next, elapsed, status, hr, workload);
                 if (!startNextStage(next, elapsed)) {
-                    enterCooldown(next, elapsed, "protocol_complete");
+                    enterCooldown(next, elapsed, "insufficient_eligible_stages");
                 }
             }
             else {
@@ -591,6 +670,32 @@ function isProtocolResistance(value) {
 function isBooleanFlag(value) {
     return typeof value === "boolean";
 }
+function isValidStageWorkload(value) {
+    if (!value || typeof value !== "object")
+        return false;
+    const workload = value;
+    if (!["measured_watts", "calibrated_at_verified_cadence", "prescribed_only"].includes(workload.source)) {
+        return false;
+    }
+    if (!isPositiveFinite(workload.calibrated_watts_at_70rpm))
+        return false;
+    if (workload.estimator_watts != null && !isPositiveFinite(workload.estimator_watts))
+        return false;
+    if (workload.measured_watts_median != null && !isPositiveFinite(workload.measured_watts_median))
+        return false;
+    if (workload.measured_cadence_median_rpm != null && !isPositiveFinite(workload.measured_cadence_median_rpm)) {
+        return false;
+    }
+    if (!Number.isInteger(workload.measured_watts_sample_count) || workload.measured_watts_sample_count < 0)
+        return false;
+    if (!Number.isInteger(workload.measured_cadence_sample_count) || workload.measured_cadence_sample_count < 0)
+        return false;
+    if (workload.cadence_in_band_ratio != null &&
+        (!Number.isFinite(workload.cadence_in_band_ratio) || workload.cadence_in_band_ratio < 0 || workload.cadence_in_band_ratio > 1)) {
+        return false;
+    }
+    return isBooleanFlag(workload.cadence_measured) && isBooleanFlag(workload.watts_measured);
+}
 function isEvalRelativeSec(value) {
     return VO2_EVAL_RELATIVE_SECONDS.some((allowed) => allowed === value);
 }
@@ -654,6 +759,17 @@ export function isValidVo2ProtocolRuntime(value) {
         return false;
     if (!isBooleanFlag(runtime.start_announced) || !isBooleanFlag(runtime.upcoming_warmup_announced))
         return false;
+    if (runtime.assessment_profile != null) {
+        if (typeof runtime.assessment_profile !== "object")
+            return false;
+        const age = runtime.assessment_profile.age_years;
+        const weight = runtime.assessment_profile.weight_kg;
+        if (age != null && !(Number.isFinite(age) && age >= VO2_AGE_YEARS_MIN && age <= VO2_AGE_YEARS_MAX))
+            return false;
+        if (weight != null && !(Number.isFinite(weight) && weight >= VO2_WEIGHT_KG_MIN && weight <= VO2_WEIGHT_KG_MAX)) {
+            return false;
+        }
+    }
     if (runtime.termination != null) {
         if (typeof runtime.termination !== "object" || !isTerminationReason(runtime.termination.reason))
             return false;
@@ -684,6 +800,8 @@ export function isValidVo2ProtocolRuntime(value) {
             return false;
         if (!["accepted", "unstable_hr", "insufficient_hr", "incomplete", "open"].includes(stage.status))
             return false;
+        if (stage.workload != null && !isValidStageWorkload(stage.workload))
+            return false;
     }
     return true;
 }
@@ -693,24 +811,10 @@ export function buildVo2ProtocolEvidence(runtime, telemetrySamples = []) {
         return undefined;
     const stages = [];
     for (const stage of runtime.stages) {
-        const workload = runtime.plan.workloads[stage.workloadIndex];
-        if (!isValidVo2ResolvedWorkload(workload))
+        const evidence = evidenceForRuntimeStage(runtime, stage);
+        if (!evidence)
             return undefined;
-        const end = (_a = stage.active_end_sec) !== null && _a !== void 0 ? _a : stage.active_start_sec;
-        const evidence = {
-            stage_id: stage.stage_id,
-            active_start_sec: stage.active_start_sec,
-            active_end_sec: end,
-            requested_watts: workload.requested_watts,
-            prescribed_resistance: workload.prescribed_resistance,
-            calibrated_watts_at_70rpm: workload.calibrated_watts_at_70rpm,
-            status: stage.status === "open" ? "incomplete" : stage.status,
-            nominal_duration_sec: VO2_NOMINAL_STAGE_DURATION_SEC,
-            actual_duration_sec: Math.max(0, end - stage.active_start_sec),
-        };
-        if (stage.hr)
-            evidence.hr = stage.hr;
-        evidence.workload = summarizeVo2StageWorkload(evidence, telemetrySamples, runtime.plan.prescribed_cadence_rpm);
+        (_a = evidence.workload) !== null && _a !== void 0 ? _a : (evidence.workload = summarizeVo2StageWorkload(evidence, telemetrySamples, runtime.plan.prescribed_cadence_rpm));
         if (evidence.prescribed_resistance > VO2_PROTOCOL_MAX_RESISTANCE)
             return undefined;
         stages.push(evidence);
@@ -723,7 +827,7 @@ export function buildVo2ProtocolEvidence(runtime, telemetrySamples = []) {
         termination: {
             reason: (_c = (_b = runtime.termination) === null || _b === void 0 ? void 0 : _b.reason) !== null && _c !== void 0 ? _c : "other",
         },
-        automatic_submax_hr_ceiling_available: false,
+        automatic_submax_hr_ceiling_available: runtimePredictedHrMax(runtime) != null,
     };
 }
 export function parseVo2ProtocolRuntime(raw) {

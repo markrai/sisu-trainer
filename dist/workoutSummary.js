@@ -104,7 +104,7 @@ function validateSummary(summary) {
         console.error("Workout summary validation errors:", errors);
 }
 async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, options) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
     const durationMs = endedAt - startedAt;
     const durationMinutesCheck = Math.round(durationMs / (1000 * 60));
     const MAX_DURATION_MINUTES = 1440;
@@ -192,7 +192,7 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
             : undefined,
     }));
     if (isVo2WorkoutSelector(day)) {
-        const profile = (_k = options === null || options === void 0 ? void 0 : options.vo2Profile) !== null && _k !== void 0 ? _k : readExplicitVo2ProfileInputs();
+        const profile = (_m = (_k = options === null || options === void 0 ? void 0 : options.vo2Profile) !== null && _k !== void 0 ? _k : (_l = session.vo2ProtocolRuntime) === null || _l === void 0 ? void 0 : _l.assessment_profile) !== null && _m !== void 0 ? _m : readExplicitVo2ProfileInputs();
         summary.vo2_assessment = assessVo2(summary.vo2_evidence, profile);
     }
     else if (session.activity === "bike" &&
