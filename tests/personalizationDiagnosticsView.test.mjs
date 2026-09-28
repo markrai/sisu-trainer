@@ -357,6 +357,8 @@ test("diagnostic export is deterministic, provenance-preserving, and excludes pr
   assert.equal(first, personalizationDiagnosticsExportJson(model));
   assert.deepEqual(model.records, before);
   const exported = createPersonalizationDiagnosticsExport(model);
+  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.aggregate.schemaVersion, 2);
   assert.equal(exported.characterizationRecords[0].calibrationWorkloadProvenance, "measured_watts");
   assert.equal(exported.characterizationRecords[0].phases[0].candidatePower.minWatts, 110);
   assert.equal(exported.characterizationRecords[0].phases[0].evidenceCoverage.jointCoverageRatio, 1);

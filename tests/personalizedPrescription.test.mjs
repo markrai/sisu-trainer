@@ -90,6 +90,26 @@ function calibrationState(overrides = {}) {
   };
 }
 
+function calibrationStateV2(overrides = {}) {
+  const state = calibrationState({
+    state: { schemaVersion: 3 },
+    metric: { algorithm: { id: "bike-submax-linear-hr-workload", version: 2 } },
+    calibration: { protocol: { id: "bike-submax-70rpm", version: 2 } },
+  });
+  return {
+    ...state,
+    ...(overrides.state ?? {}),
+    hrWorkloadCalibration: {
+      ...state.hrWorkloadCalibration,
+      ...(overrides.metric ?? {}),
+      value: {
+        ...state.hrWorkloadCalibration.value,
+        ...(overrides.calibration ?? {}),
+      },
+    },
+  };
+}
+
 function policy(expiryDays = 365) {
   return {
     assessmentExpiryDays: expiryDays,
@@ -149,6 +169,31 @@ test("pure E1 resolver deterministically interpolates aerobic-base power and fre
   assert.deepEqual(phase.activeHeartRate, { min: 115, max: 130 });
   assert.deepEqual(phase.candidatePower, { minWatts: 110, maxWatts: 140 });
   assert.equal(phase.safetyChecks.freshnessValid, true);
+});
+
+test("E1 admits approved v1 and v2 formal provenance in shadow mode and rejects cross-pairs", () => {
+  const historical = evaluatePersonalizedPrescription(input({ fitnessState: calibrationState() }));
+  const current = evaluatePersonalizedPrescription(input({ fitnessState: calibrationStateV2() }));
+  for (const evaluation of [historical, current]) {
+    assert.equal(evaluation.mode, "shadow");
+    assert.equal(evaluation.activationEligible, false);
+    assert.equal(onlyPhase(evaluation).outcome, "candidate");
+    assert.deepEqual(parsePersonalizedPrescriptionEvaluation(structuredClone(evaluation)), evaluation);
+  }
+  assert.equal(historical.fitnessEvidenceSnapshot.algorithm.version, 1);
+  assert.equal(historical.fitnessEvidenceSnapshot.calibration.protocol.version, 1);
+  assert.equal(current.fitnessEvidenceSnapshot.algorithm.version, 2);
+  assert.equal(current.fitnessEvidenceSnapshot.calibration.protocol.version, 2);
+
+  const estimatorV2ProtocolV1 = calibrationStateV2({
+    calibration: { protocol: { id: "bike-submax-70rpm", version: 1 } },
+  });
+  const estimatorV1ProtocolV2 = calibrationState({
+    state: { schemaVersion: 3 },
+    calibration: { protocol: { id: "bike-submax-70rpm", version: 2 } },
+  });
+  assert.equal(fallbackReason({ fitnessState: estimatorV2ProtocolV1 }), "unsupported_protocol");
+  assert.equal(fallbackReason({ fitnessState: estimatorV1ProtocolV2 }), "unsupported_protocol");
 });
 
 test("pure resolver has no storage or current-time dependency", () => {

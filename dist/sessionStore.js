@@ -1,5 +1,5 @@
 import { isActivity } from "./workoutActivity.js";
-import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime } from "./vo2Protocol.js";
+import { isValidVo2ProtocolRuntime, readPersistedVo2ProtocolRuntime, } from "./vo2Protocol.js";
 import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import { parsePersistedHrTargetsForDay, parseResolvedWorkoutPrescription, persistedHrTargetsFitBlocks, } from "./workoutPrescription.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
@@ -117,6 +117,17 @@ export function getSession(day, storage) {
     const athleteId = athleteFitnessSnapshot && storedAthleteId === athleteFitnessSnapshot.athleteId
         ? storedAthleteId
         : undefined;
+    const persistedVo2Runtime = (() => {
+        const raw = store.getItem(vo2ProtocolRuntimeKey(day));
+        if (!raw)
+            return readPersistedVo2ProtocolRuntime(null);
+        try {
+            return readPersistedVo2ProtocolRuntime(JSON.parse(raw));
+        }
+        catch {
+            return readPersistedVo2ProtocolRuntime(null);
+        }
+    })();
     return {
         startTime: store.getItem("start_" + day),
         sessionId: store.getItem("session_id_" + day),
@@ -131,17 +142,11 @@ export function getSession(day, storage) {
         athleteId,
         athleteFitnessSnapshot: athleteId ? athleteFitnessSnapshot : undefined,
         phasePlan: parsePhasePlan(store.getItem(phasePlanKey(day))),
-        vo2ProtocolRuntime: parseVo2ProtocolRuntime((() => {
-            const raw = store.getItem(vo2ProtocolRuntimeKey(day));
-            if (!raw)
-                return null;
-            try {
-                return JSON.parse(raw);
-            }
-            catch {
-                return null;
-            }
-        })()),
+        vo2ProtocolRuntime: persistedVo2Runtime.runtime,
+        vo2ProtocolRestartRequired: persistedVo2Runtime.restartRequired,
+        ...(persistedVo2Runtime.observedProtocolVersion != null && persistedVo2Runtime.restartRequired
+            ? { blockedVo2ProtocolVersion: persistedVo2Runtime.observedProtocolVersion }
+            : {}),
     };
 }
 export function startSession(day, startTime, sessionId, activity, storage, phasePlan, athleteFitnessSnapshotOverride) {

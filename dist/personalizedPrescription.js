@@ -1,7 +1,7 @@
-import { ATHLETE_PROFILE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V2, FITNESS_STATE_SCHEMA_VERSION_V3, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION, PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1, PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1, PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1, } from "./types.js";
+import { ATHLETE_PROFILE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V2, FITNESS_STATE_SCHEMA_VERSION_V3, PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1, PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1, PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1, } from "./types.js";
 import { parseAthleteProfile, PROFILE_WEIGHT_LBS_TO_KG } from "./profile.js";
 import { parseFitnessState } from "./fitnessState.js";
-import { LEGACY_VO2_ESTIMATOR_ID, LEGACY_VO2_ESTIMATOR_VERSION } from "./vo2Estimator.js";
+import { SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS, isSupportedVo2EstimatorProtocolPair, } from "./vo2Estimator.js";
 import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
 /**
  * E1 intentionally has no activation-approved freshness lifetime. Production
@@ -194,14 +194,18 @@ function resolveEvidence(input) {
         return { profileSnapshot, fitnessSnapshot: null, fallbackReason: "unsupported_calibration_source", checks };
     }
     checks.formalSourceValid = true;
-    if (!isObject(rawMetric.algorithm) || rawMetric.algorithm.id !== LEGACY_VO2_ESTIMATOR_ID || rawMetric.algorithm.version !== LEGACY_VO2_ESTIMATOR_VERSION) {
+    const rawAlgorithm = rawMetric.algorithm;
+    if (!isObject(rawAlgorithm) || !SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS.some((contract) => contract.estimatorId === rawAlgorithm.id && contract.estimatorVersion === rawAlgorithm.version)) {
         return { profileSnapshot, fitnessSnapshot: null, fallbackReason: "unsupported_algorithm", checks };
     }
     const rawCalibration = rawCalibrationValue(rawMetric);
+    const rawProtocol = rawCalibration === null || rawCalibration === void 0 ? void 0 : rawCalibration.protocol;
     if (!rawCalibration ||
-        !isObject(rawCalibration.protocol) ||
-        rawCalibration.protocol.id !== LEGACY_VO2_PROTOCOL_ID ||
-        rawCalibration.protocol.version !== LEGACY_VO2_PROTOCOL_VERSION) {
+        !isObject(rawProtocol) ||
+        !SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS.some((contract) => contract.protocolId === rawProtocol.id && contract.protocolVersion === rawProtocol.version)) {
+        return { profileSnapshot, fitnessSnapshot: null, fallbackReason: "unsupported_protocol", checks };
+    }
+    if (!isSupportedVo2EstimatorProtocolPair(rawAlgorithm.id, rawAlgorithm.version, rawProtocol.id, rawProtocol.version)) {
         return { profileSnapshot, fitnessSnapshot: null, fallbackReason: "unsupported_protocol", checks };
     }
     const state = parseFitnessState(input.fitnessState);
@@ -676,10 +680,7 @@ export function parsePersonalizedPrescriptionEvaluation(value) {
             return null;
         const evidence = fitnessEvidenceSnapshot;
         if (evidence.quality !== "moderate" && evidence.quality !== "high" ||
-            evidence.algorithm.id !== LEGACY_VO2_ESTIMATOR_ID ||
-            evidence.algorithm.version !== LEGACY_VO2_ESTIMATOR_VERSION ||
-            evidence.calibration.protocol.id !== LEGACY_VO2_PROTOCOL_ID ||
-            evidence.calibration.protocol.version !== LEGACY_VO2_PROTOCOL_VERSION ||
+            !isSupportedVo2EstimatorProtocolPair(evidence.algorithm.id, evidence.algorithm.version, evidence.calibration.protocol.id, evidence.calibration.protocol.version) ||
             evidence.calibration.workloadProvenance === "mixed" ||
             evidence.calibration.points.length < 3 ||
             !nearlyEqual(profileInputSnapshot.ageYears, evidence.calibration.profileInputSnapshot.ageYears) ||

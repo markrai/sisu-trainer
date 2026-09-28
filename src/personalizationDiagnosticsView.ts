@@ -2,9 +2,11 @@ import {
   aggregatePersonalizedPrescriptionCharacterizations,
   personalizedPrescriptionDiagnosticRows,
   type PersonalizedPrescriptionCharacterizationAggregateV1,
+  type PersonalizedPrescriptionCharacterizationAggregateV2,
 } from "./personalizedPrescriptionCharacterization.js";
 import type {
   PersonalizedPrescriptionCharacterizationExclusionReasonV1,
+  PersonalizedPrescriptionCharacterization,
   PersonalizedPrescriptionCharacterizationV1,
   PersonalizedPrescriptionEvaluationV1,
   PersonalizedPrescriptionPhaseCharacterizationV1,
@@ -40,6 +42,11 @@ export const EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS: PersonalizationDiagnosti
   domainBucket: "all",
 };
 
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V1 = 1 as const;
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2 = 2 as const;
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION =
+  PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2;
+
 export interface PersonalizationDiagnosticsFilterOptions {
   workoutIntent: string[];
   intensity: string[];
@@ -63,6 +70,7 @@ export interface PersonalizationDiagnosticPresentationRow {
   hrInsideTargetPercent: number | null;
   saturationPercent: number;
   calibrationProvenance: string;
+  formalAssessmentProvenance: string;
   observedPowerProvenance: string;
   assessmentDomain: string;
   agreement: string;
@@ -70,7 +78,7 @@ export interface PersonalizationDiagnosticPresentationRow {
   exclusion: string;
   assessmentContext: FrozenAssessmentDiagnosticContext | null;
   workoutContext: FrozenWorkoutDiagnosticContext | null;
-  record: PersonalizedPrescriptionCharacterizationV1;
+  record: PersonalizedPrescriptionCharacterization;
   phaseRecord: PersonalizedPrescriptionPhaseCharacterizationV1;
 }
 
@@ -94,8 +102,8 @@ export interface PersonalizationDiagnosticsModel {
   filters: PersonalizationDiagnosticsFilters;
   filterOptions: PersonalizationDiagnosticsFilterOptions;
   sourceRecordCount: number;
-  records: PersonalizedPrescriptionCharacterizationV1[];
-  aggregate: PersonalizedPrescriptionCharacterizationAggregateV1;
+  records: PersonalizedPrescriptionCharacterization[];
+  aggregate: PersonalizedPrescriptionCharacterizationAggregateV2;
   rows: PersonalizationDiagnosticPresentationRow[];
   exclusionCounts: Record<PersonalizedPrescriptionCharacterizationExclusionReasonV1, number>;
   evidenceCollectionSummary: PersonalizationEvidenceCollectionSummary;
@@ -128,7 +136,7 @@ export interface FrozenWorkoutDiagnosticContext {
   characterizationSchemaVersion: number;
 }
 
-function phaseDimensions(record: PersonalizedPrescriptionCharacterizationV1, phase: PersonalizedPrescriptionPhaseCharacterizationV1) {
+function phaseDimensions(record: PersonalizedPrescriptionCharacterization, phase: PersonalizedPrescriptionPhaseCharacterizationV1) {
   return {
     workoutIntent: record.workoutIntent,
     intensity: phase.intensityId ?? "unspecified",
@@ -140,7 +148,7 @@ function phaseDimensions(record: PersonalizedPrescriptionCharacterizationV1, pha
 }
 
 function phaseMatchesFilters(
-  record: PersonalizedPrescriptionCharacterizationV1,
+  record: PersonalizedPrescriptionCharacterization,
   phase: PersonalizedPrescriptionPhaseCharacterizationV1,
   filters: PersonalizationDiagnosticsFilters
 ): boolean {
@@ -158,7 +166,7 @@ function options(values: Iterable<string>): string[] {
 }
 
 export function personalizationDiagnosticsFilterOptions(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[]
+  records: readonly PersonalizedPrescriptionCharacterization[]
 ): PersonalizationDiagnosticsFilterOptions {
   const dimensions = records.flatMap((record) => record.phases.map((phase) => phaseDimensions(record, phase)));
   return {
@@ -178,7 +186,7 @@ export function personalizationDiagnosticsFilterOptions(
 export function extractTrustedPersonalizationCharacterizations(
   history: readonly TrustedWorkoutHistoryRow[],
   currentAthleteId: string
-): PersonalizedPrescriptionCharacterizationV1[] {
+): PersonalizedPrescriptionCharacterization[] {
   return history.flatMap(({ summary }) => {
     const evaluation = summary.shadow_prescription_evaluation;
     const record = summary.shadow_prescription_characterization;
@@ -252,7 +260,7 @@ export function extractTrustedPersonalizationWorkoutContexts(
 }
 
 function exclusionCountsFor(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[]
+  records: readonly PersonalizedPrescriptionCharacterization[]
 ): Record<PersonalizedPrescriptionCharacterizationExclusionReasonV1, number> {
   return Object.fromEntries(
     PERSONALIZATION_DIAGNOSTIC_EXCLUSIONS.map((reason) => [
@@ -265,7 +273,7 @@ function exclusionCountsFor(
 
 /** All-record evidence readiness counts. Filters never affect this summary. */
 export function summarizePersonalizationEvidenceCollection(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[]
+  records: readonly PersonalizedPrescriptionCharacterization[]
 ): PersonalizationEvidenceCollectionSummary {
   const candidates = records.flatMap((record) => record.phases.map((phase) => ({ record, phase })))
     .filter(({ phase }) => phase.shadowOutcome === "candidate");
@@ -297,9 +305,9 @@ export function summarizePersonalizationEvidenceCollection(
 }
 
 export function filterPersonalizationCharacterizations(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[],
+  records: readonly PersonalizedPrescriptionCharacterization[],
   filters: PersonalizationDiagnosticsFilters
-): PersonalizedPrescriptionCharacterizationV1[] {
+): PersonalizedPrescriptionCharacterization[] {
   return records.flatMap((record) => {
     const phases = record.phases.filter((phase) => phaseMatchesFilters(record, phase, filters));
     return phases.length > 0 ? [{ ...record, phases: [...phases] }] : [];
@@ -307,7 +315,7 @@ export function filterPersonalizationCharacterizations(
 }
 
 export function buildPersonalizationDiagnosticsModel(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[],
+  records: readonly PersonalizedPrescriptionCharacterization[],
   filters: PersonalizationDiagnosticsFilters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
   assessmentContexts: Readonly<Record<string, FrozenAssessmentDiagnosticContext>> = {},
   workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>> = {}
@@ -347,19 +355,33 @@ export function buildPersonalizationDiagnosticsModel(
 }
 
 export interface PersonalizationDiagnosticsExportV1 {
-  schemaVersion: 1;
+  schemaVersion: typeof PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V1;
   filters: PersonalizationDiagnosticsFilters;
   aggregate: PersonalizedPrescriptionCharacterizationAggregateV1;
-  diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord">>;
+  diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow,
+    "record" | "phaseRecord" | "formalAssessmentProvenance">>;
   characterizationRecords: PersonalizedPrescriptionCharacterizationV1[];
 }
+
+export interface PersonalizationDiagnosticsExportV2 {
+  schemaVersion: typeof PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2;
+  filters: PersonalizationDiagnosticsFilters;
+  aggregate: PersonalizedPrescriptionCharacterizationAggregateV2;
+  diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord">>;
+  characterizationRecords: PersonalizedPrescriptionCharacterization[];
+}
+
+export type PersonalizationDiagnosticsExport =
+  | PersonalizationDiagnosticsExportV1
+  | PersonalizationDiagnosticsExportV2;
+export type CurrentPersonalizationDiagnosticsExport = PersonalizationDiagnosticsExportV2;
 
 /** Stable local export. It includes immutable E2 records, never profile data or raw HR traces. */
 export function createPersonalizationDiagnosticsExport(
   model: PersonalizationDiagnosticsModel
-): PersonalizationDiagnosticsExportV1 {
+): PersonalizationDiagnosticsExportV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION,
     filters: { ...model.filters },
     aggregate: model.aggregate,
     diagnosticRows: model.rows.map(({ record: _record, phaseRecord: _phaseRecord, ...row }) => row),
@@ -451,7 +473,7 @@ export function personalizationDiagnosticsHtml(model: PersonalizationDiagnostics
   ].map(([id, label, key, values]) => `<label><span>${label}</span><select id="${id}" class="modal-input personalization-filter" onchange="applyPersonalizationDiagnosticsFilters()">${optionMarkup(values as string[], filters[key as keyof PersonalizationDiagnosticsFilters])}</select></label>`).join("");
   const cohortHtml = aggregate.groups.map((group) => `<article class="personalization-cohort">
     <h4>${escapeHtml(personalizationDiagnosticLabel(group.workoutIntent))} · ${escapeHtml(personalizationDiagnosticLabel(group.intensityId))}</h4>
-    <div class="personalization-cohort-tags"><span>${escapeHtml(personalizationDiagnosticLabel(group.calibrationWorkloadProvenance))}</span><span>${escapeHtml(personalizationDiagnosticLabel(group.observedPowerProvenance))} observed</span><span>${escapeHtml(personalizationDiagnosticLabel(group.formalAssessmentQuality))} quality</span><span>${escapeHtml(personalizationDiagnosticLabel(group.candidateDomainMarginBucket))} domain</span></div>
+    <div class="personalization-cohort-tags"><span>${escapeHtml(personalizationDiagnosticLabel(group.calibrationWorkloadProvenance))}</span><span>${escapeHtml(personalizationDiagnosticLabel(group.observedPowerProvenance))} observed</span><span>${escapeHtml(group.formalAssessmentAlgorithm)}</span><span>${escapeHtml(group.formalAssessmentProtocol)}</span><span>${escapeHtml(personalizationDiagnosticLabel(group.formalAssessmentQuality))} quality</span><span>${escapeHtml(personalizationDiagnosticLabel(group.candidateDomainMarginBucket))} domain</span></div>
     <div class="personalization-metric-grid">
       <div><label>Median signed difference</label>${metric(group.signedDifferenceWatts.median, group.signedDifferenceWatts.count, " W")}</div>
       <div><label>Median absolute difference</label>${metric(group.absoluteDifferenceWatts.median, group.absoluteDifferenceWatts.count, " W")}</div>

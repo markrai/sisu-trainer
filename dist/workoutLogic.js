@@ -9,7 +9,7 @@ import { clearOrdinaryBikeTelemetry, getHrSamples } from "./workoutStorage.js";
 import { clearBikeTelemetrySamples, getBikeTelemetrySamples, recordBikeTelemetrySample, } from "./bikeTelemetryTrace.js";
 import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
 import { PHASE_E1_SHADOW_POLICY, evaluatePersonalizedPrescription, } from "./personalizedPrescription.js";
-import { loadAthleteProfile, readExplicitVo2ProfileInputs } from "./profile.js";
+import { loadAthleteProfile } from "./profile.js";
 import { FITNESS_STATE_STORAGE_KEY, parseFitnessState } from "./fitnessState.js";
 import { buildOrdinaryBikeTelemetrySample, } from "./ordinaryWorkoutTelemetry.js";
 const RING_CIRC = 339.292;
@@ -521,11 +521,7 @@ function tickVo2Protocol(day, elapsedSec, paused, storage, samples = [], telemet
     if (isStaleVo2ProtocolTick(before, elapsedSec)) {
         return { runtime: before, cues: [] };
     }
-    const recoveredProfile = before.assessment_profile ? undefined : readExplicitVo2ProfileInputs(storage);
-    const runtimeForAdvance = !before.assessment_profile && (recoveredProfile === null || recoveredProfile === void 0 ? void 0 : recoveredProfile.age_years) != null && recoveredProfile.weight_kg != null
-        ? { ...before, assessment_profile: recoveredProfile }
-        : before;
-    const next = advanceVo2Protocol(runtimeForAdvance, {
+    const next = advanceVo2Protocol(before, {
         elapsedSec,
         paused,
         samples,

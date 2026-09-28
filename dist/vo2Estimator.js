@@ -1,13 +1,42 @@
-import { VO2_ASSESSMENT_SCHEMA_VERSION, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
+import { VO2_ASSESSMENT_SCHEMA_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_ASSESSMENT_SCHEMA_VERSION_V2, VO2_EVIDENCE_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V2, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION_V1, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
 import { VO2_CADENCE_MIN_IN_BAND_RATIO, VO2_CADENCE_TOLERANCE_RPM, VO2_PRESCRIBED_CADENCE_RPM, VO2_WORKLOAD_MIN_SAMPLES, } from "./vo2Workload.js";
 /** Permanent historical identity for the v1 submaximal cycle-ergometer estimator; keep readable after newer estimators ship. */
 export const LEGACY_VO2_ESTIMATOR_ID = "bike-submax-linear-hr-workload";
-export const LEGACY_VO2_ESTIMATOR_VERSION = 1;
+export const LEGACY_VO2_ESTIMATOR_VERSION_V1 = 1;
+/** Backward-compatible name for the permanent historical estimator identity. */
+export const LEGACY_VO2_ESTIMATOR_VERSION = LEGACY_VO2_ESTIMATOR_VERSION_V1;
+export const VO2_ESTIMATOR_VERSION_V2 = 2;
 /** Estimator used for new formal assessments in this build. */
 export const VO2_ESTIMATOR_ID = LEGACY_VO2_ESTIMATOR_ID;
-export const VO2_ESTIMATOR_VERSION = LEGACY_VO2_ESTIMATOR_VERSION;
-/** Estimator v1 consumes only protocol `bike-submax-70rpm` version 1. */
+export const VO2_ESTIMATOR_VERSION = VO2_ESTIMATOR_VERSION_V2;
+/** The current estimator consumes only the current corrected protocol. */
 export const VO2_ESTIMATOR_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION;
+export const VO2_FORMAL_ASSESSMENT_CONTRACT_V1 = {
+    estimatorId: LEGACY_VO2_ESTIMATOR_ID,
+    estimatorVersion: LEGACY_VO2_ESTIMATOR_VERSION_V1,
+    protocolId: LEGACY_VO2_PROTOCOL_ID,
+    protocolVersion: LEGACY_VO2_PROTOCOL_VERSION_V1,
+    evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V1,
+    assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V1,
+};
+export const VO2_FORMAL_ASSESSMENT_CONTRACT_V2 = {
+    estimatorId: VO2_ESTIMATOR_ID,
+    estimatorVersion: VO2_ESTIMATOR_VERSION_V2,
+    protocolId: VO2_PROTOCOL_ID,
+    protocolVersion: VO2_PROTOCOL_VERSION,
+    evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V2,
+    assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
+};
+export const SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS = [
+    VO2_FORMAL_ASSESSMENT_CONTRACT_V1,
+    VO2_FORMAL_ASSESSMENT_CONTRACT_V2,
+];
+export function isSupportedVo2EstimatorProtocolPair(estimatorId, estimatorVersion, protocolId, protocolVersion) {
+    return SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS.some((contract) => contract.estimatorId === estimatorId &&
+        contract.estimatorVersion === estimatorVersion &&
+        contract.protocolId === protocolId &&
+        contract.protocolVersion === protocolVersion);
+}
 /** Minimum accepted steady-state stages required to estimate. Matches protocol target. */
 export const VO2_MIN_ACCEPTED_STAGES = 3;
 export const VO2_MIN_ELIGIBLE_STAGES = 3;
@@ -318,6 +347,9 @@ export function assessVo2(evidence, profile = {}) {
         diagnostics.observed_protocol_id = protocol.protocol_id;
         diagnostics.observed_protocol_version = protocol.protocol_version;
     }
+    if (evidence && evidence.schema_version !== VO2_EVIDENCE_SCHEMA_VERSION_V2) {
+        reasons.push("unsupported_evidence_schema");
+    }
     if (!protocol) {
         reasons.push("missing_protocol_evidence");
     }
@@ -427,6 +459,191 @@ export function assessVo2(evidence, profile = {}) {
         estimate_ml_kg_min: estimate,
         fit_quality: fitQualityFromRSquared(fit.r_squared),
     });
+}
+function classifyAcceptedStageV1(stage, predictedHrMax) {
+    var _a, _b, _c, _d;
+    const reasons = [];
+    const workload = stage.workload;
+    const source = (_a = workload === null || workload === void 0 ? void 0 : workload.source) !== null && _a !== void 0 ? _a : "prescribed_only";
+    const estimatorWatts = isPositiveFinite(workload === null || workload === void 0 ? void 0 : workload.estimator_watts) ? workload.estimator_watts : undefined;
+    const hr = isPositiveFinite((_b = stage.hr) === null || _b === void 0 ? void 0 : _b.steady_state_bpm) ? stage.hr.steady_state_bpm : undefined;
+    const point = {
+        stage_id: stage.stage_id,
+        protocol_accepted: true,
+        estimator_eligible: false,
+        ineligibility_reasons: reasons,
+        workload_source: source,
+        calibrated_watts_at_70rpm: stage.calibrated_watts_at_70rpm,
+        cadence_measured: (_c = workload === null || workload === void 0 ? void 0 : workload.cadence_measured) !== null && _c !== void 0 ? _c : false,
+        watts_measured: (_d = workload === null || workload === void 0 ? void 0 : workload.watts_measured) !== null && _d !== void 0 ? _d : false,
+    };
+    if (hr != null)
+        point.steady_state_bpm = hr;
+    if (estimatorWatts != null)
+        point.watts = estimatorWatts;
+    if ((workload === null || workload === void 0 ? void 0 : workload.measured_cadence_median_rpm) != null) {
+        point.measured_cadence_median_rpm = workload.measured_cadence_median_rpm;
+    }
+    if ((workload === null || workload === void 0 ? void 0 : workload.measured_watts_median) != null)
+        point.measured_watts_median = workload.measured_watts_median;
+    if ((workload === null || workload === void 0 ? void 0 : workload.measured_watts_sample_count) != null) {
+        point.measured_watts_sample_count = workload.measured_watts_sample_count;
+    }
+    if ((workload === null || workload === void 0 ? void 0 : workload.measured_cadence_sample_count) != null) {
+        point.measured_cadence_sample_count = workload.measured_cadence_sample_count;
+    }
+    if ((workload === null || workload === void 0 ? void 0 : workload.cadence_in_band_ratio) != null)
+        point.cadence_in_band_ratio = workload.cadence_in_band_ratio;
+    if (hr == null)
+        reasons.push("missing_stage_hr");
+    if (source === "prescribed_only" || estimatorWatts == null) {
+        reasons.push("unverified_performed_workload");
+    }
+    else if (!isPositiveFinite(stage.calibrated_watts_at_70rpm) && source !== "measured_watts") {
+        reasons.push("invalid_workload");
+    }
+    if (hr != null) {
+        if (hr < VO2_ESTIMATOR_MIN_HR_BPM)
+            reasons.push("hr_below_estimator_range");
+        if (predictedHrMax != null && hr >= estimatorSubmaxHrCeilingBpm(predictedHrMax)) {
+            reasons.push("hr_above_submax_ceiling");
+        }
+    }
+    point.estimator_eligible = reasons.length === 0;
+    return point;
+}
+function baseDiagnosticsV1() {
+    return {
+        accepted_points: [],
+        eligible_points: [],
+        min_r_squared: VO2_MIN_R_SQUARED,
+        estimator_min_hr_bpm: VO2_ESTIMATOR_MIN_HR_BPM,
+        estimator_submax_hrmax_fraction: VO2_ESTIMATOR_SUBMAX_HRMAX_FRACTION,
+        expected_protocol_id: LEGACY_VO2_PROTOCOL_ID,
+        expected_protocol_version: LEGACY_VO2_PROTOCOL_VERSION_V1,
+    };
+}
+function uniqueReasonsV1(codes) {
+    return [...new Set(codes)];
+}
+function isV1TerminationReason(value) {
+    return value !== "insufficient_eligible_stages";
+}
+/** Immutable historical estimator-v1 implementation for protocol-v1 evidence. */
+export function assessVo2V1(evidence, profile = {}) {
+    var _a, _b, _c;
+    const protocol = evidence === null || evidence === void 0 ? void 0 : evidence.protocol;
+    const rawTermination = (_b = (_a = protocol === null || protocol === void 0 ? void 0 : protocol.termination) === null || _a === void 0 ? void 0 : _a.reason) !== null && _b !== void 0 ? _b : "other";
+    const terminationReason = isV1TerminationReason(rawTermination)
+        ? rawTermination
+        : "other";
+    const snapshot = snapshotFromProfile(profile, protocol === null || protocol === void 0 ? void 0 : protocol.protocol_id, protocol === null || protocol === void 0 ? void 0 : protocol.protocol_version);
+    const reasons = [];
+    const diagnostics = baseDiagnosticsV1();
+    if (protocol) {
+        diagnostics.observed_protocol_id = protocol.protocol_id;
+        diagnostics.observed_protocol_version = protocol.protocol_version;
+    }
+    // Assessment schema v1 has no dedicated evidence-schema reason code. Keep
+    // its permanent vocabulary while treating any schema mismatch as an
+    // unsupported v1 protocol contract, before inspecting stage data.
+    if (evidence && evidence.schema_version !== VO2_EVIDENCE_SCHEMA_VERSION_V1) {
+        reasons.push("unsupported_protocol_version");
+    }
+    if (!protocol)
+        reasons.push("missing_protocol_evidence");
+    else if (protocol.protocol_id !== LEGACY_VO2_PROTOCOL_ID)
+        reasons.push("unsupported_protocol_id");
+    else if (protocol.protocol_version !== LEGACY_VO2_PROTOCOL_VERSION_V1)
+        reasons.push("unsupported_protocol_version");
+    if (profile.age_years == null || (typeof profile.age_years === "number" && !Number.isFinite(profile.age_years))) {
+        reasons.push("missing_profile_age");
+    }
+    else if (!ageValid(profile.age_years))
+        reasons.push("invalid_profile_age");
+    if (profile.weight_kg == null || (typeof profile.weight_kg === "number" && !Number.isFinite(profile.weight_kg))) {
+        reasons.push("missing_profile_weight");
+    }
+    else if (!weightValid(profile.weight_kg))
+        reasons.push("invalid_profile_weight");
+    const predictedHrMax = ageValid(profile.age_years) ? predictedHrMaxBpm(profile.age_years) : undefined;
+    const acceptedPoints = ((_c = protocol === null || protocol === void 0 ? void 0 : protocol.stages) !== null && _c !== void 0 ? _c : [])
+        .filter((stage) => stage.status === "accepted")
+        .map((stage) => classifyAcceptedStageV1(stage, predictedHrMax));
+    const eligiblePoints = acceptedPoints.filter((point) => point.estimator_eligible);
+    diagnostics.accepted_points = acceptedPoints.map((point) => ({
+        ...point,
+        ineligibility_reasons: [...point.ineligibility_reasons],
+    }));
+    diagnostics.eligible_points = eligiblePoints.map((point) => ({
+        ...point,
+        ineligibility_reasons: [...point.ineligibility_reasons],
+    }));
+    const stageReasons = acceptedPoints.flatMap((point) => point.ineligibility_reasons);
+    const stagesUsed = eligiblePoints.map((point) => point.stage_id);
+    const highest = eligiblePoints.length > 0
+        ? eligiblePoints[eligiblePoints.length - 1].watts
+        : lastDefinedWatts(acceptedPoints);
+    if (acceptedPoints.length < VO2_MIN_ACCEPTED_STAGES) {
+        reasons.push("too_few_accepted_stages", ...stageReasons);
+    }
+    else if (eligiblePoints.length < VO2_MIN_ELIGIBLE_STAGES) {
+        reasons.push("too_few_eligible_stages", ...stageReasons);
+    }
+    if (eligiblePoints.length >= 2 && !workloadsIncrease(eligiblePoints)) {
+        reasons.push("invalid_workload_progression");
+    }
+    if (eligiblePoints.length >= 2 && !hrIncreases(eligiblePoints)) {
+        reasons.push("invalid_hr_progression");
+    }
+    const build = (status, extra = [], estimate, fitQuality) => ({
+        schema_version: VO2_ASSESSMENT_SCHEMA_VERSION_V1,
+        estimator_id: LEGACY_VO2_ESTIMATOR_ID,
+        estimator_version: LEGACY_VO2_ESTIMATOR_VERSION_V1,
+        status,
+        termination_reason: terminationReason,
+        ...(estimate != null ? { estimate_ml_kg_min: estimate } : {}),
+        ...(fitQuality ? { fit_quality: fitQuality } : {}),
+        reason_codes: uniqueReasonsV1([...reasons, ...extra]),
+        accepted_stage_count: acceptedPoints.length,
+        eligible_stage_count: eligiblePoints.length,
+        stages_used: stagesUsed,
+        ...(highest != null ? { highest_accepted_workload_watts: highest } : {}),
+        input_snapshot: snapshot,
+        diagnostics,
+    });
+    if (reasons.length > 0)
+        return build("insufficient_evidence");
+    const fit = fitHrVsWatts(eligiblePoints);
+    diagnostics.slope = fit === null || fit === void 0 ? void 0 : fit.slope;
+    diagnostics.intercept = fit === null || fit === void 0 ? void 0 : fit.intercept;
+    diagnostics.r_squared = fit === null || fit === void 0 ? void 0 : fit.r_squared;
+    if (!fit)
+        return build("insufficient_evidence", ["unstable_regression"]);
+    if (!(fit.slope > 0))
+        return build("insufficient_evidence", ["nonpositive_slope"]);
+    if (fit.r_squared < VO2_MIN_R_SQUARED)
+        return build("insufficient_evidence", ["unstable_regression"]);
+    const age = profile.age_years;
+    const weightKg = profile.weight_kg;
+    const hrMax = predictedHrMaxBpm(age);
+    diagnostics.predicted_hr_max = hrMax;
+    snapshot.predicted_hr_max = hrMax;
+    const lastHr = eligiblePoints[eligiblePoints.length - 1].steady_state_bpm;
+    if (!Number.isFinite(hrMax) || hrMax < VO2_PREDICTED_HRMAX_MIN || hrMax > VO2_PREDICTED_HRMAX_MAX || hrMax <= lastHr) {
+        return build("insufficient_evidence", ["invalid_extrapolation"]);
+    }
+    const predictedMaxWatts = (hrMax - fit.intercept) / fit.slope;
+    diagnostics.predicted_max_watts = predictedMaxWatts;
+    const lastWatts = eligiblePoints[eligiblePoints.length - 1].watts;
+    if (!Number.isFinite(predictedMaxWatts) || predictedMaxWatts <= lastWatts || predictedMaxWatts > VO2_PREDICTED_MAX_WATTS_MAX) {
+        return build("insufficient_evidence", ["invalid_extrapolation"]);
+    }
+    const estimate = cycleVo2MlKgMin(predictedMaxWatts, weightKg);
+    if (!Number.isFinite(estimate) || estimate < VO2_ESTIMATE_MIN_ML_KG_MIN || estimate > VO2_ESTIMATE_MAX_ML_KG_MIN) {
+        return build("insufficient_evidence", ["invalid_estimate"]);
+    }
+    return build("estimated", [], estimate, fitQualityFromRSquared(fit.r_squared));
 }
 export function attachVo2Assessment(summary, assessment) {
     summary.vo2_assessment = assessment;

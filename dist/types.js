@@ -11,8 +11,12 @@ export const PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1 = "personalized-prescripti
 export const PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1 = 1;
 /** Permanent Phase E2 diagnostic schema. This record has no control authority. */
 export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1 = 1;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2 = 2;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION = PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2;
 export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1 = "personalized-prescription-characterization";
 export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1 = 1;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2 = 2;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION = PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2;
 /** Permanent historical schema identities. Readers must not key old data to current aliases. */
 export const ATHLETE_PROFILE_SCHEMA_VERSION_V1 = 1;
 export const FITNESS_STATE_SCHEMA_VERSION_V1 = 1;
@@ -28,11 +32,17 @@ export const WORKOUT_RESPONSE_SCHEMA_VERSION = WORKOUT_RESPONSE_SCHEMA_VERSION_V
 /** Local evidence for the VO2 estimator. Not itself a VO2 result. */
 export const VO2_EVIDENCE_SCHEMA_VERSION_V1 = 1;
 export const VO2_ASSESSMENT_SCHEMA_VERSION_V1 = 1;
-export const VO2_EVIDENCE_SCHEMA_VERSION = VO2_EVIDENCE_SCHEMA_VERSION_V1;
-export const VO2_ASSESSMENT_SCHEMA_VERSION = VO2_ASSESSMENT_SCHEMA_VERSION_V1;
+export const VO2_EVIDENCE_SCHEMA_VERSION_V2 = 2;
+export const VO2_ASSESSMENT_SCHEMA_VERSION_V2 = 2;
+/** Writer aliases. Historical readers must use the explicit V1 constants above. */
+export const VO2_EVIDENCE_SCHEMA_VERSION = VO2_EVIDENCE_SCHEMA_VERSION_V2;
+export const VO2_ASSESSMENT_SCHEMA_VERSION = VO2_ASSESSMENT_SCHEMA_VERSION_V2;
 /** Permanent historical identity for the v1 protocol; keep readable after newer protocols ship. */
 export const LEGACY_VO2_PROTOCOL_ID = "bike-submax-70rpm";
-export const LEGACY_VO2_PROTOCOL_VERSION = 1;
+export const LEGACY_VO2_PROTOCOL_VERSION_V1 = 1;
+/** Backward-compatible name for the permanent historical protocol identity. */
+export const LEGACY_VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION_V1;
+export const VO2_PROTOCOL_VERSION_V2 = 2;
 /** Protocol identity used for new formal assessments in this build. */
 export const VO2_PROTOCOL_ID = LEGACY_VO2_PROTOCOL_ID;
-export const VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION;
+export const VO2_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION_V2;

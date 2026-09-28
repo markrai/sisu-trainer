@@ -17,6 +17,9 @@ export const EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS = {
     assessmentQuality: "all",
     domainBucket: "all",
 };
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V1 = 1;
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2 = 2;
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION = PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2;
 function phaseDimensions(record, phase) {
     var _a, _b, _c, _d, _e;
     return {
@@ -202,7 +205,7 @@ export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PE
 /** Stable local export. It includes immutable E2 records, never profile data or raw HR traces. */
 export function createPersonalizationDiagnosticsExport(model) {
     return {
-        schemaVersion: 1,
+        schemaVersion: PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION,
         filters: { ...model.filters },
         aggregate: model.aggregate,
         diagnosticRows: model.rows.map(({ record: _record, phaseRecord: _phaseRecord, ...row }) => row),
@@ -288,7 +291,7 @@ export function personalizationDiagnosticsHtml(model) {
     ].map(([id, label, key, values]) => `<label><span>${label}</span><select id="${id}" class="modal-input personalization-filter" onchange="applyPersonalizationDiagnosticsFilters()">${optionMarkup(values, filters[key])}</select></label>`).join("");
     const cohortHtml = aggregate.groups.map((group) => `<article class="personalization-cohort">
     <h4>${escapeHtml(personalizationDiagnosticLabel(group.workoutIntent))} · ${escapeHtml(personalizationDiagnosticLabel(group.intensityId))}</h4>
-    <div class="personalization-cohort-tags"><span>${escapeHtml(personalizationDiagnosticLabel(group.calibrationWorkloadProvenance))}</span><span>${escapeHtml(personalizationDiagnosticLabel(group.observedPowerProvenance))} observed</span><span>${escapeHtml(personalizationDiagnosticLabel(group.formalAssessmentQuality))} quality</span><span>${escapeHtml(personalizationDiagnosticLabel(group.candidateDomainMarginBucket))} domain</span></div>
+    <div class="personalization-cohort-tags"><span>${escapeHtml(personalizationDiagnosticLabel(group.calibrationWorkloadProvenance))}</span><span>${escapeHtml(personalizationDiagnosticLabel(group.observedPowerProvenance))} observed</span><span>${escapeHtml(group.formalAssessmentAlgorithm)}</span><span>${escapeHtml(group.formalAssessmentProtocol)}</span><span>${escapeHtml(personalizationDiagnosticLabel(group.formalAssessmentQuality))} quality</span><span>${escapeHtml(personalizationDiagnosticLabel(group.candidateDomainMarginBucket))} domain</span></div>
     <div class="personalization-metric-grid">
       <div><label>Median signed difference</label>${metric(group.signedDifferenceWatts.median, group.signedDifferenceWatts.count, " W")}</div>
       <div><label>Median absolute difference</label>${metric(group.absoluteDifferenceWatts.median, group.absoluteDifferenceWatts.count, " W")}</div>

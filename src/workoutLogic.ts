@@ -48,7 +48,7 @@ import {
   PHASE_E1_SHADOW_POLICY,
   evaluatePersonalizedPrescription,
 } from "./personalizedPrescription.js";
-import { loadAthleteProfile, readExplicitVo2ProfileInputs } from "./profile.js";
+import { loadAthleteProfile } from "./profile.js";
 import { FITNESS_STATE_STORAGE_KEY, parseFitnessState } from "./fitnessState.js";
 import {
   buildOrdinaryBikeTelemetrySample,
@@ -637,11 +637,7 @@ function tickVo2Protocol(
   if (isStaleVo2ProtocolTick(before, elapsedSec)) {
     return { runtime: before, cues: [] };
   }
-  const recoveredProfile = before.assessment_profile ? undefined : readExplicitVo2ProfileInputs(storage);
-  const runtimeForAdvance = !before.assessment_profile && recoveredProfile?.age_years != null && recoveredProfile.weight_kg != null
-    ? { ...before, assessment_profile: recoveredProfile }
-    : before;
-  const next = advanceVo2Protocol(runtimeForAdvance, {
+  const next = advanceVo2Protocol(before, {
     elapsedSec,
     paused,
     samples,

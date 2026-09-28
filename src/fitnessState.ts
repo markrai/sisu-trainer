@@ -8,7 +8,11 @@ import {
   LEGACY_VO2_PROTOCOL_ID,
   LEGACY_VO2_PROTOCOL_VERSION,
   VO2_ASSESSMENT_SCHEMA_VERSION_V1,
+  VO2_ASSESSMENT_SCHEMA_VERSION_V2,
   VO2_EVIDENCE_SCHEMA_VERSION_V1,
+  VO2_EVIDENCE_SCHEMA_VERSION_V2,
+  VO2_PROTOCOL_ID,
+  VO2_PROTOCOL_VERSION,
   type AthleteFitnessSnapshot,
   type AthleteProfile,
   type FitnessMetric,
@@ -30,6 +34,8 @@ import {
 import {
   LEGACY_VO2_ESTIMATOR_ID,
   LEGACY_VO2_ESTIMATOR_VERSION,
+  VO2_ESTIMATOR_ID,
+  VO2_ESTIMATOR_VERSION,
 } from "./vo2Estimator.js";
 
 export const FITNESS_STATE_STORAGE_KEY = "fitness_state_v1";
@@ -68,7 +74,22 @@ export const VO2_FITNESS_PROJECTION_V1 = {
   cycleVo2RestingValue: 7,
 } as const;
 
-export const SUPPORTED_VO2_FITNESS_PROJECTIONS = [VO2_FITNESS_PROJECTION_V1] as const;
+/** Corrected protocol/estimator-v2 projection; v1 remains unchanged above. */
+export const VO2_FITNESS_PROJECTION_V2 = {
+  ...VO2_FITNESS_PROJECTION_V1,
+  fitnessStateSchemaVersion: FITNESS_STATE_SCHEMA_VERSION_V3,
+  assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
+  evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V2,
+  estimatorId: VO2_ESTIMATOR_ID,
+  estimatorVersion: VO2_ESTIMATOR_VERSION,
+  protocolId: VO2_PROTOCOL_ID,
+  protocolVersion: VO2_PROTOCOL_VERSION,
+} as const;
+
+export const SUPPORTED_VO2_FITNESS_PROJECTIONS = [
+  VO2_FITNESS_PROJECTION_V1,
+  VO2_FITNESS_PROJECTION_V2,
+] as const;
 
 export interface FitnessStateStorage extends ProfileStorage {
   setItem?(key: string, value: string): void;
@@ -144,9 +165,10 @@ function supportedProjection(
   estimatorId: unknown,
   estimatorVersion: unknown,
   protocolId: unknown,
-  protocolVersion: unknown
+  protocolVersion: unknown,
+  projections: readonly SupportedVo2FitnessProjection[] = SUPPORTED_VO2_FITNESS_PROJECTIONS
 ): SupportedVo2FitnessProjection | undefined {
-  return SUPPORTED_VO2_FITNESS_PROJECTIONS.find(
+  return projections.find(
     (projection) =>
       projection.estimatorId === estimatorId &&
       projection.estimatorVersion === estimatorVersion &&
@@ -155,14 +177,18 @@ function supportedProjection(
   );
 }
 
-function predictedHrMaxBpmV1(ageYears: number): number {
-  return VO2_FITNESS_PROJECTION_V1.hrMaxIntercept - VO2_FITNESS_PROJECTION_V1.hrMaxAgeCoefficient * ageYears;
+function predictedHrMaxBpmForProjection(ageYears: number, projection: SupportedVo2FitnessProjection): number {
+  return projection.hrMaxIntercept - projection.hrMaxAgeCoefficient * ageYears;
 }
 
-function cycleVo2MlKgMinV1(predictedMaxWatts: number, weightKg: number): number {
+function cycleVo2MlKgMinForProjection(
+  predictedMaxWatts: number,
+  weightKg: number,
+  projection: SupportedVo2FitnessProjection
+): number {
   return (
-    (VO2_FITNESS_PROJECTION_V1.cycleVo2WattsCoefficient * predictedMaxWatts) / weightKg +
-    VO2_FITNESS_PROJECTION_V1.cycleVo2RestingValue
+    (projection.cycleVo2WattsCoefficient * predictedMaxWatts) / weightKg +
+    projection.cycleVo2RestingValue
   );
 }
 
@@ -259,18 +285,26 @@ function parseMetricEnvelope<T>(
   };
 }
 
-function isSupportedFormalMetric(metric: FitnessMetric<unknown> | undefined): boolean {
+function isSupportedFormalMetric(
+  metric: FitnessMetric<unknown> | undefined,
+  projections: readonly SupportedVo2FitnessProjection[]
+): boolean {
   if (!metric) return true;
   return (
     metric.source === "formal_assessment" &&
     metric.quality !== "unverified" &&
-    isSupportedVo2FitnessEstimator(metric.algorithm?.id, metric.algorithm?.version) &&
+    projections.some((projection) =>
+      projection.estimatorId === metric.algorithm?.id && projection.estimatorVersion === metric.algorithm?.version
+    ) &&
     Array.isArray(metric.evidenceSessionIds) &&
     metric.evidenceSessionIds.length > 0
   );
 }
 
-function parseCalibration(value: unknown): HrWorkloadCalibration | null {
+function parseCalibration(
+  value: unknown,
+  projections: readonly SupportedVo2FitnessProjection[]
+): HrWorkloadCalibration | null {
   if (!isObject(value)) return null;
   if (!isPositiveFinite(value.slopeBpmPerWatt) || !isFiniteNumber(value.interceptBpm)) return null;
   if (!isFiniteNumber(value.rSquared) || value.rSquared < 0 || value.rSquared > 1) return null;
@@ -308,7 +342,9 @@ function parseCalibration(value: unknown): HrWorkloadCalibration | null {
   if (
     typeof protocolId !== "string" ||
     !isPositiveInteger(protocolVersion) ||
-    !isSupportedVo2FitnessProtocol(protocolId, protocolVersion)
+    !projections.some((projection) =>
+      projection.protocolId === protocolId && projection.protocolVersion === protocolVersion
+    )
   ) {
     return null;
   }
@@ -338,7 +374,10 @@ function parseCalibration(value: unknown): HrWorkloadCalibration | null {
 }
 
 /** Strict reconstruction of the permanent v1 persisted fitness projection. */
-function parseFitnessStateV1(value: Record<string, unknown>): FitnessState | null {
+function parseFitnessStateV1(
+  value: Record<string, unknown>,
+  allowedProjections: readonly SupportedVo2FitnessProjection[] = [VO2_FITNESS_PROJECTION_V1]
+): FitnessState | null {
   if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1 || !isAthleteId(value.athleteId)) return null;
   if (value.passiveAerobicTrend !== undefined || value.passiveAerobicObservation !== undefined) return null;
   if (!isIsoTimestamp(value.updatedAt)) return null;
@@ -369,12 +408,12 @@ function parseFitnessStateV1(value: Record<string, unknown>): FitnessState | nul
   }
   const hrWorkloadCalibration = value.hrWorkloadCalibration == null
     ? undefined
-    : parseMetricEnvelope(value.hrWorkloadCalibration, parseCalibration);
+    : parseMetricEnvelope(value.hrWorkloadCalibration, (candidate) => parseCalibration(candidate, allowedProjections));
   if (value.hrWorkloadCalibration != null && !hrWorkloadCalibration) return null;
   if (
-    !isSupportedFormalMetric(vo2Max) ||
-    !isSupportedFormalMetric(predictedMaxWatts) ||
-    !isSupportedFormalMetric(hrWorkloadCalibration)
+    !isSupportedFormalMetric(vo2Max, allowedProjections) ||
+    !isSupportedFormalMetric(predictedMaxWatts, allowedProjections) ||
+    !isSupportedFormalMetric(hrWorkloadCalibration, allowedProjections)
   ) {
     return null;
   }
@@ -400,7 +439,8 @@ function parseFitnessStateV1(value: Record<string, unknown>): FitnessState | nul
           metric.algorithm?.id,
           metric.algorithm?.version,
           hrWorkloadCalibration.value.protocol.id,
-          hrWorkloadCalibration.value.protocol.version
+          hrWorkloadCalibration.value.protocol.version,
+          allowedProjections
         )
       ) {
         return null;
@@ -599,7 +639,7 @@ function parseFitnessStateV2(value: Record<string, unknown>): FitnessState | nul
     schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
     passiveAerobicTrend: undefined,
     passiveAerobicObservation: undefined,
-  });
+  }, [VO2_FITNESS_PROJECTION_V1]);
   if (!formal) return null;
   const passive = value.passiveAerobicTrend == null
     ? undefined
@@ -886,7 +926,7 @@ function parseFitnessStateV3(value: Record<string, unknown>): FitnessState | nul
     schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
     passiveAerobicTrend: undefined,
     passiveAerobicObservation: undefined,
-  });
+  }, SUPPORTED_VO2_FITNESS_PROJECTIONS);
   if (!formal) return null;
   const passive = value.passiveAerobicObservation == null
     ? undefined
@@ -1155,11 +1195,16 @@ function assessmentCanPromote(
   const predictedHrMax = assessment.input_snapshot.predicted_hr_max;
   if (!isFiniteNumber(age) || age < projection.ageYearsMin || age > projection.ageYearsMax) return null;
   if (!isFiniteNumber(bodyMassKg) || bodyMassKg < projection.weightKgMin || bodyMassKg > projection.weightKgMax) return null;
-  if (!isPositiveFinite(predictedHrMax) || !nearlyEqual(predictedHrMax, predictedHrMaxBpmV1(age))) return null;
+  if (!isPositiveFinite(predictedHrMax) || !nearlyEqual(predictedHrMax, predictedHrMaxBpmForProjection(age, projection))) {
+    return null;
+  }
   if (!nearlyEqual(diagnostics.predicted_hr_max as number, predictedHrMax)) return null;
   const extrapolatedWatts = (predictedHrMax - diagnostics.intercept) / diagnostics.slope;
   if (!nearlyEqual(extrapolatedWatts, diagnostics.predicted_max_watts)) return null;
-  if (!nearlyEqual(cycleVo2MlKgMinV1(diagnostics.predicted_max_watts, bodyMassKg), assessment.estimate_ml_kg_min)) {
+  if (!nearlyEqual(
+    cycleVo2MlKgMinForProjection(diagnostics.predicted_max_watts, bodyMassKg, projection),
+    assessment.estimate_ml_kg_min
+  )) {
     return null;
   }
 

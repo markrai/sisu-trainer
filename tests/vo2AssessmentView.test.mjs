@@ -12,8 +12,9 @@ import {
   vo2SelectorOptionText,
   vo2WorkoutBlocksText,
 } from "../dist/vo2AssessmentView.js";
-import { assessVo2 } from "../dist/vo2Estimator.js";
-import { vo2PlanBlocks } from "../dist/vo2Protocol.js";
+import { assessVo2, assessVo2V1 } from "../dist/vo2Estimator.js";
+import { VO2_PROTOCOL_VERSION, vo2PlanBlocks } from "../dist/vo2Protocol.js";
+import { VO2_EVIDENCE_SCHEMA_VERSION } from "../dist/types.js";
 
 function acceptedStage(id, watts, hr) {
   return {
@@ -44,7 +45,7 @@ function acceptedStage(id, watts, hr) {
 
 function evidence(stages, termination = "protocol_complete") {
   return {
-    schema_version: 1,
+    schema_version: VO2_EVIDENCE_SCHEMA_VERSION,
     active_duration_sec: 900,
     paused_duration_sec: 0,
     work_end_active_sec: 840,
@@ -54,7 +55,7 @@ function evidence(stages, termination = "protocol_complete") {
     hr: { source: "ble_chest_strap", sample_count: 10 },
     protocol: {
       protocol_id: "bike-submax-70rpm",
-      protocol_version: 1,
+      protocol_version: VO2_PROTOCOL_VERSION,
       prescribed_cadence_rpm: 70,
       stages,
       termination: { reason: termination },
@@ -139,6 +140,28 @@ test("too_few_eligible_stages describes eligible_stage_count not accepted_stage_
   assert.match(view.stages[0].detail, /measured watts/);
   assert.match(view.stages[0].detail, /109 bpm/);
   assert.match(view.stages[0].detail, /Ineligible.*below the 110 bpm usable floor/);
+});
+
+test("historical assessment-result v1 renders without fabricating v2 stage diagnostics", () => {
+  const historicalEvidence = evidence(linearThree);
+  historicalEvidence.schema_version = 1;
+  historicalEvidence.protocol.protocol_version = 1;
+  historicalEvidence.protocol.automatic_submax_hr_ceiling_available = false;
+  const historical = assessVo2V1(historicalEvidence, { age_years: 40, weight_kg: 80 });
+  const frozen = structuredClone(historical);
+  const view = vo2AssessmentPresentation(historical);
+  assert.equal(historical.schema_version, 1);
+  assert.equal(view.estimated, true);
+  assert.equal(view.valueText, "40.8 ml/kg/min");
+  assert.equal(view.detail, "Strong heart-rate/workload fit.");
+  assert.equal(view.stages.length, 3);
+  assert.equal(view.stages[0].stageNumber, undefined);
+  assert.equal(view.stages[0].stageId, "vo2-stage:1");
+  assert.match(view.stages[0].headline, /Stage record vo2-stage:1/);
+  assert.match(view.stages[0].headline, /resistance unavailable/);
+  assert.match(view.stages[0].detail, /Workload evidence: not assessed/);
+  assert.match(view.stages[0].detail, /Submaximal HR: not assessed/);
+  assert.deepEqual(historical, frozen);
 });
 
 test("result diagnostics surface high-HR and cadence rejection reasons per stage", () => {

@@ -69,14 +69,14 @@ function profile() {
   };
 }
 
-function fitness(calibrationSource = "measured_watts", overrides = {}) {
+function fitness(calibrationSource = "measured_watts", overrides = {}, formalVersion = 1) {
   const points = [
     { stageId: "stage-1", watts: 100, heartRateBpm: 110, workloadSource: calibrationSource },
     { stageId: "stage-2", watts: 150, heartRateBpm: 135, workloadSource: calibrationSource },
     { stageId: "stage-3", watts: 200, heartRateBpm: 160, workloadSource: calibrationSource },
   ];
   return {
-    schemaVersion: 1,
+    schemaVersion: formalVersion === 2 ? 3 : 1,
     athleteId: ATHLETE,
     hrWorkloadCalibration: {
       value: {
@@ -86,7 +86,7 @@ function fitness(calibrationSource = "measured_watts", overrides = {}) {
         observedMinWatts: 100,
         observedMaxWatts: 200,
         points,
-        protocol: { id: "bike-submax-70rpm", version: 1 },
+        protocol: { id: "bike-submax-70rpm", version: formalVersion },
         predictedHrMaxBpm: 180,
         predictedHrMaxSource: "demographic_estimate",
         profileInputSnapshot: { ageYears: 40, bodyMassKg: 80 },
@@ -96,7 +96,7 @@ function fitness(calibrationSource = "measured_watts", overrides = {}) {
       quality: "high",
       observedAt: "2026-09-01T00:00:00.000Z",
       updatedAt: "2026-09-01T00:01:00.000Z",
-      algorithm: { id: "bike-submax-linear-hr-workload", version: 1 },
+      algorithm: { id: "bike-submax-linear-hr-workload", version: formalVersion },
       evidenceSessionIds: ["formal-e2"],
     },
     updatedAt: "2026-09-01T00:01:00.000Z",
@@ -118,14 +118,14 @@ function prescription(target = "115-130") {
 }
 
 function shadow({ target = "115-130", activity = "bike", intent = "aerobic_base",
-  calibrationSource = "measured_watts" } = {}) {
+  calibrationSource = "measured_watts", formalVersion = 1 } = {}) {
   return evaluatePersonalizedPrescription({
     legacyPrescription: prescription(target),
     workoutIntent: intent,
     activity,
     athleteId: ATHLETE,
     profile: profile(),
-    fitnessState: fitness(calibrationSource),
+    fitnessState: fitness(calibrationSource, {}, formalVersion),
     policy: PHASE_E1_SHADOW_POLICY,
     resolvedAt: RESOLVED_AT,
   });
@@ -156,7 +156,8 @@ function fixture(options = {}) {
   const activity = options.activity ?? "bike";
   const intent = options.intent ?? "aerobic_base";
   const calibrationSource = options.calibrationSource ?? "measured_watts";
-  const e1 = shadow({ target, activity, intent, calibrationSource });
+  const formalVersion = options.formalVersion ?? 1;
+  const e1 = shadow({ target, activity, intent, calibrationSource, formalVersion });
   const hrSeconds = options.hrSeconds ?? ((second) => true);
   const powerSeconds = options.powerSeconds ?? ((second) => true);
   const hrAt = options.hrAt ?? ((second) => second < 30 ? 105 : 120);
@@ -224,6 +225,86 @@ test("E2 deterministically characterizes strong measured evidence with interpret
   assert.equal(first.phase.stableInBandWorkload.medianWatts, 125);
   assert.equal(first.phase.comparison.signedDifferenceWatts, 0);
   assert.equal(first.phase.comparison.candidateContainsObservedMedian, true);
+});
+
+test("E2 and E3 preserve v1 versus v2 formal provenance and never pool their cohorts", () => {
+  const historical = fixture({ formalVersion: 1 });
+  const current = fixture({ formalVersion: 2 });
+  current.characterization.workoutSessionId = "e2-session-v2";
+  assert.deepEqual(historical.characterization.formalAssessmentProvenance, {
+    algorithm: { id: "bike-submax-linear-hr-workload", version: 1 },
+    protocol: { id: "bike-submax-70rpm", version: 1 },
+  });
+  assert.deepEqual(current.characterization.formalAssessmentProvenance, {
+    algorithm: { id: "bike-submax-linear-hr-workload", version: 2 },
+    protocol: { id: "bike-submax-70rpm", version: 2 },
+  });
+  assert.deepEqual(
+    parsePersonalizedPrescriptionCharacterization(historical.characterization, historical.e1),
+    historical.characterization
+  );
+  const historicalE2V1 = clone(historical.characterization);
+  historicalE2V1.schemaVersion = 1;
+  historicalE2V1.characterizer.version = 1;
+  delete historicalE2V1.formalAssessmentProvenance;
+  assert.deepEqual(
+    parsePersonalizedPrescriptionCharacterization(historicalE2V1, historical.e1),
+    historicalE2V1
+  );
+  assert.equal(
+    parsePersonalizedPrescriptionCharacterization(historicalE2V1, current.e1),
+    null,
+    "an E2-v1 record cannot hide protocol-v2 provenance"
+  );
+  assert.deepEqual(
+    parsePersonalizedPrescriptionCharacterization(current.characterization, current.e1),
+    current.characterization
+  );
+
+  const aggregate = aggregatePersonalizedPrescriptionCharacterizations([
+    historical.characterization,
+    current.characterization,
+  ]);
+  assert.equal(aggregate.schemaVersion, 2);
+  assert.equal(aggregate.groups.length, 2);
+  assert.deepEqual(
+    aggregate.groups.map((group) => `${group.formalAssessmentAlgorithm}/${group.formalAssessmentProtocol}`).sort(),
+    [
+      "bike-submax-linear-hr-workload@1/bike-submax-70rpm@1",
+      "bike-submax-linear-hr-workload@2/bike-submax-70rpm@2",
+    ]
+  );
+  assert.equal(aggregate.groups.every((group) => group.completedWorkouts === 1), true);
+  const exported = createPersonalizationDiagnosticsExport(buildPersonalizationDiagnosticsModel([
+    historical.characterization,
+    current.characterization,
+  ]));
+  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.aggregate.schemaVersion, 2);
+  assert.deepEqual(
+    exported.aggregate.groups.map((group) =>
+      `${group.formalAssessmentAlgorithm}/${group.formalAssessmentProtocol}`).sort(),
+    [
+      "bike-submax-linear-hr-workload@1/bike-submax-70rpm@1",
+      "bike-submax-linear-hr-workload@2/bike-submax-70rpm@2",
+    ]
+  );
+
+  const history = [historical, current].map((item) => ({
+    summary: {
+      external_session_id: item.characterization.workoutSessionId,
+      athlete_id: ATHLETE,
+      day: "Tuesday",
+      activity: "bike",
+      shadow_prescription_evaluation: item.e1,
+      shadow_prescription_characterization: item.characterization,
+    },
+  }));
+  const contexts = extractTrustedPersonalizationAssessmentContexts(history, ATHLETE);
+  assert.equal(contexts[historical.characterization.workoutSessionId].algorithm.version, 1);
+  assert.equal(contexts[historical.characterization.workoutSessionId].protocol.version, 1);
+  assert.equal(contexts[current.characterization.workoutSessionId].algorithm.version, 2);
+  assert.equal(contexts[current.characterization.workoutSessionId].protocol.version, 2);
 });
 
 test("stable in-band workload is descriptively below, inside, or above the E1 candidate", () => {
@@ -358,7 +439,8 @@ test("strict E2 reader validates E1 linkage, ownership, phase identity, candidat
   };
   assert.deepEqual(parsePersonalizedPrescriptionCharacterization(characterization, e1, expected), characterization);
   for (const mutate of [
-    (value) => { value.schemaVersion = 2; },
+    (value) => { value.schemaVersion = 3; },
+    (value) => { value.formalAssessmentProvenance.protocol.version = 2; },
     (value) => { value.athleteId = "wrong-athlete"; },
     (value) => { value.workoutSessionId = "wrong-session"; },
     (value) => { value.phases[0].phaseId = "forged-phase"; },
@@ -588,6 +670,8 @@ test("ordinary workout finalization creates the E2 summary record deterministica
     extractTrustedPersonalizationWorkoutContexts(reloadedHistory, ATHLETE)
   );
   const exported = createPersonalizationDiagnosticsExport(model);
+  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.aggregate.schemaVersion, 2);
   assert.equal(records.length, 1);
   assert.equal(model.evidenceCollectionSummary.completedWorkoutsWithE2, 1);
   assert.equal(model.evidenceCollectionSummary.measuredToMeasuredObservations, 1);

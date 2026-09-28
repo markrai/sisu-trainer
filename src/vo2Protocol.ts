@@ -1,13 +1,16 @@
 import {
   VO2_PROTOCOL_ID,
   VO2_PROTOCOL_VERSION,
+  LEGACY_VO2_PROTOCOL_ID,
+  LEGACY_VO2_PROTOCOL_VERSION_V1,
   type PlanBlock,
-  type Vo2ProtocolEvidence,
+  type CurrentVo2ProtocolEvidence,
   type Vo2ProtocolStageEvidence,
   type Vo2ProtocolStageHrEvidence,
   type Vo2ProtocolStageWorkloadEvidence,
   type Vo2ProtocolStageStatus,
   type Vo2ProtocolTerminationReason,
+  type Vo2ProtocolTerminationReasonV1,
   type WorkoutMetadata,
   type WorkoutPhaseState,
 } from "./types.js";
@@ -45,7 +48,7 @@ export const VO2_NOMINAL_WATT_STEP = 25;
 export const VO2_HR_FRESHNESS_MS = 3000;
 export const VO2_UPCOMING_RESISTANCE_LEAD_SEC = 10;
 export const VO2_CALIBRATION_MACHINE_ID = "proform-smart-power-10";
-/** Protocol-v1 end-to-end commandable ceiling. Not the physical bike maximum. */
+/** Protocol-v2 end-to-end commandable ceiling. Not the physical bike maximum. */
 export const VO2_PROTOCOL_MAX_RESISTANCE = 10;
 export const VO2_EVAL_RELATIVE_SECONDS = [0, 180, 240, 300] as const;
 const VO2_TERMINATION_REASONS: readonly Vo2ProtocolTerminationReason[] = [
@@ -100,8 +103,8 @@ export interface Vo2ProtocolRuntime {
   termination?: { reason: Vo2ProtocolTerminationReason };
   start_announced: boolean;
   upcoming_warmup_announced: boolean;
-  /** Explicit profile inputs frozen when collection starts; never inferred from defaults. */
-  assessment_profile?: Vo2ProfileInputs;
+  /** Explicit profile inputs frozen when v2 collection starts; never inferred from defaults. */
+  assessment_profile: Required<Vo2ProfileInputs>;
 }
 
 export type Vo2WattsLookup = (resistance: number) => number | undefined;
@@ -226,8 +229,18 @@ export function buildVo2ProtocolPlan(getWatts: Vo2WattsLookup = getEstimatedWatt
 
 export function createVo2ProtocolRuntime(
   plan: Vo2ProtocolPlan,
-  assessmentProfile?: Vo2ProfileInputs
+  assessmentProfile: Required<Vo2ProfileInputs>
 ): Vo2ProtocolRuntime {
+  if (
+    !Number.isFinite(assessmentProfile?.age_years) ||
+    assessmentProfile.age_years < VO2_AGE_YEARS_MIN ||
+    assessmentProfile.age_years > VO2_AGE_YEARS_MAX ||
+    !Number.isFinite(assessmentProfile?.weight_kg) ||
+    assessmentProfile.weight_kg < VO2_WEIGHT_KG_MIN ||
+    assessmentProfile.weight_kg > VO2_WEIGHT_KG_MAX
+  ) {
+    throw new Error("Protocol v2 requires valid frozen age and body weight");
+  }
   return {
     plan,
     segment: "warmup",
@@ -235,11 +248,29 @@ export function createVo2ProtocolRuntime(
     cooldown_start_sec: null,
     start_announced: false,
     upcoming_warmup_announced: false,
-    ...(assessmentProfile ? { assessment_profile: { ...assessmentProfile } } : {}),
+    assessment_profile: { ...assessmentProfile },
   };
 }
 
-export type Vo2PreflightOk = { ok: true; plan: Vo2ProtocolPlan; assessmentProfile: Vo2ProfileInputs };
+/** Exact persisted plan shape produced by the historical protocol-v1 writer. */
+export interface LegacyVo2ProtocolPlanV1 extends Omit<Vo2ProtocolPlan, "protocol_version"> {
+  protocol_version: typeof LEGACY_VO2_PROTOCOL_VERSION_V1;
+  /** V1 had exactly three planned attempts and no reserved fourth workload. */
+  workloads: [Vo2ResolvedWorkload, Vo2ResolvedWorkload, Vo2ResolvedWorkload];
+}
+
+/** Historical runtime is reader-only. It can be diagnosed but never advanced by the v2 executor. */
+export interface LegacyVo2ProtocolRuntimeV1 {
+  plan: LegacyVo2ProtocolPlanV1;
+  segment: Vo2ProtocolRuntime["segment"];
+  stages: Array<Omit<Vo2ProtocolStageRuntime, "workload">>;
+  cooldown_start_sec: number | null;
+  termination?: { reason: Vo2ProtocolTerminationReasonV1 };
+  start_announced: boolean;
+  upcoming_warmup_announced: boolean;
+}
+
+export type Vo2PreflightOk = { ok: true; plan: Vo2ProtocolPlan; assessmentProfile: Required<Vo2ProfileInputs> };
 export type Vo2PreflightFail = { ok: false; reason: string; message: string };
 export type Vo2PreflightResult = Vo2PreflightOk | Vo2PreflightFail;
 
@@ -932,14 +963,14 @@ export function isValidVo2ProtocolRuntime(value: unknown): value is Vo2ProtocolR
   if (!["warmup", "work", "cooldown", "complete"].includes(runtime.segment)) return false;
   if (runtime.cooldown_start_sec != null && !isNonNegativeFinite(runtime.cooldown_start_sec)) return false;
   if (!isBooleanFlag(runtime.start_announced) || !isBooleanFlag(runtime.upcoming_warmup_announced)) return false;
-  if (runtime.assessment_profile != null) {
-    if (typeof runtime.assessment_profile !== "object") return false;
-    const age = runtime.assessment_profile.age_years;
-    const weight = runtime.assessment_profile.weight_kg;
-    if (age != null && !(Number.isFinite(age) && age >= VO2_AGE_YEARS_MIN && age <= VO2_AGE_YEARS_MAX)) return false;
-    if (weight != null && !(Number.isFinite(weight) && weight >= VO2_WEIGHT_KG_MIN && weight <= VO2_WEIGHT_KG_MAX)) {
-      return false;
-    }
+  if (runtime.assessment_profile == null || typeof runtime.assessment_profile !== "object") return false;
+  const age = runtime.assessment_profile.age_years;
+  const weight = runtime.assessment_profile.weight_kg;
+  if (!(Number.isFinite(age) && (age as number) >= VO2_AGE_YEARS_MIN && (age as number) <= VO2_AGE_YEARS_MAX)) {
+    return false;
+  }
+  if (!(Number.isFinite(weight) && (weight as number) >= VO2_WEIGHT_KG_MIN && (weight as number) <= VO2_WEIGHT_KG_MAX)) {
+    return false;
   }
   if (runtime.termination != null) {
     if (typeof runtime.termination !== "object" || !isTerminationReason(runtime.termination.reason)) return false;
@@ -967,7 +998,7 @@ export function isValidVo2ProtocolRuntime(value: unknown): value is Vo2ProtocolR
 export function buildVo2ProtocolEvidence(
   runtime: Vo2ProtocolRuntime,
   telemetrySamples: readonly BikeTelemetrySample[] = []
-): Vo2ProtocolEvidence | undefined {
+): CurrentVo2ProtocolEvidence | undefined {
   if (!isValidVo2ProtocolRuntime(runtime)) return undefined;
   const stages: Vo2ProtocolStageEvidence[] = [];
   for (const stage of runtime.stages) {
@@ -989,7 +1020,93 @@ export function buildVo2ProtocolEvidence(
   };
 }
 
+export function isLegacyVo2ProtocolRuntimeV1(value: unknown): value is LegacyVo2ProtocolRuntimeV1 {
+  if (!value || typeof value !== "object") return false;
+  const runtime = value as LegacyVo2ProtocolRuntimeV1 & {
+    assessment_profile?: unknown;
+    stages?: Array<Vo2ProtocolStageRuntime & { workload?: unknown }>;
+  };
+  const plan = runtime.plan;
+  if (!plan || typeof plan !== "object") return false;
+  if (plan.protocol_id !== LEGACY_VO2_PROTOCOL_ID || plan.protocol_version !== LEGACY_VO2_PROTOCOL_VERSION_V1) {
+    return false;
+  }
+  if (plan.prescribed_cadence_rpm !== VO2_PRESCRIBED_CADENCE_RPM) return false;
+  if (!isProtocolResistance(plan.warmup_resistance) || !isPositiveFinite(plan.warmup_calibrated_watts_at_70rpm)) {
+    return false;
+  }
+  if (plan.warmup_duration_sec !== VO2_WARMUP_DURATION_SEC || plan.cooldown_duration_sec !== VO2_COOLDOWN_DURATION_SEC) {
+    return false;
+  }
+  if (!Array.isArray(plan.workloads) || plan.workloads.length !== 3) return false;
+  let previousWatts = plan.warmup_calibrated_watts_at_70rpm;
+  const resistances = new Set<number>([plan.warmup_resistance]);
+  for (const workload of plan.workloads) {
+    if (!isValidVo2ResolvedWorkload(workload)) return false;
+    if (workload.requested_watts !== previousWatts + VO2_NOMINAL_WATT_STEP) return false;
+    if (workload.calibrated_watts_at_70rpm <= previousWatts || resistances.has(workload.prescribed_resistance)) {
+      return false;
+    }
+    previousWatts = workload.calibrated_watts_at_70rpm;
+    resistances.add(workload.prescribed_resistance);
+  }
+  if (runtime.assessment_profile !== undefined) return false;
+  if (!["warmup", "work", "cooldown", "complete"].includes(runtime.segment)) return false;
+  if (runtime.cooldown_start_sec != null && !isNonNegativeFinite(runtime.cooldown_start_sec)) return false;
+  if (!isBooleanFlag(runtime.start_announced) || !isBooleanFlag(runtime.upcoming_warmup_announced)) return false;
+  if (runtime.termination != null) {
+    const reason = (runtime.termination as { reason?: unknown }).reason;
+    if (typeof runtime.termination !== "object" || !isTerminationReason(reason) ||
+        reason === "insufficient_eligible_stages") return false;
+  }
+  if (!Array.isArray(runtime.stages) || runtime.stages.length > 3) return false;
+  for (const stage of runtime.stages) {
+    if (!stage || typeof stage !== "object" || stage.workload !== undefined) return false;
+    if (typeof stage.stage_id !== "string" || !stage.stage_id) return false;
+    if (!Number.isInteger(stage.workloadIndex) || stage.workloadIndex < 0 || stage.workloadIndex >= 3) return false;
+    if (!isNonNegativeFinite(stage.active_start_sec)) return false;
+    if (stage.active_end_sec != null && (!isNonNegativeFinite(stage.active_end_sec) ||
+        stage.active_end_sec < stage.active_start_sec)) return false;
+    if (!Number.isInteger(stage.extensions) || stage.extensions < 0 || stage.extensions > VO2_MAX_EXTENSION_MINUTES) {
+      return false;
+    }
+    if (!isEvalRelativeSec(stage.last_eval_relative_sec)) return false;
+    if (!isBooleanFlag(stage.upcoming_announced) || !isBooleanFlag(stage.extension_announced)) return false;
+    if (!["accepted", "unstable_hr", "insufficient_hr", "incomplete", "open"].includes(stage.status)) return false;
+  }
+  return true;
+}
+
 export function parseVo2ProtocolRuntime(raw: unknown): Vo2ProtocolRuntime | null {
   if (!isValidVo2ProtocolRuntime(raw)) return null;
   return raw;
+}
+
+export interface Vo2ProtocolRuntimeReadResult {
+  runtime: Vo2ProtocolRuntime | null;
+  restartRequired: boolean;
+  observedProtocolVersion?: number;
+}
+
+/**
+ * Persisted protocol-v1 runtimes cannot safely continue under v2 collection
+ * rules. Recognize their immutable identity and fail closed so the UI can
+ * require a new v2 assessment instead of silently changing semantics.
+ */
+export function readPersistedVo2ProtocolRuntime(raw: unknown): Vo2ProtocolRuntimeReadResult {
+  const runtime = parseVo2ProtocolRuntime(raw);
+  if (runtime) {
+    return { runtime, restartRequired: false, observedProtocolVersion: runtime.plan.protocol_version };
+  }
+  if (raw && typeof raw === "object") {
+    const plan = (raw as { plan?: unknown }).plan;
+    if (plan && typeof plan === "object") {
+      const protocolId = (plan as { protocol_id?: unknown }).protocol_id;
+      const protocolVersion = (plan as { protocol_version?: unknown }).protocol_version;
+      if (protocolId === LEGACY_VO2_PROTOCOL_ID && protocolVersion === LEGACY_VO2_PROTOCOL_VERSION_V1) {
+        return { runtime: null, restartRequired: true, observedProtocolVersion: LEGACY_VO2_PROTOCOL_VERSION_V1 };
+      }
+    }
+  }
+  return { runtime: null, restartRequired: false };
 }

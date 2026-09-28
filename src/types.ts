@@ -216,9 +216,15 @@ export interface PersonalizedPrescriptionEvaluationV1 {
 
 /** Permanent Phase E2 diagnostic schema. This record has no control authority. */
 export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1 = 1 as const;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2 = 2 as const;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION =
+  PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2;
 export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1 =
   "personalized-prescription-characterization" as const;
 export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1 = 1 as const;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2 = 2 as const;
+export const PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION =
+  PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2;
 
 export type PersonalizedPrescriptionCharacterizationOutcomeV1 =
   | "characterized"
@@ -386,6 +392,33 @@ export interface PersonalizedPrescriptionCharacterizationV1 {
   phases: PersonalizedPrescriptionPhaseCharacterizationV1[];
   createdAt: string;
 }
+
+export interface PersonalizedPrescriptionFormalAssessmentProvenanceV2 {
+  algorithm: {
+    id: string;
+    version: number;
+  };
+  protocol: {
+    id: string;
+    version: number;
+  };
+}
+
+/** Current E2 record. Provenance is copied from and verified against its immutable E1 source. */
+export interface PersonalizedPrescriptionCharacterizationV2
+  extends Omit<PersonalizedPrescriptionCharacterizationV1, "schemaVersion" | "characterizer"> {
+  schemaVersion: typeof PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2;
+  characterizer: {
+    id: typeof PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1;
+    version: typeof PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2;
+  };
+  formalAssessmentProvenance?: PersonalizedPrescriptionFormalAssessmentProvenanceV2;
+}
+
+export type PersonalizedPrescriptionCharacterization =
+  | PersonalizedPrescriptionCharacterizationV1
+  | PersonalizedPrescriptionCharacterizationV2;
+export type CurrentPersonalizedPrescriptionCharacterization = PersonalizedPrescriptionCharacterizationV2;
 
 export interface WorkoutPhaseState {
   phase: "Warm-Up" | "Sustain" | "Cool-Down" | "Completed";
@@ -780,8 +813,11 @@ export interface ZoneMinutes {
 /** Local evidence for the VO2 estimator. Not itself a VO2 result. */
 export const VO2_EVIDENCE_SCHEMA_VERSION_V1 = 1 as const;
 export const VO2_ASSESSMENT_SCHEMA_VERSION_V1 = 1 as const;
-export const VO2_EVIDENCE_SCHEMA_VERSION = VO2_EVIDENCE_SCHEMA_VERSION_V1;
-export const VO2_ASSESSMENT_SCHEMA_VERSION = VO2_ASSESSMENT_SCHEMA_VERSION_V1;
+export const VO2_EVIDENCE_SCHEMA_VERSION_V2 = 2 as const;
+export const VO2_ASSESSMENT_SCHEMA_VERSION_V2 = 2 as const;
+/** Writer aliases. Historical readers must use the explicit V1 constants above. */
+export const VO2_EVIDENCE_SCHEMA_VERSION = VO2_EVIDENCE_SCHEMA_VERSION_V2;
+export const VO2_ASSESSMENT_SCHEMA_VERSION = VO2_ASSESSMENT_SCHEMA_VERSION_V2;
 
 export interface Vo2EvidencePhasePrescription {
   /** Prescribed HR target text or number from the workout plan (not measured). */
@@ -817,12 +853,17 @@ export interface Vo2EvidenceMachine {
 
 /** Permanent historical identity for the v1 protocol; keep readable after newer protocols ship. */
 export const LEGACY_VO2_PROTOCOL_ID = "bike-submax-70rpm" as const;
-export const LEGACY_VO2_PROTOCOL_VERSION = 1 as const;
+export const LEGACY_VO2_PROTOCOL_VERSION_V1 = 1 as const;
+/** Backward-compatible name for the permanent historical protocol identity. */
+export const LEGACY_VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION_V1;
+export const VO2_PROTOCOL_VERSION_V2 = 2 as const;
 /** Protocol identity used for new formal assessments in this build. */
 export const VO2_PROTOCOL_ID = LEGACY_VO2_PROTOCOL_ID;
-export const VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION;
+export const VO2_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION_V2;
 export type Vo2ProtocolId = typeof VO2_PROTOCOL_ID;
-export type Vo2ProtocolVersion = typeof VO2_PROTOCOL_VERSION;
+export type Vo2ProtocolVersion =
+  | typeof LEGACY_VO2_PROTOCOL_VERSION_V1
+  | typeof VO2_PROTOCOL_VERSION_V2;
 
 export type Vo2ProtocolStageStatus =
   | "accepted"
@@ -830,16 +871,21 @@ export type Vo2ProtocolStageStatus =
   | "insufficient_hr"
   | "incomplete";
 
-export type Vo2ProtocolTerminationReason =
+export type Vo2ProtocolTerminationReasonV1 =
   | "protocol_complete"
   | "submax_hr_ceiling"
-  | "insufficient_eligible_stages"
   | "early_cooldown"
   | "limit_reached"
   | "user_cancelled"
   | "hr_lost"
   | "insufficient_calibrated_workloads"
   | "other";
+
+export type Vo2ProtocolTerminationReasonV2 =
+  | Vo2ProtocolTerminationReasonV1
+  | "insufficient_eligible_stages";
+
+export type Vo2ProtocolTerminationReason = Vo2ProtocolTerminationReasonV1 | Vo2ProtocolTerminationReasonV2;
 
 export interface Vo2ProtocolStageHrEvidence {
   sample_count: number;
@@ -863,22 +909,37 @@ export interface Vo2ProtocolStageEvidence {
   workload?: Vo2ProtocolStageWorkloadEvidence;
 }
 
-export interface Vo2ProtocolEvidence {
-  /** Observed protocol id. Estimator v1 requires `bike-submax-70rpm`. */
+interface Vo2ProtocolEvidenceBase {
+  /** Observed protocol id. */
   protocol_id: string;
-  /** Observed protocol version. Estimator v1 requires version 1. */
+  /** Observed protocol version. */
   protocol_version: number;
   prescribed_cadence_rpm: number;
   stages: Vo2ProtocolStageEvidence[];
-  termination: {
-    reason: Vo2ProtocolTerminationReason;
-  };
-  /** Whether an authoritative HRmax ceiling was available to enforce 85% HRmax. */
+  /** Whether a predicted submaximal HR ceiling was available during collection. */
   automatic_submax_hr_ceiling_available: boolean;
 }
 
-export interface Vo2Evidence {
-  schema_version: typeof VO2_EVIDENCE_SCHEMA_VERSION;
+/** Exact historical formal-protocol evidence contract. */
+export interface Vo2ProtocolEvidenceV1 extends Omit<Vo2ProtocolEvidenceBase, "protocol_version"> {
+  protocol_version: typeof LEGACY_VO2_PROTOCOL_VERSION_V1;
+  termination: {
+    reason: Vo2ProtocolTerminationReasonV1;
+  };
+}
+
+/** Current corrected formal-protocol evidence contract. */
+export interface Vo2ProtocolEvidenceV2 extends Omit<Vo2ProtocolEvidenceBase, "protocol_version"> {
+  protocol_version: typeof VO2_PROTOCOL_VERSION_V2;
+  termination: {
+    reason: Vo2ProtocolTerminationReasonV2;
+  };
+}
+
+export type Vo2ProtocolEvidence = Vo2ProtocolEvidenceV1 | Vo2ProtocolEvidenceV2;
+export type CurrentVo2ProtocolEvidence = Vo2ProtocolEvidenceV2;
+
+interface Vo2EvidenceBase {
   activity?: Activity;
   intent?: string;
   day?: DayName | string;
@@ -899,9 +960,24 @@ export interface Vo2Evidence {
   protocol?: Vo2ProtocolEvidence;
 }
 
+/** Permanent historical evidence record. */
+export interface Vo2EvidenceV1 extends Vo2EvidenceBase {
+  schema_version: typeof VO2_EVIDENCE_SCHEMA_VERSION_V1;
+  protocol?: Vo2ProtocolEvidenceV1;
+}
+
+/** Current evidence writer record. */
+export interface Vo2EvidenceV2 extends Vo2EvidenceBase {
+  schema_version: typeof VO2_EVIDENCE_SCHEMA_VERSION_V2;
+  protocol?: Vo2ProtocolEvidenceV2;
+}
+
+export type Vo2Evidence = Vo2EvidenceV1 | Vo2EvidenceV2;
+export type CurrentVo2Evidence = Vo2EvidenceV2;
+
 export type Vo2AssessmentStatus = "estimated" | "insufficient_evidence";
 
-export type Vo2AssessmentReasonCode =
+export type Vo2AssessmentReasonCodeV1 =
   | "missing_protocol_evidence"
   | "unsupported_protocol_id"
   | "unsupported_protocol_version"
@@ -912,13 +988,8 @@ export type Vo2AssessmentReasonCode =
   | "too_few_accepted_stages"
   | "too_few_eligible_stages"
   | "missing_stage_hr"
-  | "stage_unstable_hr"
-  | "insufficient_stage_hr_samples"
-  | "stage_incomplete"
   | "invalid_workload"
   | "unverified_performed_workload"
-  | "insufficient_workload_samples"
-  | "cadence_outside_verified_range"
   | "invalid_workload_progression"
   | "invalid_hr_progression"
   | "hr_below_estimator_range"
@@ -927,6 +998,17 @@ export type Vo2AssessmentReasonCode =
   | "unstable_regression"
   | "invalid_extrapolation"
   | "invalid_estimate";
+
+export type Vo2AssessmentReasonCodeV2 =
+  | Vo2AssessmentReasonCodeV1
+  | "unsupported_evidence_schema"
+  | "stage_unstable_hr"
+  | "insufficient_stage_hr_samples"
+  | "stage_incomplete"
+  | "insufficient_workload_samples"
+  | "cadence_outside_verified_range";
+
+export type Vo2AssessmentReasonCode = Vo2AssessmentReasonCodeV1 | Vo2AssessmentReasonCodeV2;
 
 export type Vo2AssessmentFitQuality = "high" | "moderate" | "low";
 
@@ -949,18 +1031,12 @@ export interface Vo2ProtocolStageWorkloadEvidence {
   watts_measured: boolean;
 }
 
-export interface Vo2AssessmentPoint {
+/** Exact point shape written by assessment schema v1. */
+export interface Vo2AssessmentPointV1 {
   stage_id: string;
-  stage_number: number;
-  protocol_stage_status: Vo2ProtocolStageStatus;
   protocol_accepted: boolean;
-  hr_stability_passed: boolean;
-  workload_evidence_passed: boolean;
-  submax_hr_eligible?: boolean;
   estimator_eligible: boolean;
-  ineligibility_reasons: Vo2AssessmentReasonCode[];
-  prescribed_resistance: number;
-  requested_watts?: number;
+  ineligibility_reasons: Vo2AssessmentReasonCodeV1[];
   workload_source?: Vo2WorkloadSource;
   watts?: number;
   calibrated_watts_at_70rpm?: number;
@@ -974,6 +1050,21 @@ export interface Vo2AssessmentPoint {
   cadence_in_band_ratio?: number;
 }
 
+/** Current stage diagnostic shape written by assessment schema v2. */
+export interface Vo2AssessmentPointV2 extends Omit<Vo2AssessmentPointV1, "ineligibility_reasons"> {
+  stage_number: number;
+  protocol_stage_status: Vo2ProtocolStageStatus;
+  hr_stability_passed: boolean;
+  workload_evidence_passed: boolean;
+  submax_hr_eligible?: boolean;
+  ineligibility_reasons: Vo2AssessmentReasonCodeV2[];
+  prescribed_resistance: number;
+  requested_watts?: number;
+}
+
+export type Vo2AssessmentPoint = Vo2AssessmentPointV1 | Vo2AssessmentPointV2;
+export type CurrentVo2AssessmentPoint = Vo2AssessmentPointV2;
+
 export interface Vo2AssessmentInputSnapshot {
   age_years?: number;
   weight_kg?: number;
@@ -982,11 +1073,7 @@ export interface Vo2AssessmentInputSnapshot {
   protocol_version?: number;
 }
 
-export interface Vo2AssessmentDiagnostics {
-  /** Every attempted work stage, including stages that never stabilized. */
-  stage_points: Vo2AssessmentPoint[];
-  accepted_points: Vo2AssessmentPoint[];
-  eligible_points: Vo2AssessmentPoint[];
+interface Vo2AssessmentDiagnosticsBase {
   slope?: number;
   intercept?: number;
   r_squared?: number;
@@ -1001,22 +1088,55 @@ export interface Vo2AssessmentDiagnostics {
   observed_protocol_version?: number;
 }
 
-export interface Vo2AssessmentResult {
-  schema_version: typeof VO2_ASSESSMENT_SCHEMA_VERSION;
+/** Exact diagnostics shape written by assessment schema v1. */
+export interface Vo2AssessmentDiagnosticsV1 extends Vo2AssessmentDiagnosticsBase {
+  accepted_points: Vo2AssessmentPointV1[];
+  eligible_points: Vo2AssessmentPointV1[];
+}
+
+/** Current diagnostics shape, including every attempted stage. */
+export interface Vo2AssessmentDiagnosticsV2 extends Vo2AssessmentDiagnosticsBase {
+  stage_points: Vo2AssessmentPointV2[];
+  accepted_points: Vo2AssessmentPointV2[];
+  eligible_points: Vo2AssessmentPointV2[];
+}
+
+export type Vo2AssessmentDiagnostics = Vo2AssessmentDiagnosticsV1 | Vo2AssessmentDiagnosticsV2;
+export type CurrentVo2AssessmentDiagnostics = Vo2AssessmentDiagnosticsV2;
+
+interface Vo2AssessmentResultBase {
   estimator_id: string;
   estimator_version: number;
   status: Vo2AssessmentStatus;
-  termination_reason: Vo2ProtocolTerminationReason;
   estimate_ml_kg_min?: number;
   fit_quality?: Vo2AssessmentFitQuality;
-  reason_codes: Vo2AssessmentReasonCode[];
   accepted_stage_count: number;
   eligible_stage_count: number;
   stages_used: string[];
   highest_accepted_workload_watts?: number;
   input_snapshot: Vo2AssessmentInputSnapshot;
-  diagnostics: Vo2AssessmentDiagnostics;
 }
+
+/** Permanent historical assessment result. */
+export interface Vo2AssessmentResultV1 extends Vo2AssessmentResultBase {
+  schema_version: typeof VO2_ASSESSMENT_SCHEMA_VERSION_V1;
+  termination_reason: Vo2ProtocolTerminationReasonV1;
+  reason_codes: Vo2AssessmentReasonCodeV1[];
+  diagnostics: Vo2AssessmentDiagnosticsV1;
+}
+
+/** Current assessment result with stage-level eligibility diagnostics. */
+export interface Vo2AssessmentResultV2 extends Vo2AssessmentResultBase {
+  schema_version: typeof VO2_ASSESSMENT_SCHEMA_VERSION_V2;
+  termination_reason: Vo2ProtocolTerminationReasonV2;
+  reason_codes: Vo2AssessmentReasonCodeV2[];
+  diagnostics: Vo2AssessmentDiagnosticsV2;
+}
+
+/** Persisted/read union. Historical v1 records are never relabeled. */
+export type Vo2AssessmentResult = Vo2AssessmentResultV1 | Vo2AssessmentResultV2;
+/** Writer alias for newly finalized formal assessments. */
+export type CurrentVo2AssessmentResult = Vo2AssessmentResultV2;
 
 export interface WorkoutSummary {
   external_session_id: string;
@@ -1051,7 +1171,7 @@ export interface WorkoutSummary {
   /** Frozen Phase E1 diagnostic only. It never represents the executed prescription. */
   shadow_prescription_evaluation?: PersonalizedPrescriptionEvaluationV1;
   /** Frozen Phase E2 diagnostic only. It is never read by prescription or control code. */
-  shadow_prescription_characterization?: PersonalizedPrescriptionCharacterizationV1;
+  shadow_prescription_characterization?: PersonalizedPrescriptionCharacterization;
   /**
    * Pause-safe stage-aware physiological evidence for the VO2 estimator.
    * Absent on historical workouts that predate this format.

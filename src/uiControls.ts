@@ -550,6 +550,15 @@ type WorkoutDisplayState =
       elapsedSec: number;
     }
   | {
+      screen: "vo2_restart_required";
+      day: string;
+      plan: any;
+      workoutMetadata: any;
+      base: any;
+      blocks: any;
+      workoutBlocksText: string;
+    }
+  | {
       screen: "active";
       day: string;
       plan: any;
@@ -594,6 +603,10 @@ function deriveWorkoutState(
 
   if (!startTime) {
     return { screen: "idle", day, plan, workoutMetadata, base, blocks, workoutBlocksText };
+  }
+
+  if (isVo2WorkoutSelector(day) && session.vo2ProtocolRestartRequired) {
+    return { screen: "vo2_restart_required", day, plan, workoutMetadata, base, blocks, workoutBlocksText };
   }
 
   const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime)) / 1000);
@@ -818,7 +831,7 @@ function renderWorkout(state: WorkoutDisplayState) {
   const hasBase = state.screen !== "rest" && (state as any).base;
   if (activityIcon) {
     if (hasBase && dayMeta) {
-      const selectedActivity = state.screen === "active" || state.screen === "completed"
+      const selectedActivity = state.screen === "active" || state.screen === "completed" || state.screen === "vo2_restart_required"
         ? getSession(state.day).activity
         : undefined;
       const activity = getActiveWorkoutActivity(dayMeta.activities, selectedActivity);
@@ -886,6 +899,30 @@ function renderWorkout(state: WorkoutDisplayState) {
     currentExpectedHeartRate = null;
     updateHeartColor(null, null);
     applyPhaseStyle("idle");
+    return;
+  }
+
+  if (state.screen === "vo2_restart_required") {
+    renderMachineGuidance(null);
+    syncBikeBridgeGuidance(null, false, false);
+    if (phaseDisplayEl) {
+      phaseDisplayEl.innerHTML = '<span class="phase-name">Assessment update requires restart</span>';
+      phaseDisplayEl.dataset.phaseState = "completed";
+    }
+    if (startButtonRowEl) startButtonRowEl.style.display = "flex";
+    if (startBtnEl) {
+      startBtnEl.innerText = "Restart Test";
+      startBtnEl.onclick = restartWorkout;
+      startBtnEl.style.display = "block";
+    }
+    if (cancelBtnEl) cancelBtnEl.style.display = "none";
+    if (hrTargetEl) {
+      hrTargetEl.textContent = "This saved protocol-v1 test cannot continue under protocol-v2 rules.";
+    }
+    updateHeartPulse(null);
+    currentExpectedHeartRate = null;
+    updateHeartColor(null, null);
+    applyPhaseStyle("completed");
     return;
   }
 

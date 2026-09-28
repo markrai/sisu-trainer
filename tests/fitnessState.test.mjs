@@ -4,6 +4,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import {
   FITNESS_STATE_STORAGE_KEY,
   VO2_FITNESS_PROJECTION_V1,
+  VO2_FITNESS_PROJECTION_V2,
   captureAthleteFitnessSnapshot,
   isSupportedVo2FitnessEstimator,
   isSupportedVo2FitnessProtocol,
@@ -18,7 +19,8 @@ import {
   PROFILE_WEIGHT_LBS_TO_KG,
   migrateLegacyProfile,
 } from "../dist/profile.js";
-import { assessVo2 } from "../dist/vo2Estimator.js";
+import { assessVo2, assessVo2V1 } from "../dist/vo2Estimator.js";
+import { VO2_EVIDENCE_SCHEMA_VERSION, VO2_PROTOCOL_VERSION } from "../dist/types.js";
 import {
   emitWorkoutSummary,
 } from "../dist/workoutSummary.js";
@@ -61,6 +63,8 @@ function protocolEvidence({
   heartRates = [120, 130, 140],
   workloadSources = ["measured_watts", "measured_watts", "measured_watts"],
   includeRejected = true,
+  schemaVersion = VO2_EVIDENCE_SCHEMA_VERSION,
+  protocolVersion = VO2_PROTOCOL_VERSION,
 } = {}) {
   const watts = [100, 125, 150];
   const stages = watts.map((stageWatts, index) => {
@@ -123,7 +127,7 @@ function protocolEvidence({
     });
   }
   return {
-    schema_version: 1,
+    schema_version: schemaVersion,
     activity: "bike",
     intent: "vo2_estimation",
     day: "VO2MaxEstimation",
@@ -136,7 +140,7 @@ function protocolEvidence({
     hr: { source: "ble_chest_strap", sample_count: 360 },
     protocol: {
       protocol_id: "bike-submax-70rpm",
-      protocol_version: 1,
+      protocol_version: protocolVersion,
       prescribed_cadence_rpm: 70,
       stages,
       termination: { reason: "protocol_complete" },
@@ -147,8 +151,15 @@ function protocolEvidence({
 
 function assessmentFixture(options = {}) {
   const athlete = athleteProfile(options.athleteId);
-  const vo2Evidence = protocolEvidence(options);
-  const assessment = assessVo2(vo2Evidence, { age_years: 40, weight_kg: 80 });
+  const historicalV1 = options.contract === "v1";
+  const vo2Evidence = protocolEvidence({
+    ...options,
+    ...(historicalV1 ? { schemaVersion: 1, protocolVersion: 1 } : {}),
+  });
+  const assessment = (historicalV1 ? assessVo2V1 : assessVo2)(
+    vo2Evidence,
+    { age_years: 40, weight_kg: 80 }
+  );
   const endedAt = options.endedAt ?? "2026-09-21T12:30:00.000Z";
   const startedAt = new Date(Date.parse(endedAt) - 30 * 60 * 1000).toISOString();
   const summary = {
@@ -238,6 +249,9 @@ test("fitness state parser and local persistence reconstruct strict versioned re
   const parsed = parseFitnessState(deepClone(promoted));
   assert.deepEqual(parsed, promoted);
   assert.equal(parsed.athleteId, fixture.athlete.athleteId);
+  assert.equal(parsed.schemaVersion, 3);
+  assert.equal(parsed.vo2Max.algorithm.version, VO2_FITNESS_PROJECTION_V2.estimatorVersion);
+  assert.equal(parsed.hrWorkloadCalibration.value.protocol.version, VO2_FITNESS_PROJECTION_V2.protocolVersion);
   assert.equal(parsed.updatedAt, "2026-09-21T12:31:00.000Z");
 
   const storage = memoryStorage();
@@ -251,7 +265,7 @@ test("fitness state parser and local persistence reconstruct strict versioned re
 });
 
 test("persisted v1 fitness state uses permanent supported identities and rejects unknown versions", () => {
-  const fixture = assessmentFixture();
+  const fixture = assessmentFixture({ contract: "v1" });
   const persistedV1 = deepClone(promote(fixture));
   assert.ok(persistedV1);
 
@@ -259,10 +273,12 @@ test("persisted v1 fitness state uses permanent supported identities and rejects
   const v1ProtocolId = "bike-submax-70rpm";
   assert.equal(VO2_FITNESS_PROJECTION_V1.estimatorId, v1EstimatorId);
   assert.equal(VO2_FITNESS_PROJECTION_V1.protocolId, v1ProtocolId);
+  assert.equal(VO2_FITNESS_PROJECTION_V1.estimatorVersion, 1);
+  assert.equal(VO2_FITNESS_PROJECTION_V1.protocolVersion, 1);
   assert.equal(isSupportedVo2FitnessEstimator(v1EstimatorId, 1), true);
-  assert.equal(isSupportedVo2FitnessEstimator(v1EstimatorId, 2), false);
+  assert.equal(isSupportedVo2FitnessEstimator(v1EstimatorId, 2), true);
   assert.equal(isSupportedVo2FitnessProtocol(v1ProtocolId, 1), true);
-  assert.equal(isSupportedVo2FitnessProtocol(v1ProtocolId, 2), false);
+  assert.equal(isSupportedVo2FitnessProtocol(v1ProtocolId, 2), true);
   assert.deepEqual(parseFitnessState(persistedV1), persistedV1);
 
   const futureEstimator = deepClone(persistedV1);
@@ -283,12 +299,15 @@ test("qualified formal assessment promotes exact VO2, extrapolated watts, and el
   const originalSummary = deepClone(fixture.summary);
   const state = promote(fixture);
   assert.ok(state);
+  assert.equal(state.schemaVersion, VO2_FITNESS_PROJECTION_V2.fitnessStateSchemaVersion);
+  assert.equal(VO2_FITNESS_PROJECTION_V2.assessmentSchemaVersion, 2);
+  assert.equal(VO2_FITNESS_PROJECTION_V2.evidenceSchemaVersion, 2);
   assert.equal(state.vo2Max.value, fixture.assessment.estimate_ml_kg_min);
   assert.equal(state.vo2Max.source, "formal_assessment");
   assert.equal(state.vo2Max.quality, "high");
   assert.deepEqual(state.vo2Max.algorithm, {
     id: "bike-submax-linear-hr-workload",
-    version: 1,
+    version: 2,
   });
   assert.deepEqual(state.vo2Max.evidenceSessionIds, [fixture.summary.external_session_id]);
   assert.equal(state.predictedMaxWatts.value, fixture.assessment.diagnostics.predicted_max_watts);
@@ -302,7 +321,7 @@ test("qualified formal assessment promotes exact VO2, extrapolated watts, and el
   assert.equal(state.hrWorkloadCalibration.value.points.some((point) => point.stageId === "stage-rejected"), false);
   assert.deepEqual(state.hrWorkloadCalibration.value.protocol, {
     id: "bike-submax-70rpm",
-    version: 1,
+    version: 2,
   });
   assert.equal(state.hrWorkloadCalibration.value.predictedHrMaxSource, "demographic_estimate");
   assert.equal("observedHrMax" in state, false);
@@ -416,7 +435,7 @@ test("athlete fitness snapshot identifies state without copying the full model",
   assert.deepEqual(captureAthleteFitnessSnapshot(storage), {
     athleteId: fixture.athlete.athleteId,
     profileSchemaVersion: 1,
-    fitnessStateSchemaVersion: 1,
+    fitnessStateSchemaVersion: 3,
     fitnessUpdatedAt: state.updatedAt,
   });
 });
@@ -437,6 +456,9 @@ test("qualified stored promotion persists the athlete-owned current projection",
   const stored = readFitnessState(fixture.athlete.athleteId, storage);
   assert.ok(stored);
   assert.equal(stored.vo2Max.value, fixture.assessment.estimate_ml_kg_min);
+  assert.equal(stored.vo2Max.algorithm.version, 2);
+  assert.equal(stored.hrWorkloadCalibration.value.protocol.version, 2);
+  assert.deepEqual(parseFitnessState(deepClone(stored)), stored);
   assert.deepEqual(stored.vo2Max.evidenceSessionIds, [fixture.summary.external_session_id]);
 });
 
@@ -543,22 +565,7 @@ test("stored promotion failure leaves an already-saved immutable workout summary
 });
 
 test("historical v1 assessments are re-verified with version-bound v1 semantics", () => {
-  const fixture = assessmentFixture();
-  const v1Assessment = deepClone(fixture.assessment);
-  v1Assessment.estimator_id = "bike-submax-linear-hr-workload";
-  v1Assessment.estimator_version = 1;
-  v1Assessment.input_snapshot.protocol_id = "bike-submax-70rpm";
-  v1Assessment.input_snapshot.protocol_version = 1;
-  v1Assessment.diagnostics.expected_protocol_id = "bike-submax-70rpm";
-  v1Assessment.diagnostics.expected_protocol_version = 1;
-  v1Assessment.diagnostics.observed_protocol_id = "bike-submax-70rpm";
-  v1Assessment.diagnostics.observed_protocol_version = 1;
-
-  const v1Fixture = deepClone(fixture);
-  v1Fixture.assessment = v1Assessment;
-  v1Fixture.summary.vo2_evidence.protocol.protocol_id = "bike-submax-70rpm";
-  v1Fixture.summary.vo2_evidence.protocol.protocol_version = 1;
-
+  const v1Fixture = assessmentFixture({ contract: "v1" });
   const promoted = promote(v1Fixture);
   assert.ok(promoted, "v1 assessment should still promote");
   assert.equal(promoted.vo2Max.algorithm.version, 1);
@@ -621,26 +628,26 @@ test("unsupported estimator and protocol versions are rejected", () => {
 
   // Unsupported estimator version
   const unsupportedEstimator = deepClone(fixture);
-  unsupportedEstimator.assessment.estimator_version = 2;
-  assert.equal(promote(unsupportedEstimator), null, "v2 estimator should be rejected");
+  unsupportedEstimator.assessment.estimator_version = 99;
+  assert.equal(promote(unsupportedEstimator), null, "unknown estimator should be rejected");
 
-  // Unsupported protocol in input snapshot
+  // Cross-paired historical protocol in input snapshot
   const unsupportedProtocolSnapshot = deepClone(fixture);
-  unsupportedProtocolSnapshot.assessment.input_snapshot.protocol_version = 2;
-  assert.equal(promote(unsupportedProtocolSnapshot), null, "v2 protocol in snapshot should be rejected");
+  unsupportedProtocolSnapshot.assessment.input_snapshot.protocol_version = 1;
+  assert.equal(promote(unsupportedProtocolSnapshot), null, "v2 estimator plus v1 protocol should be rejected");
 
-  // Unsupported protocol in observed evidence
+  // Cross-paired historical protocol in observed evidence
   const unsupportedProtocolObserved = deepClone(fixture);
-  unsupportedProtocolObserved.summary.vo2_evidence.protocol.protocol_version = 2;
-  assert.equal(promote(unsupportedProtocolObserved), null, "v2 protocol in evidence should be rejected");
+  unsupportedProtocolObserved.summary.vo2_evidence.protocol.protocol_version = 1;
+  assert.equal(promote(unsupportedProtocolObserved), null, "v1 protocol in v2 evidence should be rejected");
 
-  // Unsupported protocol in diagnostics expected
+  // Cross-paired historical protocol in diagnostics expected
   const unsupportedExpected = deepClone(fixture);
-  unsupportedExpected.assessment.diagnostics.expected_protocol_version = 2;
-  assert.equal(promote(unsupportedExpected), null, "v2 protocol in expected should be rejected");
+  unsupportedExpected.assessment.diagnostics.expected_protocol_version = 1;
+  assert.equal(promote(unsupportedExpected), null, "v1 protocol in v2 diagnostics should be rejected");
 
-  // Unsupported protocol in diagnostics observed
+  // Cross-paired historical protocol in diagnostics observed
   const unsupportedObservedDiagnostics = deepClone(fixture);
-  unsupportedObservedDiagnostics.assessment.diagnostics.observed_protocol_version = 2;
-  assert.equal(promote(unsupportedObservedDiagnostics), null, "v2 protocol in diagnostics should be rejected");
+  unsupportedObservedDiagnostics.assessment.diagnostics.observed_protocol_version = 1;
+  assert.equal(promote(unsupportedObservedDiagnostics), null, "v1 observed protocol should be rejected");
 });

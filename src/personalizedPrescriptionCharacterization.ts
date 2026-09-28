@@ -1,7 +1,9 @@
 import {
   PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1,
+  PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1,
+  PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2,
   PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1,
   PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1,
   PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1,
@@ -11,7 +13,9 @@ import {
   type PersonalizedPrescriptionCandidateComparisonV1,
   type PersonalizedPrescriptionCharacterizationExclusionReasonV1,
   type PersonalizedPrescriptionCharacterizationPolicyV1,
+  type PersonalizedPrescriptionCharacterization,
   type PersonalizedPrescriptionCharacterizationV1,
+  type CurrentPersonalizedPrescriptionCharacterization,
   type PersonalizedPrescriptionControllerContextV1,
   type PersonalizedPrescriptionEvaluationV1,
   type PersonalizedPrescriptionPhaseCharacterizationV1,
@@ -24,6 +28,7 @@ import type { MachineDecisionAuditEntry } from "./machines/audit/types.js";
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
+import { VO2_FORMAL_ASSESSMENT_CONTRACT_V1 } from "./vo2Estimator.js";
 
 /** Provisional evidence-quality policy only. These values never authorize control. */
 export const PHASE_E2_CHARACTERIZATION_POLICY_V1: PersonalizedPrescriptionCharacterizationPolicyV1 = {
@@ -62,6 +67,11 @@ export interface CharacterizePersonalizedPrescriptionInput {
   createdAt: string;
 }
 
+export const PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION_V1 = 1 as const;
+export const PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION_V2 = 2 as const;
+export const PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION =
+  PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION_V2;
+
 export interface PersonalizedPrescriptionCharacterizationAggregateGroupV1 {
   workoutIntent: string;
   intensityId: string;
@@ -85,8 +95,15 @@ export interface PersonalizedPrescriptionCharacterizationAggregateGroupV1 {
   controllerSaturationIncidence: { count: number; total: number; proportion?: number };
 }
 
+/** Current cohort shape. Formal-assessment identity is part of the grouping key. */
+export interface PersonalizedPrescriptionCharacterizationAggregateGroupV2
+  extends PersonalizedPrescriptionCharacterizationAggregateGroupV1 {
+  formalAssessmentAlgorithm: string;
+  formalAssessmentProtocol: string;
+}
+
 export interface PersonalizedPrescriptionCharacterizationAggregateV1 {
-  schemaVersion: 1;
+  schemaVersion: typeof PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION_V1;
   workoutCount: number;
   phaseCount: number;
   candidatePhases: number;
@@ -94,6 +111,22 @@ export interface PersonalizedPrescriptionCharacterizationAggregateV1 {
   evaluableCandidatePhases: number;
   groups: PersonalizedPrescriptionCharacterizationAggregateGroupV1[];
 }
+
+export interface PersonalizedPrescriptionCharacterizationAggregateV2 {
+  schemaVersion: typeof PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION_V2;
+  workoutCount: number;
+  phaseCount: number;
+  candidatePhases: number;
+  fallbackPhases: number;
+  evaluableCandidatePhases: number;
+  groups: PersonalizedPrescriptionCharacterizationAggregateGroupV2[];
+}
+
+export type PersonalizedPrescriptionCharacterizationAggregate =
+  | PersonalizedPrescriptionCharacterizationAggregateV1
+  | PersonalizedPrescriptionCharacterizationAggregateV2;
+export type CurrentPersonalizedPrescriptionCharacterizationAggregate =
+  PersonalizedPrescriptionCharacterizationAggregateV2;
 
 export interface PersonalizedPrescriptionDiagnosticRowV1 {
   workout: string;
@@ -110,6 +143,10 @@ export interface PersonalizedPrescriptionDiagnosticRowV1 {
   observedPowerProvenance: string;
   outcome: string;
   exclusion: string;
+}
+
+export interface PersonalizedPrescriptionDiagnosticRowV2 extends PersonalizedPrescriptionDiagnosticRowV1 {
+  formalAssessmentProvenance: string;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -503,7 +540,7 @@ function characterizePhase(
 /** Pure E2 reducer. All current-state and time inputs are supplied explicitly. */
 export function characterizePersonalizedPrescription(
   input: CharacterizePersonalizedPrescriptionInput
-): PersonalizedPrescriptionCharacterizationV1 | null {
+): CurrentPersonalizedPrescriptionCharacterization | null {
   const shadow = parsePersonalizedPrescriptionEvaluation(input.shadowEvaluation);
   const response = parseWorkoutResponse(input.workoutResponse);
   if (!shadow || !response || !policyValid(input.policy) || !iso(input.createdAt)) return null;
@@ -539,10 +576,10 @@ export function characterizePersonalizedPrescription(
     input.policy
   ));
   return {
-    schemaVersion: PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1,
+    schemaVersion: PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2,
     characterizer: {
       id: PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1,
-      version: PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1,
+      version: PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2,
     },
     mode: "diagnostic",
     activationEligible: false,
@@ -560,6 +597,10 @@ export function characterizePersonalizedPrescription(
     ...(shadow.fitnessEvidenceSnapshot ? {
       formalAssessmentQuality: shadow.fitnessEvidenceSnapshot.quality,
       calibrationWorkloadProvenance: shadow.fitnessEvidenceSnapshot.calibration.workloadProvenance,
+      formalAssessmentProvenance: {
+        algorithm: { ...shadow.fitnessEvidenceSnapshot.algorithm },
+        protocol: { ...shadow.fitnessEvidenceSnapshot.calibration.protocol },
+      },
     } : {}),
     policy: { ...input.policy },
     phases,
@@ -643,13 +684,19 @@ export function parsePersonalizedPrescriptionCharacterization(
     activity?: string;
     workoutResponse?: unknown;
   }
-): PersonalizedPrescriptionCharacterizationV1 | null {
+): PersonalizedPrescriptionCharacterization | null {
   const shadow = parsePersonalizedPrescriptionEvaluation(shadowValue);
-  if (!shadow || !isObject(value) ||
+  const isV1 = isObject(value) &&
+    value.schemaVersion === PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1 &&
+    isObject(value.characterizer) &&
+    value.characterizer.version === PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1;
+  const isV2 = isObject(value) &&
+    value.schemaVersion === PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2 &&
+    isObject(value.characterizer) &&
+    value.characterizer.version === PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2;
+  if (!shadow || !isObject(value) || (!isV1 && !isV2) ||
       containsNonFiniteNumber(value) ||
-      value.schemaVersion !== PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1 ||
       !isObject(value.characterizer) || value.characterizer.id !== PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1 ||
-      value.characterizer.version !== PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1 ||
       value.mode !== "diagnostic" || value.activationEligible !== false || !isObject(value.sourceShadow) ||
       value.sourceShadow.resolverId !== shadow.resolver.id ||
       value.sourceShadow.resolverVersion !== shadow.resolver.version ||
@@ -663,6 +710,24 @@ export function parsePersonalizedPrescriptionCharacterization(
   const expectedProvenance = shadow.fitnessEvidenceSnapshot?.calibration.workloadProvenance;
   if (value.formalAssessmentQuality !== expectedQuality ||
       value.calibrationWorkloadProvenance !== expectedProvenance) return null;
+  if (isV1 && shadow.fitnessEvidenceSnapshot && (
+    shadow.fitnessEvidenceSnapshot.algorithm.id !== VO2_FORMAL_ASSESSMENT_CONTRACT_V1.estimatorId ||
+    shadow.fitnessEvidenceSnapshot.algorithm.version !== VO2_FORMAL_ASSESSMENT_CONTRACT_V1.estimatorVersion ||
+    shadow.fitnessEvidenceSnapshot.calibration.protocol.id !== VO2_FORMAL_ASSESSMENT_CONTRACT_V1.protocolId ||
+    shadow.fitnessEvidenceSnapshot.calibration.protocol.version !== VO2_FORMAL_ASSESSMENT_CONTRACT_V1.protocolVersion
+  )) return null;
+  if (isV2) {
+    const expectedFormal = shadow.fitnessEvidenceSnapshot;
+    if (expectedFormal) {
+      if (!isObject(value.formalAssessmentProvenance) ||
+          !isObject(value.formalAssessmentProvenance.algorithm) ||
+          !isObject(value.formalAssessmentProvenance.protocol) ||
+          value.formalAssessmentProvenance.algorithm.id !== expectedFormal.algorithm.id ||
+          value.formalAssessmentProvenance.algorithm.version !== expectedFormal.algorithm.version ||
+          value.formalAssessmentProvenance.protocol.id !== expectedFormal.calibration.protocol.id ||
+          value.formalAssessmentProvenance.protocol.version !== expectedFormal.calibration.protocol.version) return null;
+    } else if (value.formalAssessmentProvenance !== undefined) return null;
+  }
   if (expected && (expected.athleteId !== undefined && value.athleteId !== expected.athleteId ||
       expected.sessionId !== undefined && value.workoutSessionId !== expected.sessionId ||
       expected.workoutSelector !== undefined && value.workoutSelector !== expected.workoutSelector ||
@@ -684,12 +749,19 @@ export function parsePersonalizedPrescriptionCharacterization(
     }
     phases.push(phase);
   }
-  return {
-    ...(value as unknown as PersonalizedPrescriptionCharacterizationV1),
+  const parsed = {
+    ...(value as unknown as PersonalizedPrescriptionCharacterization),
     sourceShadow: { ...(value.sourceShadow as PersonalizedPrescriptionCharacterizationV1["sourceShadow"]) },
     policy: { ...(value.policy as unknown as PersonalizedPrescriptionCharacterizationPolicyV1) },
     phases,
   };
+  if (isV2 && "formalAssessmentProvenance" in parsed && parsed.formalAssessmentProvenance) {
+    parsed.formalAssessmentProvenance = {
+      algorithm: { ...parsed.formalAssessmentProvenance.algorithm },
+      protocol: { ...parsed.formalAssessmentProvenance.protocol },
+    };
+  }
+  return parsed;
 }
 
 function metric(values: readonly number[]): { count: number; median?: number } {
@@ -698,10 +770,10 @@ function metric(values: readonly number[]): { count: number; median?: number } {
 
 /** Pure, order-independent cohort report. Measured and calibrated sources are never pooled. */
 export function aggregatePersonalizedPrescriptionCharacterizations(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[]
-): PersonalizedPrescriptionCharacterizationAggregateV1 {
+  records: readonly PersonalizedPrescriptionCharacterization[]
+): PersonalizedPrescriptionCharacterizationAggregateV2 {
   const groups = new Map<string, { sessions: Set<string>; phases: PersonalizedPrescriptionPhaseCharacterizationV1[];
-    record: PersonalizedPrescriptionCharacterizationV1 }>();
+    record: PersonalizedPrescriptionCharacterization }>();
   let phaseCount = 0;
   let candidates = 0;
   let fallbacks = 0;
@@ -714,7 +786,13 @@ export function aggregatePersonalizedPrescriptionCharacterizations(
       const parts = [record.workoutIntent, phase.intensityId ?? "unspecified",
         record.calibrationWorkloadProvenance ?? "unavailable",
         phase.observedPowerProvenance, record.formalAssessmentQuality ?? "unavailable",
-        phase.candidateDomainMargins?.bucket ?? "not_applicable"];
+        phase.candidateDomainMargins?.bucket ?? "not_applicable",
+        "formalAssessmentProvenance" in record
+          ? `${record.formalAssessmentProvenance?.algorithm.id}@${record.formalAssessmentProvenance?.algorithm.version}`
+          : "historical-e2-v1",
+        "formalAssessmentProvenance" in record
+          ? `${record.formalAssessmentProvenance?.protocol.id}@${record.formalAssessmentProvenance?.protocol.version}`
+          : "historical-e2-v1"];
       const key = JSON.stringify(parts);
       const group = groups.get(key) ?? { sessions: new Set<string>(), phases: [], record };
       group.sessions.add(record.workoutSessionId);
@@ -741,6 +819,12 @@ export function aggregatePersonalizedPrescriptionCharacterizations(
       calibrationWorkloadProvenance: group.record.calibrationWorkloadProvenance ?? "unavailable",
       observedPowerProvenance: first.observedPowerProvenance,
       formalAssessmentQuality: group.record.formalAssessmentQuality ?? "unavailable",
+      formalAssessmentAlgorithm: "formalAssessmentProvenance" in group.record && group.record.formalAssessmentProvenance
+        ? `${group.record.formalAssessmentProvenance.algorithm.id}@${group.record.formalAssessmentProvenance.algorithm.version}`
+        : "historical-e2-v1",
+      formalAssessmentProtocol: "formalAssessmentProvenance" in group.record && group.record.formalAssessmentProvenance
+        ? `${group.record.formalAssessmentProvenance.protocol.id}@${group.record.formalAssessmentProvenance.protocol.version}`
+        : "historical-e2-v1",
       candidateDomainMarginBucket: first.candidateDomainMargins?.bucket ?? "not_applicable",
       completedWorkouts: group.sessions.size,
       phaseCount: group.phases.length,
@@ -764,7 +848,7 @@ export function aggregatePersonalizedPrescriptionCharacterizations(
     };
   });
   return {
-    schemaVersion: 1,
+    schemaVersion: PERSONALIZED_PRESCRIPTION_AGGREGATE_SCHEMA_VERSION,
     workoutCount: new Set(records.map((record) => record.workoutSessionId)).size,
     phaseCount,
     candidatePhases: candidates,
@@ -776,8 +860,8 @@ export function aggregatePersonalizedPrescriptionCharacterizations(
 
 /** Small developer-facing table/JSON surface; no athlete UI consumes this. */
 export function personalizedPrescriptionDiagnosticRows(
-  records: readonly PersonalizedPrescriptionCharacterizationV1[]
-): PersonalizedPrescriptionDiagnosticRowV1[] {
+  records: readonly PersonalizedPrescriptionCharacterization[]
+): PersonalizedPrescriptionDiagnosticRowV2[] {
   return records.flatMap((record) => record.phases.map((phase) => ({
     workout: `${record.workoutSelector} (${record.workoutSessionId})`,
     phase: phase.detailName ?? `${phase.kind}${phase.intervalIndex ? ` ${phase.intervalIndex}` : ""}`,
@@ -792,6 +876,10 @@ export function personalizedPrescriptionDiagnosticRows(
     hrInsideTargetPercent: phase.observedHeartRate ? phase.observedHeartRate.insideBandRatio * 100 : null,
     saturationPercent: phase.controllerContext.saturationRatio * 100,
     calibrationProvenance: record.calibrationWorkloadProvenance ?? "unavailable",
+    formalAssessmentProvenance: "formalAssessmentProvenance" in record && record.formalAssessmentProvenance
+      ? `${record.formalAssessmentProvenance.algorithm.id}@${record.formalAssessmentProvenance.algorithm.version} · ` +
+        `${record.formalAssessmentProvenance.protocol.id}@${record.formalAssessmentProvenance.protocol.version}`
+      : "historical-e2-v1",
     observedPowerProvenance: phase.observedPowerProvenance,
     outcome: phase.characterizationOutcome,
     exclusion: phase.exclusionReason ?? "none",

@@ -23,7 +23,7 @@ import {
   authoritativeHrMaxBpm,
   buildVo2ProtocolEvidence,
   buildVo2ProtocolPlan,
-  createVo2ProtocolRuntime,
+  createVo2ProtocolRuntime as createVo2ProtocolRuntimeV2,
   evaluateStageHr,
   evaluateVo2Preflight,
   getVo2ProtocolPhase,
@@ -37,7 +37,9 @@ import {
   vo2ProtocolUiTargets,
   vo2WorkoutMetadata,
   parseVo2ProtocolRuntime,
+  readPersistedVo2ProtocolRuntime,
   isValidVo2ProtocolRuntime,
+  isLegacyVo2ProtocolRuntimeV1,
   isValidVo2ProtocolPlan,
 } from "../dist/vo2Protocol.js";
 import { installStandaloneVo2Workout as installVo2Workout, getPlan, getWorkoutMetadata } from "../dist/workoutData.js";
@@ -61,7 +63,10 @@ import { toBridgeResistanceLevel } from "../dist/platform/bikeBridgeClient.js";
 import { createMachineGuidanceState, getMachineGuidance } from "../dist/machines/guidance.js";
 import { updateMachineGuidanceRuntime, resetMachineGuidanceRuntime } from "../dist/machines/runtime.js";
 import { setSelectedMachine } from "../dist/machines/selection.js";
-import { VO2_EVIDENCE_SCHEMA_VERSION } from "../dist/types.js";
+import {
+  LEGACY_VO2_PROTOCOL_VERSION_V1,
+  VO2_EVIDENCE_SCHEMA_VERSION,
+} from "../dist/types.js";
 import { buildVo2Evidence } from "../dist/vo2Evidence.js";
 import { assessVo2 } from "../dist/vo2Estimator.js";
 import {
@@ -113,6 +118,8 @@ function stageTelemetry(stageStart, durationSec, watts, rpm = 70) {
 }
 
 const assessmentProfile = { age_years: 40, weight_kg: 80 };
+const createVo2ProtocolRuntime = (plan, profile = assessmentProfile) =>
+  createVo2ProtocolRuntimeV2(plan, profile);
 
 function completeStableStage(runtime, bpm, options = {}) {
   const open = runtime.stages.find((stage) => stage.status === "open");
@@ -136,7 +143,7 @@ function assessmentFromRuntime(runtime) {
   const protocol = buildVo2ProtocolEvidence(runtime);
   return assessVo2(
     {
-      schema_version: 1,
+      schema_version: VO2_EVIDENCE_SCHEMA_VERSION,
       active_duration_sec: runtime.cooldown_start_sec ?? 0,
       paused_duration_sec: 0,
       work_end_active_sec: runtime.cooldown_start_sec,
@@ -165,7 +172,8 @@ function freshHrInput(overrides = {}) {
 
 test("protocol id and version are stable and not tied to app version", async () => {
   assert.equal(VO2_PROTOCOL_ID, "bike-submax-70rpm");
-  assert.equal(VO2_PROTOCOL_VERSION, 1);
+  assert.equal(VO2_PROTOCOL_VERSION, 2);
+  assert.equal(LEGACY_VO2_PROTOCOL_VERSION_V1, 1);
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.notEqual(String(VO2_PROTOCOL_VERSION), pkg.version);
   assert.equal(VO2_PRESCRIBED_CADENCE_RPM, 70);
@@ -252,6 +260,63 @@ test("nominal watts resolve through canonical calibration and strictly increase"
     assert.equal(row.calibrated_watts_at_70rpm, getEstimatedWattsAt70Rpm(row.prescribed_resistance));
     lastWatts = row.calibrated_watts_at_70rpm;
   }
+});
+
+test("historical v1 runtime is identified and fails closed instead of resuming with v2 semantics", () => {
+  const currentPlan = buildVo2ProtocolPlan();
+  assert.deepEqual(currentPlan.workloads.map((workload) => workload.prescribed_resistance), [6, 8, 9, 10]);
+  const historicalPlan = {
+    ...structuredClone(currentPlan),
+    protocol_version: 1,
+    workloads: [
+      currentPlan.workloads[0],
+      currentPlan.workloads[1],
+      {
+        ...currentPlan.workloads[3],
+        requested_watts: currentPlan.workloads[1].calibrated_watts_at_70rpm + 25,
+      },
+    ],
+  };
+  assert.deepEqual(historicalPlan.workloads.map((workload) => workload.prescribed_resistance), [6, 8, 10]);
+  const historicalRuntime = {
+    plan: historicalPlan,
+    segment: "work",
+    stages: [{
+      stage_id: "vo2-stage:1",
+      workloadIndex: 0,
+      active_start_sec: 300,
+      active_end_sec: null,
+      extensions: 0,
+      status: "open",
+      last_eval_relative_sec: 0,
+      upcoming_announced: false,
+      extension_announced: false,
+    }],
+    cooldown_start_sec: null,
+    start_announced: true,
+    upcoming_warmup_announced: true,
+  };
+  assert.equal(isLegacyVo2ProtocolRuntimeV1(historicalRuntime), true);
+  assert.deepEqual(readPersistedVo2ProtocolRuntime(historicalRuntime), {
+    runtime: null,
+    restartRequired: true,
+    observedProtocolVersion: 1,
+  });
+  assert.equal(parseVo2ProtocolRuntime(historicalRuntime), null);
+
+  const storage = memoryStorage();
+  startSession(VO2_WORKOUT_SELECTOR_ID, Date.now(), "historical-v1-runtime", "bike", storage, {
+    blocks: vo2PlanBlocks(),
+    hrTargets: null,
+  });
+  const frozen = JSON.stringify(historicalRuntime);
+  storage.setItem(`vo2_protocol_runtime_${VO2_WORKOUT_SELECTOR_ID}`, frozen);
+  const session = getSession(VO2_WORKOUT_SELECTOR_ID, storage);
+  assert.equal(session.vo2ProtocolRuntime, null);
+  assert.equal(session.vo2ProtocolRestartRequired, true);
+  assert.equal(session.blockedVo2ProtocolVersion, 1);
+  assert.equal(tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 480, false, storage, stageHr(300, 120, 120)), null);
+  assert.equal(storage.getItem(`vo2_protocol_runtime_${VO2_WORKOUT_SELECTOR_ID}`), frozen);
 });
 
 test("three stable estimator-eligible stages complete collection and estimate", () => {
@@ -502,7 +567,7 @@ test("protocol evidence stores prescribed resistance, calibrated watts, and pres
   const evidence = buildVo2ProtocolEvidence(runtime);
   assert.ok(evidence);
   assert.equal(evidence.protocol_id, "bike-submax-70rpm");
-  assert.equal(evidence.protocol_version, 1);
+  assert.equal(evidence.protocol_version, 2);
   assert.equal(evidence.prescribed_cadence_rpm, 70);
   const stage = evidence.stages[0];
   assert.equal(stage.prescribed_resistance, plan.workloads[0].prescribed_resistance);
@@ -513,7 +578,7 @@ test("protocol evidence stores prescribed resistance, calibrated watts, and pres
   assert.equal(Object.prototype.hasOwnProperty.call(stage, "measured_cadence_rpm"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(stage, "measured_watts"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(evidence, "measured_cadence_rpm"), false);
-  assert.equal(VO2_EVIDENCE_SCHEMA_VERSION, 1);
+  assert.equal(VO2_EVIDENCE_SCHEMA_VERSION, 2);
 
   runtime = advanceVo2Protocol(runtime, { elapsedSec: 500, paused: false, samples: [], cancelled: true });
   const cancelled = buildVo2ProtocolEvidence(runtime);
@@ -522,7 +587,7 @@ test("protocol evidence stores prescribed resistance, calibrated watts, and pres
   assert.ok(cancelled.stages.some((entry) => entry.status === "incomplete" || entry.status === "accepted"));
 });
 
-test("no HRmax formula; automatic ceiling unavailable; Early Cooldown and Cancel record termination", () => {
+test("predicted ceiling is explicit without claiming authoritative HRmax; Early Cooldown and Cancel preserve termination", () => {
   assert.equal(authoritativeHrMaxBpm(), undefined);
   const plan = buildVo2ProtocolPlan();
   let runtime = createVo2ProtocolRuntime(plan);
@@ -530,7 +595,7 @@ test("no HRmax formula; automatic ceiling unavailable; Early Cooldown and Cancel
   runtime = advanceVo2Protocol(runtime, { elapsedSec: 400, paused: false, samples: [], earlyCooldownElapsed: 400 });
   assert.equal(runtime.termination.reason, "early_cooldown");
   assert.equal(runtime.segment, "cooldown");
-  assert.equal(buildVo2ProtocolEvidence(runtime).automatic_submax_hr_ceiling_available, false);
+  assert.equal(buildVo2ProtocolEvidence(runtime).automatic_submax_hr_ceiling_available, true);
   assert.notEqual(runtime.termination.reason, "submax_hr_ceiling");
 
   const storage = memoryStorage();
@@ -643,7 +708,7 @@ test("protocol evidence survives IndexedDB; historical and ordinary vo2_evidence
     vo2Protocol: runtime,
     protocol,
   });
-  assert.equal(evidence.schema_version, 1);
+  assert.equal(evidence.schema_version, 2);
   assert.equal(evidence.protocol.protocol_id, "bike-submax-70rpm");
   const summary = {
     external_session_id: "vo2-idb",

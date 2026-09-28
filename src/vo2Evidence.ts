@@ -4,13 +4,14 @@ import type {
   HrTargetsForDay,
   PlanBlock,
   Vo2Evidence,
+  CurrentVo2Evidence,
   Vo2EvidenceHr,
   Vo2EvidenceMachine,
   Vo2EvidencePhase,
   Vo2EvidencePhasePrescription,
   WorkoutPhaseKind,
   WorkoutSummary,
-  Vo2ProtocolEvidence,
+  CurrentVo2ProtocolEvidence,
   ResolvedWorkoutPrescription,
 } from "./types.js";
 import { VO2_EVIDENCE_SCHEMA_VERSION } from "./types.js";
@@ -36,7 +37,7 @@ export interface Vo2EvidenceBuildInput {
   /** Count-only provenance; full trace stays on WorkoutSummary. */
   machineGuidanceTraceEntryCount?: number;
   vo2Protocol?: Vo2ProtocolRuntime | null;
-  protocol?: Vo2ProtocolEvidence;
+  protocol?: CurrentVo2ProtocolEvidence;
 }
 
 function naturalWorkEndSec(blocks: PlanBlock): number {
@@ -239,7 +240,7 @@ function buildMachineEvidence(input: Vo2EvidenceBuildInput): Vo2EvidenceMachine 
   return machine;
 }
 
-export function buildVo2Evidence(input: Vo2EvidenceBuildInput): Vo2Evidence {
+export function buildVo2Evidence(input: Vo2EvidenceBuildInput): CurrentVo2Evidence {
   const activeDurationSec = Math.max(0, Math.floor(input.activeDurationSec));
   const pausedDurationSec = Math.max(0, Math.floor(input.pausedDurationSec));
   const phases =
@@ -260,7 +261,7 @@ export function buildVo2Evidence(input: Vo2EvidenceBuildInput): Vo2Evidence {
     activeDurationSec,
     phases,
   });
-  const evidence: Vo2Evidence = {
+  const evidence: CurrentVo2Evidence = {
     schema_version: VO2_EVIDENCE_SCHEMA_VERSION,
     active_duration_sec: activeDurationSec,
     paused_duration_sec: pausedDurationSec,

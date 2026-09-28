@@ -1,6 +1,6 @@
-import { ATHLETE_PROFILE_SCHEMA_VERSION, ATHLETE_PROFILE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V2, FITNESS_STATE_SCHEMA_VERSION_V3, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V1, } from "./types.js";
+import { ATHLETE_PROFILE_SCHEMA_VERSION, ATHLETE_PROFILE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V2, FITNESS_STATE_SCHEMA_VERSION_V3, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_ASSESSMENT_SCHEMA_VERSION_V2, VO2_EVIDENCE_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V2, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
 import { loadAthleteProfile, parseAthleteProfile, } from "./profile.js";
-import { LEGACY_VO2_ESTIMATOR_ID, LEGACY_VO2_ESTIMATOR_VERSION, } from "./vo2Estimator.js";
+import { LEGACY_VO2_ESTIMATOR_ID, LEGACY_VO2_ESTIMATOR_VERSION, VO2_ESTIMATOR_ID, VO2_ESTIMATOR_VERSION, } from "./vo2Estimator.js";
 export const FITNESS_STATE_STORAGE_KEY = "fitness_state_v1";
 const MAX_V1_EVIDENCE_SESSION_IDS = 1000;
 const MAX_V2_RECENT_EVIDENCE_SESSION_IDS = 16;
@@ -35,7 +35,21 @@ export const VO2_FITNESS_PROJECTION_V1 = {
     cycleVo2WattsCoefficient: 10.8,
     cycleVo2RestingValue: 7,
 };
-export const SUPPORTED_VO2_FITNESS_PROJECTIONS = [VO2_FITNESS_PROJECTION_V1];
+/** Corrected protocol/estimator-v2 projection; v1 remains unchanged above. */
+export const VO2_FITNESS_PROJECTION_V2 = {
+    ...VO2_FITNESS_PROJECTION_V1,
+    fitnessStateSchemaVersion: FITNESS_STATE_SCHEMA_VERSION_V3,
+    assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
+    evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V2,
+    estimatorId: VO2_ESTIMATOR_ID,
+    estimatorVersion: VO2_ESTIMATOR_VERSION,
+    protocolId: VO2_PROTOCOL_ID,
+    protocolVersion: VO2_PROTOCOL_VERSION,
+};
+export const SUPPORTED_VO2_FITNESS_PROJECTIONS = [
+    VO2_FITNESS_PROJECTION_V1,
+    VO2_FITNESS_PROJECTION_V2,
+];
 function isObject(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -69,18 +83,18 @@ export function isSupportedVo2FitnessEstimator(id, version) {
 export function isSupportedVo2FitnessProtocol(id, version) {
     return SUPPORTED_VO2_FITNESS_PROJECTIONS.some((projection) => projection.protocolId === id && projection.protocolVersion === version);
 }
-function supportedProjection(estimatorId, estimatorVersion, protocolId, protocolVersion) {
-    return SUPPORTED_VO2_FITNESS_PROJECTIONS.find((projection) => projection.estimatorId === estimatorId &&
+function supportedProjection(estimatorId, estimatorVersion, protocolId, protocolVersion, projections = SUPPORTED_VO2_FITNESS_PROJECTIONS) {
+    return projections.find((projection) => projection.estimatorId === estimatorId &&
         projection.estimatorVersion === estimatorVersion &&
         projection.protocolId === protocolId &&
         projection.protocolVersion === protocolVersion);
 }
-function predictedHrMaxBpmV1(ageYears) {
-    return VO2_FITNESS_PROJECTION_V1.hrMaxIntercept - VO2_FITNESS_PROJECTION_V1.hrMaxAgeCoefficient * ageYears;
+function predictedHrMaxBpmForProjection(ageYears, projection) {
+    return projection.hrMaxIntercept - projection.hrMaxAgeCoefficient * ageYears;
 }
-function cycleVo2MlKgMinV1(predictedMaxWatts, weightKg) {
-    return ((VO2_FITNESS_PROJECTION_V1.cycleVo2WattsCoefficient * predictedMaxWatts) / weightKg +
-        VO2_FITNESS_PROJECTION_V1.cycleVo2RestingValue);
+function cycleVo2MlKgMinForProjection(predictedMaxWatts, weightKg, projection) {
+    return ((projection.cycleVo2WattsCoefficient * predictedMaxWatts) / weightKg +
+        projection.cycleVo2RestingValue);
 }
 function fitHrVsWattsV1(points) {
     if (points.length < 2)
@@ -176,17 +190,16 @@ function parseMetricEnvelope(value, parseValue) {
         ...(evidenceSessionIds ? { evidenceSessionIds } : {}),
     };
 }
-function isSupportedFormalMetric(metric) {
-    var _a, _b;
+function isSupportedFormalMetric(metric, projections) {
     if (!metric)
         return true;
     return (metric.source === "formal_assessment" &&
         metric.quality !== "unverified" &&
-        isSupportedVo2FitnessEstimator((_a = metric.algorithm) === null || _a === void 0 ? void 0 : _a.id, (_b = metric.algorithm) === null || _b === void 0 ? void 0 : _b.version) &&
+        projections.some((projection) => { var _a, _b; return projection.estimatorId === ((_a = metric.algorithm) === null || _a === void 0 ? void 0 : _a.id) && projection.estimatorVersion === ((_b = metric.algorithm) === null || _b === void 0 ? void 0 : _b.version); }) &&
         Array.isArray(metric.evidenceSessionIds) &&
         metric.evidenceSessionIds.length > 0);
 }
-function parseCalibration(value) {
+function parseCalibration(value, projections) {
     if (!isObject(value))
         return null;
     if (!isPositiveFinite(value.slopeBpmPerWatt) || !isFiniteNumber(value.interceptBpm))
@@ -234,7 +247,7 @@ function parseCalibration(value) {
     const protocolVersion = value.protocol.version;
     if (typeof protocolId !== "string" ||
         !isPositiveInteger(protocolVersion) ||
-        !isSupportedVo2FitnessProtocol(protocolId, protocolVersion)) {
+        !projections.some((projection) => projection.protocolId === protocolId && projection.protocolVersion === protocolVersion)) {
         return null;
     }
     if (!isPositiveFinite(value.predictedHrMaxBpm) || value.predictedHrMaxSource !== "demographic_estimate")
@@ -262,7 +275,7 @@ function parseCalibration(value) {
     };
 }
 /** Strict reconstruction of the permanent v1 persisted fitness projection. */
-function parseFitnessStateV1(value) {
+function parseFitnessStateV1(value, allowedProjections = [VO2_FITNESS_PROJECTION_V1]) {
     var _a, _b, _c;
     if (value.schemaVersion !== FITNESS_STATE_SCHEMA_VERSION_V1 || !isAthleteId(value.athleteId))
         return null;
@@ -292,12 +305,12 @@ function parseFitnessStateV1(value) {
     }
     const hrWorkloadCalibration = value.hrWorkloadCalibration == null
         ? undefined
-        : parseMetricEnvelope(value.hrWorkloadCalibration, parseCalibration);
+        : parseMetricEnvelope(value.hrWorkloadCalibration, (candidate) => parseCalibration(candidate, allowedProjections));
     if (value.hrWorkloadCalibration != null && !hrWorkloadCalibration)
         return null;
-    if (!isSupportedFormalMetric(vo2Max) ||
-        !isSupportedFormalMetric(predictedMaxWatts) ||
-        !isSupportedFormalMetric(hrWorkloadCalibration)) {
+    if (!isSupportedFormalMetric(vo2Max, allowedProjections) ||
+        !isSupportedFormalMetric(predictedMaxWatts, allowedProjections) ||
+        !isSupportedFormalMetric(hrWorkloadCalibration, allowedProjections)) {
         return null;
     }
     const metrics = [];
@@ -318,7 +331,7 @@ function parseFitnessStateV1(value) {
     if (hrWorkloadCalibration) {
         for (const metric of metrics) {
             if (metric &&
-                !supportedProjection((_b = metric.algorithm) === null || _b === void 0 ? void 0 : _b.id, (_c = metric.algorithm) === null || _c === void 0 ? void 0 : _c.version, hrWorkloadCalibration.value.protocol.id, hrWorkloadCalibration.value.protocol.version)) {
+                !supportedProjection((_b = metric.algorithm) === null || _b === void 0 ? void 0 : _b.id, (_c = metric.algorithm) === null || _c === void 0 ? void 0 : _c.version, hrWorkloadCalibration.value.protocol.id, hrWorkloadCalibration.value.protocol.version, allowedProjections)) {
                 return null;
             }
         }
@@ -512,7 +525,7 @@ function parseFitnessStateV2(value) {
         schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
         passiveAerobicTrend: undefined,
         passiveAerobicObservation: undefined,
-    });
+    }, [VO2_FITNESS_PROJECTION_V1]);
     if (!formal)
         return null;
     const passive = value.passiveAerobicTrend == null
@@ -795,7 +808,7 @@ function parseFitnessStateV3(value) {
         schemaVersion: FITNESS_STATE_SCHEMA_VERSION_V1,
         passiveAerobicTrend: undefined,
         passiveAerobicObservation: undefined,
-    });
+    }, SUPPORTED_VO2_FITNESS_PROJECTIONS);
     if (!formal)
         return null;
     const passive = value.passiveAerobicObservation == null
@@ -1054,14 +1067,15 @@ function assessmentCanPromote(athlete, summary, assessment) {
         return null;
     if (!isFiniteNumber(bodyMassKg) || bodyMassKg < projection.weightKgMin || bodyMassKg > projection.weightKgMax)
         return null;
-    if (!isPositiveFinite(predictedHrMax) || !nearlyEqual(predictedHrMax, predictedHrMaxBpmV1(age)))
+    if (!isPositiveFinite(predictedHrMax) || !nearlyEqual(predictedHrMax, predictedHrMaxBpmForProjection(age, projection))) {
         return null;
+    }
     if (!nearlyEqual(diagnostics.predicted_hr_max, predictedHrMax))
         return null;
     const extrapolatedWatts = (predictedHrMax - diagnostics.intercept) / diagnostics.slope;
     if (!nearlyEqual(extrapolatedWatts, diagnostics.predicted_max_watts))
         return null;
-    if (!nearlyEqual(cycleVo2MlKgMinV1(diagnostics.predicted_max_watts, bodyMassKg), assessment.estimate_ml_kg_min)) {
+    if (!nearlyEqual(cycleVo2MlKgMinForProjection(diagnostics.predicted_max_watts, bodyMassKg, projection), assessment.estimate_ml_kg_min)) {
         return null;
     }
     const points = eligibleCalibrationPoints(summary, assessment, projection);

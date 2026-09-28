@@ -1,4 +1,5 @@
 import { PROFILE_WEIGHT_LBS_TO_KG } from "./profile.js";
+import { isSupportedVo2EstimatorProtocolPair } from "./vo2Estimator.js";
 function nearlyEqual(a, b) {
     return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
 }
@@ -15,16 +16,14 @@ function assessmentDate(timestamp, options) {
     }).format(parsed);
 }
 function qualifyingCalibration(profile, state) {
-    var _a;
+    var _a, _b;
     if (!state || state.athleteId !== profile.athleteId)
         return null;
     const metric = state.hrWorkloadCalibration;
     if (!metric || metric.source !== "formal_assessment" || !["moderate", "high"].includes(metric.quality))
         return null;
-    if (((_a = metric.algorithm) === null || _a === void 0 ? void 0 : _a.id) !== "bike-submax-linear-hr-workload" || metric.algorithm.version !== 1)
-        return null;
     const calibration = metric.value;
-    if (calibration.protocol.id !== "bike-submax-70rpm" || calibration.protocol.version !== 1)
+    if (!isSupportedVo2EstimatorProtocolPair((_a = metric.algorithm) === null || _a === void 0 ? void 0 : _a.id, (_b = metric.algorithm) === null || _b === void 0 ? void 0 : _b.version, calibration.protocol.id, calibration.protocol.version))
         return null;
     if (calibration.points.length < 3)
         return null;

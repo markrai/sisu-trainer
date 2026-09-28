@@ -19,7 +19,8 @@ export interface Vo2AssessmentPresentation {
 }
 
 export interface Vo2StageDiagnosticPresentation {
-  stageNumber: number;
+  stageNumber?: number;
+  stageId: string;
   headline: string;
   detail: string;
   eligible: boolean;
@@ -32,6 +33,7 @@ const REASON_PRIORITY: readonly Vo2AssessmentReasonCode[] = [
   "invalid_profile_weight",
   "unsupported_protocol_id",
   "unsupported_protocol_version",
+  "unsupported_evidence_schema",
   "too_few_accepted_stages",
   "too_few_eligible_stages",
   "stage_unstable_hr",
@@ -151,6 +153,8 @@ export function vo2InsufficientDetail(
         VO2_MIN_ACCEPTED_STAGES +
         " are required."
       );
+    case "unsupported_evidence_schema":
+      return "This assessment uses an unsupported evidence-record version.";
     case "too_few_eligible_stages":
       return eligibleStageFailureDetail(result);
     case "stage_unstable_hr":
@@ -191,13 +195,14 @@ function fitQualityLine(result: Vo2AssessmentResult): string {
   return result.fit_quality ? vo2FitQualityText(result.fit_quality) + "." : "";
 }
 
-function pointStageNumber(point: Vo2AssessmentPoint, index: number): number {
-  return Number.isInteger(point.stage_number) && point.stage_number > 0 ? point.stage_number : index + 1;
+function pointStageNumber(point: Vo2AssessmentPoint): number | undefined {
+  if (!("stage_number" in point)) return undefined;
+  return Number.isInteger(point.stage_number) && point.stage_number > 0 ? point.stage_number : undefined;
 }
 
 function stageReasonText(point: Vo2AssessmentPoint, result: Vo2AssessmentResult): string {
-  const reasons = point.ineligibility_reasons;
-  if (reasons.includes("hr_above_submax_ceiling")) {
+  const reasons = new Set<string>(point.ineligibility_reasons);
+  if (reasons.has("hr_above_submax_ceiling")) {
     const ceiling = result.input_snapshot.predicted_hr_max != null
       ? result.input_snapshot.predicted_hr_max * result.diagnostics.estimator_submax_hrmax_fraction
       : undefined;
@@ -205,22 +210,22 @@ function stageReasonText(point: Vo2AssessmentPoint, result: Vo2AssessmentResult)
       ? `steady heart rate reached ${Math.round(point.steady_state_bpm ?? ceiling)} bpm, at or above the ${Math.round(ceiling)} bpm submaximal ceiling`
       : "steady heart rate was above the estimator's submaximal ceiling";
   }
-  if (reasons.includes("hr_below_estimator_range")) {
+  if (reasons.has("hr_below_estimator_range")) {
     return `steady heart rate was below the ${result.diagnostics.estimator_min_hr_bpm} bpm usable floor`;
   }
-  if (reasons.includes("cadence_outside_verified_range")) {
+  if (reasons.has("cadence_outside_verified_range")) {
     return "cadence was outside the verified 70 ± 5 RPM range and measured watts were unavailable";
   }
-  if (reasons.includes("insufficient_workload_samples")) {
+  if (reasons.has("insufficient_workload_samples")) {
     return "there were not enough measured watts or cadence samples to verify performed workload";
   }
-  if (reasons.includes("stage_unstable_hr")) return "heart rate did not stabilize within five minutes";
-  if (reasons.includes("insufficient_stage_hr_samples")) return "there were not enough heart-rate samples to verify stability";
-  if (reasons.includes("stage_incomplete")) return "the stage ended before stability could be evaluated";
-  if (reasons.includes("missing_stage_hr")) return "a steady heart-rate reading was missing";
-  if (reasons.includes("invalid_workload")) return "the performed workload was invalid";
-  if (reasons.includes("unverified_performed_workload")) return "performed workload could not be verified";
-  return reasons.length > 0 ? "it did not meet the estimator's validity policy" : "no exclusion was recorded";
+  if (reasons.has("stage_unstable_hr")) return "heart rate did not stabilize within five minutes";
+  if (reasons.has("insufficient_stage_hr_samples")) return "there were not enough heart-rate samples to verify stability";
+  if (reasons.has("stage_incomplete")) return "the stage ended before stability could be evaluated";
+  if (reasons.has("missing_stage_hr")) return "a steady heart-rate reading was missing";
+  if (reasons.has("invalid_workload")) return "the performed workload was invalid";
+  if (reasons.has("unverified_performed_workload")) return "performed workload could not be verified";
+  return reasons.size > 0 ? "it did not meet the estimator's validity policy" : "no exclusion was recorded";
 }
 
 function eligibleStageFailureDetail(
@@ -237,9 +242,9 @@ function eligibleStageFailureDetail(
     " valid for VO₂ estimation. At least " +
     VO2_MIN_ELIGIBLE_STAGES +
     " valid submaximal stages are required.";
-  const rejected = result.diagnostics?.stage_points?.find(
-    (point) => point.protocol_accepted && !point.estimator_eligible
-  );
+  const rejected = result.diagnostics && "stage_points" in result.diagnostics
+    ? result.diagnostics.stage_points.find((point) => point.protocol_accepted && !point.estimator_eligible)
+    : undefined;
   if (rejected && result.diagnostics && result.input_snapshot) {
     detail += ` Stage ${rejected.stage_number} was excluded because ${stageReasonText(rejected, result as Vo2AssessmentResult)}.`;
   }
@@ -249,7 +254,8 @@ function eligibleStageFailureDetail(
 function workloadSourceText(source: Vo2WorkloadSource | undefined): string {
   if (source === "measured_watts") return "measured watts";
   if (source === "calibrated_at_verified_cadence") return "70-RPM calibration with verified cadence";
-  return "prescription only";
+  if (source === "prescribed_only") return "prescription only";
+  return "unavailable";
 }
 
 function passText(value: boolean | undefined): string {
@@ -257,24 +263,33 @@ function passText(value: boolean | undefined): string {
 }
 
 export function vo2StageDiagnostics(result: Vo2AssessmentResult): Vo2StageDiagnosticPresentation[] {
-  const points = result.diagnostics.stage_points?.length
-    ? result.diagnostics.stage_points
-    : result.diagnostics.accepted_points ?? [];
-  return points.map((point, index) => {
-    const number = pointStageNumber(point, index);
+  const points: readonly Vo2AssessmentPoint[] =
+    "stage_points" in result.diagnostics && result.diagnostics.stage_points.length
+      ? result.diagnostics.stage_points
+      : result.diagnostics.accepted_points ?? [];
+  return points.map((point) => {
+    const number = pointStageNumber(point);
+    const isV2Point = "protocol_stage_status" in point;
     const watts = point.watts ?? point.calibrated_watts_at_70rpm;
     const headline =
-      `Stage ${number} · resistance ${point.prescribed_resistance ?? "—"}` +
+      (number != null ? `Stage ${number}` : `Stage record ${point.stage_id}`) +
+      (isV2Point ? ` · resistance ${point.prescribed_resistance}` : " · resistance unavailable") +
       (watts != null ? ` · ${Math.round(watts)} W` : "");
     const facts = [
       `Workload: ${workloadSourceText(point.workload_source)}`,
       `Steady HR: ${point.steady_state_bpm != null ? `${Math.round(point.steady_state_bpm)} bpm` : "unavailable"}`,
-      `HR stability: ${passText(point.hr_stability_passed ?? point.protocol_accepted)}`,
-      `Workload evidence: ${passText(point.workload_evidence_passed)}`,
-      `Submaximal HR: ${passText(point.submax_hr_eligible)}`,
+      `HR stability: ${passText(isV2Point ? point.hr_stability_passed : point.protocol_accepted ? true : undefined)}`,
+      `Workload evidence: ${passText(isV2Point ? point.workload_evidence_passed : undefined)}`,
+      `Submaximal HR: ${passText(isV2Point ? point.submax_hr_eligible : undefined)}`,
       point.estimator_eligible ? "Eligible" : `Ineligible — ${stageReasonText(point, result)}`,
     ];
-    return { stageNumber: number, headline, detail: facts.join(" · "), eligible: point.estimator_eligible };
+    return {
+      ...(number != null ? { stageNumber: number } : {}),
+      stageId: point.stage_id,
+      headline,
+      detail: facts.join(" · "),
+      eligible: point.estimator_eligible,
+    };
   });
 }
 

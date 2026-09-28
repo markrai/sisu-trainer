@@ -36,16 +36,17 @@ function athlete(athleteId = "athlete-profile", values = {}) {
 }
 
 function formalState(athleteId = "athlete-profile", options = {}) {
+  const formalVersion = options.formalVersion ?? 1;
   const metric = {
     source: "formal_assessment",
     quality: "high",
     observedAt: "2026-09-18T14:30:00.000Z",
     updatedAt: "2026-09-18T14:31:00.000Z",
-    algorithm: { id: "bike-submax-linear-hr-workload", version: 1 },
+    algorithm: { id: "bike-submax-linear-hr-workload", version: formalVersion },
     evidenceSessionIds: ["assessment-session"],
   };
   const state = {
-    schemaVersion: 1,
+    schemaVersion: formalVersion === 2 ? 3 : 1,
     athleteId,
     vo2Max: { value: 46.8, ...metric },
     predictedMaxWatts: {
@@ -66,7 +67,7 @@ function formalState(athleteId = "athlete-profile", options = {}) {
           { stageId: "stage-2", watts: 125, heartRateBpm: 130, workloadSource: "measured_watts" },
           { stageId: "stage-3", watts: 150, heartRateBpm: 140, workloadSource: "measured_watts" },
         ],
-        protocol: { id: "bike-submax-70rpm", version: 1 },
+        protocol: { id: "bike-submax-70rpm", version: formalVersion },
         predictedHrMaxBpm: 179.3,
         predictedHrMaxSource: "demographic_estimate",
         profileInputSnapshot: { ageYears: 41, bodyMassKg: 176.4 * 0.45359237 },
@@ -181,6 +182,18 @@ test("measured formal calibration is available for evaluation but never active c
     workloadCalibration: "Measured power",
     workoutPersonalization: "Validation in progress",
   });
+});
+
+test("protocol-v2 formal calibration is visible for shadow evaluation but remains inactive", () => {
+  const status = buildPersonalizationStatus(
+    athlete(),
+    formalState("athlete-profile", { formalVersion: 2 }),
+    formatOptions
+  );
+  assert.equal(status.kind, "evaluation_available");
+  assert.equal(status.personalizationEvaluationAvailable, true);
+  assert.equal(status.activePersonalizationEnabled, false);
+  assert.equal(status.workoutPersonalization, "Validation in progress");
 });
 
 test("cadence-calibrated formal evidence is labeled accurately", () => {

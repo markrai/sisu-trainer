@@ -1,5 +1,6 @@
 import { PROFILE_WEIGHT_LBS_TO_KG } from "./profile.js";
 import type { AthleteProfile, FitnessState } from "./types.js";
+import { isSupportedVo2EstimatorProtocolPair } from "./vo2Estimator.js";
 
 export type PersonalizationStatusKind = "assessment_missing" | "evaluation_available";
 
@@ -44,9 +45,13 @@ function qualifyingCalibration(
   if (!state || state.athleteId !== profile.athleteId) return null;
   const metric = state.hrWorkloadCalibration;
   if (!metric || metric.source !== "formal_assessment" || !["moderate", "high"].includes(metric.quality)) return null;
-  if (metric.algorithm?.id !== "bike-submax-linear-hr-workload" || metric.algorithm.version !== 1) return null;
   const calibration = metric.value;
-  if (calibration.protocol.id !== "bike-submax-70rpm" || calibration.protocol.version !== 1) return null;
+  if (!isSupportedVo2EstimatorProtocolPair(
+    metric.algorithm?.id,
+    metric.algorithm?.version,
+    calibration.protocol.id,
+    calibration.protocol.version
+  )) return null;
   if (calibration.points.length < 3) return null;
   const age = profile.demographics.ageYears;
   const pounds = profile.demographics.bodyMassLbs;

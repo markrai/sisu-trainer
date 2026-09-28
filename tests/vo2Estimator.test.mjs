@@ -10,16 +10,24 @@ import {
   VO2_ESTIMATOR_MIN_HR_BPM,
   VO2_ESTIMATOR_SUBMAX_HRMAX_FRACTION,
   VO2_ESTIMATOR_VERSION,
+  LEGACY_VO2_ESTIMATOR_VERSION_V1,
   VO2_MIN_ACCEPTED_STAGES,
   VO2_MIN_R_SQUARED,
   assessVo2,
+  assessVo2V1,
   cycleVo2MlKgMin,
   estimatorSubmaxHrCeilingBpm,
   fitHrVsWatts,
   predictedHrMaxBpm,
+  isSupportedVo2EstimatorProtocolPair,
 } from "../dist/vo2Estimator.js";
-import { VO2_ASSESSMENT_SCHEMA_VERSION } from "../dist/types.js";
-import { VO2_TARGET_WORK_STAGES, VO2_WORKOUT_SELECTOR_ID } from "../dist/vo2Protocol.js";
+import {
+  VO2_ASSESSMENT_SCHEMA_VERSION,
+  VO2_ASSESSMENT_SCHEMA_VERSION_V1,
+  VO2_ASSESSMENT_SCHEMA_VERSION_V2,
+  VO2_EVIDENCE_SCHEMA_VERSION,
+} from "../dist/types.js";
+import { VO2_PROTOCOL_VERSION, VO2_TARGET_WORK_STAGES, VO2_WORKOUT_SELECTOR_ID } from "../dist/vo2Protocol.js";
 import { parseExplicitVo2ProfileInputs, PROFILE_WEIGHT_LBS_TO_KG, getProfile, BLANK_PROFILE } from "../dist/profile.js";
 import { generateWorkoutSummary } from "../dist/workoutSummary.js";
 import { installStandaloneVo2Workout, getWorkoutMetadata } from "../dist/workoutData.js";
@@ -103,7 +111,7 @@ function incompleteStage(id, watts) {
 
 function evidenceFromStages(stages, termination = "protocol_complete", extra = {}) {
   return {
-    schema_version: 1,
+    schema_version: VO2_EVIDENCE_SCHEMA_VERSION,
     active_duration_sec: extra.active_duration_sec ?? 900,
     paused_duration_sec: 0,
     work_end_active_sec: 840,
@@ -113,7 +121,7 @@ function evidenceFromStages(stages, termination = "protocol_complete", extra = {
     hr: { source: "ble_chest_strap", sample_count: 200 },
     protocol: {
       protocol_id: "bike-submax-70rpm",
-      protocol_version: 1,
+      protocol_version: VO2_PROTOCOL_VERSION,
       prescribed_cadence_rpm: 70,
       stages,
       termination: { reason: termination },
@@ -135,12 +143,61 @@ test("minimum accepted stages matches protocol target", () => {
   assert.equal(VO2_MIN_ACCEPTED_STAGES, 3);
 });
 
+test("formal assessment version pairings are explicit and cross-pairings fail closed", () => {
+  assert.equal(isSupportedVo2EstimatorProtocolPair(
+    "bike-submax-linear-hr-workload", 1, "bike-submax-70rpm", 1
+  ), true);
+  assert.equal(isSupportedVo2EstimatorProtocolPair(
+    "bike-submax-linear-hr-workload", 2, "bike-submax-70rpm", 2
+  ), true);
+  assert.equal(isSupportedVo2EstimatorProtocolPair(
+    "bike-submax-linear-hr-workload", 1, "bike-submax-70rpm", 2
+  ), false);
+  assert.equal(isSupportedVo2EstimatorProtocolPair(
+    "bike-submax-linear-hr-workload", 2, "bike-submax-70rpm", 1
+  ), false);
+});
+
+test("historical estimator v1 remains bound to protocol v1 and schema v1", () => {
+  const historicalEvidence = evidenceFromStages(linearThree);
+  historicalEvidence.schema_version = 1;
+  historicalEvidence.protocol.protocol_version = 1;
+  historicalEvidence.protocol.automatic_submax_hr_ceiling_available = false;
+  const result = assessVo2V1(historicalEvidence, profile40_80);
+  assert.equal(result.status, "estimated");
+  assert.equal(result.schema_version, VO2_ASSESSMENT_SCHEMA_VERSION_V1);
+  assert.equal(result.estimator_version, LEGACY_VO2_ESTIMATOR_VERSION_V1);
+  assert.equal(result.input_snapshot.protocol_version, 1);
+  assert.equal(result.diagnostics.expected_protocol_version, 1);
+  assert.equal("stage_points" in result.diagnostics, false);
+
+  const currentWriterResult = assessVo2(historicalEvidence, profile40_80);
+  assert.equal(currentWriterResult.status, "insufficient_evidence");
+  assert.equal(currentWriterResult.reason_codes.includes("unsupported_evidence_schema"), true);
+  assert.equal(currentWriterResult.reason_codes.includes("unsupported_protocol_version"), true);
+});
+
+test("historical estimator v1 fails closed for protocol-v1 evidence labeled schema v2", () => {
+  const hybridEvidence = evidenceFromStages(linearThree);
+  hybridEvidence.schema_version = 2;
+  hybridEvidence.protocol.protocol_version = 1;
+  hybridEvidence.protocol.automatic_submax_hr_ceiling_available = false;
+  const result = assessVo2V1(hybridEvidence, profile40_80);
+  assert.equal(result.status, "insufficient_evidence");
+  assert.equal(result.estimate_ml_kg_min, undefined);
+  assert.equal(result.schema_version, VO2_ASSESSMENT_SCHEMA_VERSION_V1);
+  assert.equal(result.estimator_version, LEGACY_VO2_ESTIMATOR_VERSION_V1);
+  assert.equal(result.reason_codes.includes("unsupported_protocol_version"), true);
+});
+
 test("deterministic linear dataset produces expected estimate", () => {
   const result = assessVo2(evidenceFromStages(linearThree), profile40_80);
   assert.equal(result.status, "estimated");
   assert.equal(result.estimator_id, VO2_ESTIMATOR_ID);
   assert.equal(result.estimator_version, VO2_ESTIMATOR_VERSION);
   assert.equal(result.schema_version, VO2_ASSESSMENT_SCHEMA_VERSION);
+  assert.equal(result.schema_version, VO2_ASSESSMENT_SCHEMA_VERSION_V2);
+  assert.equal(result.estimator_version, 2);
   assert.equal(result.termination_reason, "protocol_complete");
   assert.equal(result.accepted_stage_count, 3);
   assert.deepEqual(result.stages_used, ["vo2-stage:1", "vo2-stage:2", "vo2-stage:3"]);
@@ -160,15 +217,15 @@ test("deterministic linear dataset produces expected estimate", () => {
   assert.equal(result.input_snapshot.weight_kg, 80);
   assert.equal(result.input_snapshot.predicted_hr_max, 180);
   assert.equal(result.input_snapshot.protocol_id, "bike-submax-70rpm");
-  assert.equal(result.input_snapshot.protocol_version, 1);
+  assert.equal(result.input_snapshot.protocol_version, 2);
   assert.equal(result.reason_codes.length, 0);
   assert.equal(result.fit_quality, "high");
   assert.equal(result.confidence, undefined);
   assert.equal(result.eligible_stage_count, 3);
   assert.equal(result.diagnostics.expected_protocol_id, "bike-submax-70rpm");
-  assert.equal(result.diagnostics.expected_protocol_version, 1);
+  assert.equal(result.diagnostics.expected_protocol_version, 2);
   assert.equal(result.diagnostics.observed_protocol_id, "bike-submax-70rpm");
-  assert.equal(result.diagnostics.observed_protocol_version, 1);
+  assert.equal(result.diagnostics.observed_protocol_version, 2);
   assert.equal(result.diagnostics.estimator_min_hr_bpm, VO2_ESTIMATOR_MIN_HR_BPM);
   assert.equal(result.diagnostics.estimator_submax_hrmax_fraction, VO2_ESTIMATOR_SUBMAX_HRMAX_FRACTION);
   for (const point of result.diagnostics.eligible_points) {
@@ -397,7 +454,7 @@ test("cancelled early stop with 3 accepted stages still estimates", async () => 
   assert.equal(result.termination_reason, "user_cancelled");
 });
 
-test("correct protocol id and version 1 remains eligible", () => {
+test("correct protocol id and version 2 remains eligible", () => {
   const result = assessVo2(evidenceFromStages(linearThree), profile40_80);
   assert.equal(result.status, "estimated");
   assert.equal(result.reason_codes.includes("unsupported_protocol_version"), false);
@@ -407,16 +464,16 @@ test("correct protocol id and version 1 remains eligible", () => {
 
 test("future protocol version is insufficient", () => {
   const evidence = evidenceFromStages(linearThree);
-  evidence.protocol.protocol_version = 2;
+  evidence.protocol.protocol_version = 3;
   const result = assessVo2(evidence, profile40_80);
   assert.equal(result.status, "insufficient_evidence");
   assert.equal(result.estimate_ml_kg_min, undefined);
   assert.equal(result.reason_codes.includes("unsupported_protocol_version"), true);
   assert.equal(result.reason_codes.includes("missing_protocol_evidence"), false);
   assert.equal(result.diagnostics.expected_protocol_id, "bike-submax-70rpm");
-  assert.equal(result.diagnostics.expected_protocol_version, 1);
+  assert.equal(result.diagnostics.expected_protocol_version, 2);
   assert.equal(result.diagnostics.observed_protocol_id, "bike-submax-70rpm");
-  assert.equal(result.diagnostics.observed_protocol_version, 2);
+  assert.equal(result.diagnostics.observed_protocol_version, 3);
 });
 
 test("wrong protocol id is insufficient", () => {
@@ -428,7 +485,7 @@ test("wrong protocol id is insufficient", () => {
   assert.equal(result.reason_codes.includes("missing_protocol_evidence"), false);
   assert.equal(result.reason_codes.includes("unsupported_protocol_version"), false);
   assert.equal(result.diagnostics.observed_protocol_id, "some-other-protocol");
-  assert.equal(result.diagnostics.observed_protocol_version, 1);
+  assert.equal(result.diagnostics.observed_protocol_version, 2);
 });
 
 test("missing protocol is insufficient", () => {
@@ -439,7 +496,7 @@ test("missing protocol is insufficient", () => {
   assert.equal(result.reason_codes.includes("missing_protocol_evidence"), true);
   assert.equal(result.reason_codes.includes("unsupported_protocol_version"), false);
   assert.equal(result.diagnostics.expected_protocol_id, "bike-submax-70rpm");
-  assert.equal(result.diagnostics.expected_protocol_version, 1);
+  assert.equal(result.diagnostics.expected_protocol_version, 2);
   assert.equal(result.diagnostics.observed_protocol_id, undefined);
 });
 
@@ -588,7 +645,7 @@ test("historical assessment retains workload provenance", () => {
   assert.equal(frozen.estimator_id, VO2_ESTIMATOR_ID);
   assert.equal(frozen.estimator_version, VO2_ESTIMATOR_VERSION);
   assert.equal(frozen.input_snapshot.protocol_id, "bike-submax-70rpm");
-  assert.equal(frozen.input_snapshot.protocol_version, 1);
+  assert.equal(frozen.input_snapshot.protocol_version, 2);
   assert.equal(frozen.input_snapshot.age_years, 40);
   assert.equal(frozen.input_snapshot.weight_kg, 80);
   assert.equal(frozen.input_snapshot.predicted_hr_max, 180);

@@ -7,7 +7,11 @@ import type {
   ResolvedWorkoutPrescription,
 } from "./types.js";
 import { isActivity } from "./workoutActivity.js";
-import { isValidVo2ProtocolRuntime, parseVo2ProtocolRuntime, type Vo2ProtocolRuntime } from "./vo2Protocol.js";
+import {
+  isValidVo2ProtocolRuntime,
+  readPersistedVo2ProtocolRuntime,
+  type Vo2ProtocolRuntime,
+} from "./vo2Protocol.js";
 import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import {
   parsePersistedHrTargetsForDay,
@@ -54,6 +58,9 @@ export interface SessionData {
   /** Blocks + HR targets frozen at workout start for phase evidence replay. */
   phasePlan: PhasePlanSnapshot | null;
   vo2ProtocolRuntime: Vo2ProtocolRuntime | null;
+  /** A persisted protocol-v1 assessment must be restarted rather than resumed with v2 rules. */
+  vo2ProtocolRestartRequired: boolean;
+  blockedVo2ProtocolVersion?: number;
 }
 
 function storageOrBrowser(storage?: SessionStorage): SessionStorage {
@@ -181,6 +188,15 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
   const athleteId = athleteFitnessSnapshot && storedAthleteId === athleteFitnessSnapshot.athleteId
     ? storedAthleteId
     : undefined;
+  const persistedVo2Runtime = (() => {
+    const raw = store.getItem(vo2ProtocolRuntimeKey(day));
+    if (!raw) return readPersistedVo2ProtocolRuntime(null);
+    try {
+      return readPersistedVo2ProtocolRuntime(JSON.parse(raw));
+    } catch {
+      return readPersistedVo2ProtocolRuntime(null);
+    }
+  })();
   return {
     startTime: store.getItem("start_" + day),
     sessionId: store.getItem("session_id_" + day),
@@ -195,17 +211,11 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
     athleteId,
     athleteFitnessSnapshot: athleteId ? athleteFitnessSnapshot : undefined,
     phasePlan: parsePhasePlan(store.getItem(phasePlanKey(day))),
-    vo2ProtocolRuntime: parseVo2ProtocolRuntime(
-      (() => {
-        const raw = store.getItem(vo2ProtocolRuntimeKey(day));
-        if (!raw) return null;
-        try {
-          return JSON.parse(raw);
-        } catch {
-          return null;
-        }
-      })()
-    ),
+    vo2ProtocolRuntime: persistedVo2Runtime.runtime,
+    vo2ProtocolRestartRequired: persistedVo2Runtime.restartRequired,
+    ...(persistedVo2Runtime.observedProtocolVersion != null && persistedVo2Runtime.restartRequired
+      ? { blockedVo2ProtocolVersion: persistedVo2Runtime.observedProtocolVersion }
+      : {}),
   };
 }
 
