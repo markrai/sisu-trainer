@@ -913,6 +913,8 @@ export type Vo2AdaptiveDecisionReasonCode =
   | "reduced_increment_near_ceiling"
   | "retry_lower_after_above_ceiling"
   | "hr_safety_no_safe_target"
+  /** Runtime-observed live-HR ceiling breach (v3 guard fired), not a planner prediction. */
+  | "observed_hr_above_ceiling"
   | "below_floor_no_safe_target"
   | "workload_bounds_exhausted"
   | "stage_limit_reached"

@@ -4,7 +4,7 @@ import { getSession, startSession, pauseSession, resumeSession, clearSession, ge
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
-import { isVo2WorkoutSelector, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, } from "./vo2Protocol.js";
+import { isVo2WorkoutSelector, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, VO2_HR_FRESHNESS_MS, } from "./vo2Protocol.js";
 import { advanceVo2ProtocolRuntime, createVo2ProtocolRuntimeV3, evaluateVo2PreflightV3ForUi, getVo2ProtocolPhaseForRuntime, vo2ProtocolNeedsHrEvaluationForRuntime, } from "./vo2ProtocolV3.js";
 import { clearOrdinaryBikeTelemetry, getHrSamples } from "./workoutStorage.js";
 import { clearBikeTelemetrySamples, getBikeTelemetrySamples, recordBikeTelemetrySample, } from "./bikeTelemetryTrace.js";
@@ -514,7 +514,28 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
     }
     return completedPhase();
 }
-function tickVo2Protocol(day, elapsedSec, paused, storage, samples = [], telemetrySamples = []) {
+/**
+ * Fresh live-HR spot reading (bpm) for the v3 ceiling guard. Mirrors the
+ * preflight trust rule exactly: strap attached, finite positive bpm, and an
+ * update within VO2_HR_FRESHNESS_MS. Null when unknown, stale, invalid, or
+ * when no browser HR feed exists. Finite guards fail closed on garbage.
+ */
+function readFreshLiveHrBpm(now = Date.now()) {
+    if (typeof window === "undefined")
+        return null;
+    const liveBpm = window.liveBpm;
+    const lastUpdate = window.lastBpmUpdateTime;
+    if (!Boolean(window.hrDeviceName))
+        return null;
+    if (liveBpm == null || lastUpdate == null)
+        return null;
+    if (!Number.isFinite(liveBpm) || !Number.isFinite(lastUpdate))
+        return null;
+    if (liveBpm <= 0 || now - lastUpdate > VO2_HR_FRESHNESS_MS)
+        return null;
+    return liveBpm;
+}
+function tickVo2Protocol(day, elapsedSec, paused, storage, samples = [], telemetrySamples = [], liveHrBpm = null) {
     const session = getSession(day, storage);
     if (!session.vo2ProtocolRuntime)
         return null;
@@ -528,6 +549,7 @@ function tickVo2Protocol(day, elapsedSec, paused, storage, samples = [], telemet
         samples,
         telemetrySamples,
         earlyCooldownElapsed: getEarlyCooldownElapsed(day, storage),
+        liveHrBpm,
     });
     persistVo2ProtocolRuntime(day, next, storage);
     return { runtime: next, cues: vo2ProtocolVoiceCues(before, next, elapsedSec) };
@@ -543,7 +565,7 @@ async function tickVo2ProtocolWithCanonicalHr(day, elapsedSec, paused, storage) 
         samples = await getHrSamples(session.sessionId);
         telemetrySamples = getBikeTelemetrySamples(session.sessionId, storage);
     }
-    return tickVo2Protocol(day, elapsedSec, paused, storage, samples, telemetrySamples);
+    return tickVo2Protocol(day, elapsedSec, paused, storage, samples, telemetrySamples, readFreshLiveHrBpm());
 }
 function markVo2ProtocolCancelled(day, elapsedSec, storage) {
     const session = getSession(day, storage);

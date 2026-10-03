@@ -53,7 +53,6 @@ import {
   vo2ProtocolHoldForPhase,
   vo2ProtocolNeedsHrEvaluation,
   vo2ProtocolUiTargets,
-  type AdvanceVo2ProtocolInput,
   type Vo2ProtocolRuntime,
   type Vo2ResolvedWorkload,
   type Vo2WattsLookup,
@@ -71,6 +70,7 @@ import {
   VO2_WEIGHT_KG_MAX,
   VO2_WEIGHT_KG_MIN,
   classifyVo2ProtocolStage,
+  estimatorSubmaxHrCeilingBpm,
   predictedHrMaxBpm,
   type Vo2ProfileInputs,
 } from "./vo2Estimator.js";
@@ -138,6 +138,11 @@ export interface Vo2ProtocolRuntimeV3 {
   assessment_profile: Required<Vo2ProfileInputs>;
   retry_count_after_above_ceiling: number;
   adaptive_termination?: Vo2AdaptiveTerminationProvenance;
+  /**
+   * Sticky: fresh live HR was observed during a work segment, so the live
+   * hard-ceiling guard was armed. Evidence availability derives from this.
+   */
+  live_hr_guard_armed?: boolean;
 }
 
 export function vo2PlanBlocksV3(policy: Vo2AdaptivePolicy = DEFAULT_VO2_ADAPTIVE_POLICY): PlanBlock {
@@ -506,6 +511,13 @@ export interface AdvanceVo2ProtocolV3Input {
   cancelled?: boolean;
   limitReached?: boolean;
   getWatts?: Vo2WattsLookup;
+  /**
+   * Fresh live-HR spot reading (bpm) when the caller has a trustworthy one;
+   * null/omitted when unknown, stale, or invalid. V3 work stages arm the
+   * live hard-ceiling guard from this and stop promptly on a breach.
+   * Paused ticks and non-work segments ignore it.
+   */
+  liveHrBpm?: number | null;
 }
 
 export function advanceVo2ProtocolV3(
@@ -550,6 +562,31 @@ export function advanceVo2ProtocolV3(
     return next;
   }
   if (next.segment === "complete" || input.paused) return next;
+
+  // Live hard-ceiling guard (v3 work stages only): a trustworthy fresh spot
+  // reading at/above the estimator's own hard ceiling stops the test now
+  // instead of waiting for the next 180/240/300s checkpoint. Runs after the
+  // explicit cancel/limit/early-cooldown intents above, so those keep their
+  // own termination reasons. Engages once the work segment is established.
+  if (input.liveHrBpm != null && next.segment === "work") {
+    next.live_hr_guard_armed = true;
+    const breachHrMax = runtimePredictedHrMaxV3(next);
+    if (breachHrMax != null && input.liveHrBpm >= estimatorSubmaxHrCeilingBpm(breachHrMax)) {
+      const hard = estimatorSubmaxHrCeilingBpm(breachHrMax);
+      enterCooldownV3(next, elapsed, "submax_hr_ceiling", {
+        provenance_version: 1,
+        eligible_stage_count: eligibleObservationsV3(next).length,
+        completed_work_stage_count: next.stages.length,
+        retry_count: next.retry_count_after_above_ceiling,
+        hard_hr_ceiling_bpm: hard,
+        planning_hr_ceiling_bpm: hard - next.plan.adaptive_policy.safety_margin_bpm,
+        planning_margin_bpm: next.plan.adaptive_policy.safety_margin_bpm,
+        reason_code: "observed_hr_above_ceiling",
+        termination_reason: "submax_hr_ceiling",
+      });
+      return next;
+    }
+  }
 
   if (next.segment === "warmup") {
     if (elapsed >= next.plan.warmup_duration_sec) {
@@ -878,6 +915,7 @@ export function isValidVo2ProtocolRuntimeV3(value: unknown): value is Vo2Protoco
   if (runtime.adaptive_termination != null && !isValidAdaptiveTerminationProvenance(runtime.adaptive_termination)) {
     return false;
   }
+  if (runtime.live_hr_guard_armed != null && !isBooleanFlagValue(runtime.live_hr_guard_armed)) return false;
   if (!Array.isArray(runtime.stages)) return false;
   if (runtime.stages.length > runtime.plan.adaptive_policy.max_work_stages) return false;
   for (const stage of runtime.stages) {
@@ -921,7 +959,8 @@ export function buildVo2ProtocolEvidenceV3(
     termination: {
       reason: runtime.termination?.reason ?? "other",
     },
-    automatic_submax_hr_ceiling_available: runtimePredictedHrMaxV3(runtime) != null,
+    automatic_submax_hr_ceiling_available:
+      runtimePredictedHrMaxV3(runtime) != null && runtime.live_hr_guard_armed === true,
   };
   if (runtime.adaptive_termination) {
     evidence.adaptive_termination = runtime.adaptive_termination;
@@ -947,7 +986,7 @@ export function isVo2ProtocolRuntimeV3(
 
 export function advanceVo2ProtocolRuntime(
   runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
-  input: AdvanceVo2ProtocolInput
+  input: AdvanceVo2ProtocolV3Input
 ): Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 {
   if (isVo2ProtocolRuntimeV3(runtime)) return advanceVo2ProtocolV3(runtime, input);
   return advanceVo2Protocol(runtime, input);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getPhase, startWorkout, tickVo2Protocol } from "../dist/workoutLogic.js";
+import { getPhase, startWorkout, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr } from "../dist/workoutLogic.js";
 import { getSession, persistVo2ProtocolRuntime } from "../dist/sessionStore.js";
 import { getPlan, installStandaloneVo2Workout } from "../dist/workoutData.js";
 import {
@@ -16,6 +16,7 @@ import {
 import { VO2_PROTOCOL_VERSION_V3 } from "../dist/types.js";
 import { setSelectedMachine } from "../dist/machines/selection.js";
 import { migrateLegacyProfile, storeAthleteProfile } from "../dist/profile.js";
+import { estimatorSubmaxHrCeilingBpm, predictedHrMaxBpm } from "../dist/vo2Estimator.js";
 
 function memoryStorage(initial = {}) {
   const values = new Map(Object.entries(initial));
@@ -131,4 +132,151 @@ test("persisted v2 sessions keep v2 semantics on every routed path", () => {
   const evidence = buildVo2ProtocolEvidenceForRuntime(next, []);
   assert.ok(evidence);
   assert.equal(evidence.protocol_version, 2);
+});
+
+test("v3 live ceiling breach before the first checkpoint stops promptly with observed provenance", async () => {
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    const opened = tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    assert.ok(opened);
+    assert.equal(opened.runtime.segment, "work");
+    globalThis.window.liveBpm = 150;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, false);
+    assert.ok(tick);
+    const runtime = tick.runtime;
+    assert.equal(runtime.segment, "cooldown");
+    assert.equal(runtime.termination.reason, "submax_hr_ceiling");
+    assert.ok(runtime.adaptive_termination);
+    assert.equal(runtime.adaptive_termination.reason_code, "observed_hr_above_ceiling");
+    assert.notEqual(runtime.adaptive_termination.reason_code, "hr_safety_no_safe_target");
+    assert.equal(runtime.adaptive_termination.termination_reason, "submax_hr_ceiling");
+    const hard = estimatorSubmaxHrCeilingBpm(predictedHrMaxBpm(46));
+    assert.ok(Math.abs(runtime.adaptive_termination.hard_hr_ceiling_bpm - hard) < 1e-9);
+    assert.ok(Math.abs(runtime.adaptive_termination.planning_hr_ceiling_bpm - (hard - 12)) < 1e-9);
+    assert.equal(runtime.adaptive_termination.planning_margin_bpm, 12);
+    assert.equal(runtime.stages.length, 1);
+    assert.equal(runtime.plan.workloads.length, 1);
+    const evidence = buildVo2ProtocolEvidenceForRuntime(runtime, []);
+    assert.ok(evidence);
+    assert.equal(evidence.automatic_submax_hr_ceiling_available, true);
+  } finally {
+    restore();
+  }
+});
+
+test("v3 live ceiling reached exactly still stops (matches estimator >= rule)", async () => {
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    globalThis.window.liveBpm = estimatorSubmaxHrCeilingBpm(predictedHrMaxBpm(46));
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, false);
+    assert.ok(tick);
+    assert.equal(tick.runtime.segment, "cooldown");
+    assert.equal(tick.runtime.adaptive_termination.reason_code, "observed_hr_above_ceiling");
+  } finally {
+    restore();
+  }
+});
+
+test("below-ceiling fresh HR does not stop v3 and arms the guard", async () => {
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    globalThis.window.liveBpm = 130;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, false);
+    assert.ok(tick);
+    assert.equal(tick.runtime.segment, "work");
+    assert.equal(tick.runtime.termination, undefined);
+    assert.equal(tick.runtime.stages.length, 1);
+    const evidence = buildVo2ProtocolEvidenceForRuntime(tick.runtime, []);
+    assert.ok(evidence);
+    assert.equal(evidence.automatic_submax_hr_ceiling_available, true);
+  } finally {
+    restore();
+  }
+});
+
+test("stale or invalid live HR does not trigger the v3 guard", async () => {
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    const w = globalThis.window;
+    const cases = [
+      { name: "stale", liveBpm: 150, lastBpmUpdateTime: Date.now() - 10000, hrDeviceName: "Test Strap" },
+      { name: "zero", liveBpm: 0, lastBpmUpdateTime: Date.now(), hrDeviceName: "Test Strap" },
+      { name: "null", liveBpm: null, lastBpmUpdateTime: Date.now(), hrDeviceName: "Test Strap" },
+      { name: "no-device", liveBpm: 150, lastBpmUpdateTime: Date.now(), hrDeviceName: undefined },
+      { name: "nan", liveBpm: NaN, lastBpmUpdateTime: Date.now(), hrDeviceName: "Test Strap" },
+      { name: "string", liveBpm: "150", lastBpmUpdateTime: Date.now(), hrDeviceName: "Test Strap" },
+    ];
+    let elapsed = 330;
+    for (const c of cases) {
+      w.liveBpm = c.liveBpm;
+      w.lastBpmUpdateTime = c.lastBpmUpdateTime;
+      w.hrDeviceName = c.hrDeviceName;
+      const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, elapsed, false);
+      assert.ok(tick, c.name);
+      assert.equal(tick.runtime.segment, "work", c.name);
+      assert.equal(tick.runtime.termination, undefined, c.name);
+      assert.equal(tick.runtime.stages.length, 1, c.name);
+      elapsed += 5;
+    }
+    // Never armed: no trustworthy reading ever reached the guard.
+    const runtime = getSession(VO2_WORKOUT_SELECTOR_ID).vo2ProtocolRuntime;
+    const evidence = buildVo2ProtocolEvidenceForRuntime(runtime, []);
+    assert.ok(evidence);
+    assert.equal(evidence.automatic_submax_hr_ceiling_available, false);
+  } finally {
+    restore();
+  }
+});
+
+test("paused v3 workout does not trigger on over-ceiling live HR", async () => {
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    globalThis.window.liveBpm = 150;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, true);
+    assert.ok(tick);
+    assert.equal(tick.runtime.segment, "work");
+    assert.equal(tick.runtime.termination, undefined);
+    assert.equal(tick.runtime.stages.length, 1);
+    const evidence = buildVo2ProtocolEvidenceForRuntime(tick.runtime, []);
+    assert.ok(evidence);
+    assert.equal(evidence.automatic_submax_hr_ceiling_available, false);
+  } finally {
+    restore();
+  }
+});
+
+test("v2 sessions ignore over-ceiling live HR (guard is v3-only)", async () => {
+  const restore = installStartFakes();
+  try {
+    const plan = buildVo2ProtocolPlan();
+    assert.ok(plan);
+    persistVo2ProtocolRuntime(
+      VO2_WORKOUT_SELECTOR_ID,
+      createVo2ProtocolRuntime(plan, { age_years: 46, weight_kg: 52.1631 })
+    );
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    globalThis.window.liveBpm = 150;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, false);
+    assert.ok(tick);
+    assert.equal(tick.runtime.plan.protocol_version, 2);
+    assert.equal(tick.runtime.segment, "work");
+    assert.equal(tick.runtime.termination, undefined);
+    assert.equal(tick.runtime.stages.length, 1);
+  } finally {
+    restore();
+  }
 });

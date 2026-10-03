@@ -19,7 +19,7 @@ import { getMachineDefinition } from "./machines/registry.js";
 import { getSelectedMachineId } from "./machines/selection.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { summarizeVo2StageWorkload } from "./vo2Workload.js";
-import { VO2_AGE_YEARS_MAX, VO2_AGE_YEARS_MIN, VO2_WEIGHT_KG_MAX, VO2_WEIGHT_KG_MIN, classifyVo2ProtocolStage, predictedHrMaxBpm, } from "./vo2Estimator.js";
+import { VO2_AGE_YEARS_MAX, VO2_AGE_YEARS_MIN, VO2_WEIGHT_KG_MAX, VO2_WEIGHT_KG_MIN, classifyVo2ProtocolStage, estimatorSubmaxHrCeilingBpm, predictedHrMaxBpm, } from "./vo2Estimator.js";
 import { DEFAULT_VO2_ADAPTIVE_POLICY, VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC, isValidVo2AdaptivePolicy, planNextVo2Stage, vo2AdaptiveMaxTotalDurationSec, } from "./vo2AdaptivePlanner.js";
 export const VO2_PROTOCOL_V3_ID = VO2_PROTOCOL_ID;
 export const VO2_PROTOCOL_V3_VERSION = VO2_PROTOCOL_VERSION_V3;
@@ -363,6 +363,30 @@ export function advanceVo2ProtocolV3(runtime, input) {
     }
     if (next.segment === "complete" || input.paused)
         return next;
+    // Live hard-ceiling guard (v3 work stages only): a trustworthy fresh spot
+    // reading at/above the estimator's own hard ceiling stops the test now
+    // instead of waiting for the next 180/240/300s checkpoint. Runs after the
+    // explicit cancel/limit/early-cooldown intents above, so those keep their
+    // own termination reasons. Engages once the work segment is established.
+    if (input.liveHrBpm != null && next.segment === "work") {
+        next.live_hr_guard_armed = true;
+        const breachHrMax = runtimePredictedHrMaxV3(next);
+        if (breachHrMax != null && input.liveHrBpm >= estimatorSubmaxHrCeilingBpm(breachHrMax)) {
+            const hard = estimatorSubmaxHrCeilingBpm(breachHrMax);
+            enterCooldownV3(next, elapsed, "submax_hr_ceiling", {
+                provenance_version: 1,
+                eligible_stage_count: eligibleObservationsV3(next).length,
+                completed_work_stage_count: next.stages.length,
+                retry_count: next.retry_count_after_above_ceiling,
+                hard_hr_ceiling_bpm: hard,
+                planning_hr_ceiling_bpm: hard - next.plan.adaptive_policy.safety_margin_bpm,
+                planning_margin_bpm: next.plan.adaptive_policy.safety_margin_bpm,
+                reason_code: "observed_hr_above_ceiling",
+                termination_reason: "submax_hr_ceiling",
+            });
+            return next;
+        }
+    }
     if (next.segment === "warmup") {
         if (elapsed >= next.plan.warmup_duration_sec) {
             const started = startNextStageV3(next, elapsed, getWatts);
@@ -699,6 +723,8 @@ export function isValidVo2ProtocolRuntimeV3(value) {
     if (runtime.adaptive_termination != null && !isValidAdaptiveTerminationProvenance(runtime.adaptive_termination)) {
         return false;
     }
+    if (runtime.live_hr_guard_armed != null && !isBooleanFlagValue(runtime.live_hr_guard_armed))
+        return false;
     if (!Array.isArray(runtime.stages))
         return false;
     if (runtime.stages.length > runtime.plan.adaptive_policy.max_work_stages)
@@ -756,7 +782,7 @@ export function buildVo2ProtocolEvidenceV3(runtime, telemetrySamples = []) {
         termination: {
             reason: (_c = (_b = runtime.termination) === null || _b === void 0 ? void 0 : _b.reason) !== null && _c !== void 0 ? _c : "other",
         },
-        automatic_submax_hr_ceiling_available: runtimePredictedHrMaxV3(runtime) != null,
+        automatic_submax_hr_ceiling_available: runtimePredictedHrMaxV3(runtime) != null && runtime.live_hr_guard_armed === true,
     };
     if (runtime.adaptive_termination) {
         evidence.adaptive_termination = runtime.adaptive_termination;
