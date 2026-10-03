@@ -15,6 +15,7 @@ import {
   VO2_PROTOCOL_ID,
   VO2_PROTOCOL_VERSION_V3,
   type AdaptiveVo2ProtocolEvidence,
+  type CurrentVo2ProtocolEvidence,
   type Vo2AdaptiveStageProvenance,
   type Vo2AdaptiveTerminationProvenance,
   type Vo2ProtocolStageEvidence,
@@ -42,10 +43,18 @@ import {
   VO2_WORKOUT_INTENT,
   VO2_WORKOUT_LABEL,
   VO2_WORKOUT_SELECTOR_ID,
+  advanceVo2Protocol,
+  buildVo2ProtocolEvidence,
   evaluateStageHr,
+  getVo2ProtocolPhase,
   isValidStageWorkload,
   isValidVo2ResolvedWorkload,
   listCalibrated70RpmWorkloads,
+  vo2ProtocolHoldForPhase,
+  vo2ProtocolNeedsHrEvaluation,
+  vo2ProtocolUiTargets,
+  type AdvanceVo2ProtocolInput,
+  type Vo2ProtocolRuntime,
   type Vo2ResolvedWorkload,
   type Vo2WattsLookup,
 } from "./vo2Protocol.js";
@@ -923,4 +932,87 @@ export function buildVo2ProtocolEvidenceV3(
 export function parseVo2ProtocolRuntimeV3(raw: unknown): Vo2ProtocolRuntimeV3 | null {
   if (!isValidVo2ProtocolRuntimeV3(raw)) return null;
   return raw;
+}
+
+/**
+ * Live-session version routing. New athlete-started sessions are v3; a
+ * persisted v2 runtime keeps v2 semantics on every path below. Anything
+ * that is not v3 takes the v2 branch, preserving historical behavior.
+ */
+export function isVo2ProtocolRuntimeV3(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null | undefined
+): runtime is Vo2ProtocolRuntimeV3 {
+  return (runtime as Vo2ProtocolRuntimeV3 | null | undefined)?.plan?.protocol_version === VO2_PROTOCOL_VERSION_V3;
+}
+
+export function advanceVo2ProtocolRuntime(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
+  input: AdvanceVo2ProtocolInput
+): Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 {
+  if (isVo2ProtocolRuntimeV3(runtime)) return advanceVo2ProtocolV3(runtime, input);
+  return advanceVo2Protocol(runtime, input);
+}
+
+export function getVo2ProtocolPhaseForRuntime(
+  elapsedSec: number,
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
+  earlyCooldownElapsed?: number | null
+): WorkoutPhaseState {
+  if (isVo2ProtocolRuntimeV3(runtime)) return getVo2ProtocolPhaseV3(elapsedSec, runtime, earlyCooldownElapsed);
+  return getVo2ProtocolPhase(elapsedSec, runtime, earlyCooldownElapsed);
+}
+
+export function vo2ProtocolNeedsHrEvaluationForRuntime(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null | undefined,
+  elapsedSec: number,
+  paused: boolean
+): boolean {
+  if (isVo2ProtocolRuntimeV3(runtime)) return vo2ProtocolV3NeedsHrEvaluation(runtime, elapsedSec, paused);
+  return vo2ProtocolNeedsHrEvaluation(runtime, elapsedSec, paused);
+}
+
+export interface Vo2ProtocolUiTargetsShape {
+  hrTargetTextValue: string;
+  targetHeartRateMin: undefined;
+  targetHeartRateMax: undefined;
+  holdResistance: number | undefined;
+  holdCadenceRpm: number | undefined;
+}
+
+export function vo2ProtocolUiTargetsV3(
+  runtime: Vo2ProtocolRuntimeV3 | null | undefined,
+  phaseId: string
+): Vo2ProtocolUiTargetsShape {
+  const hold = vo2ProtocolHoldForPhaseV3(runtime, phaseId);
+  return {
+    hrTargetTextValue: "",
+    targetHeartRateMin: undefined,
+    targetHeartRateMax: undefined,
+    holdResistance: hold?.resistance,
+    holdCadenceRpm: hold?.cadenceRpm,
+  };
+}
+
+export function vo2ProtocolUiTargetsForRuntime(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null | undefined,
+  phaseId: string
+): Vo2ProtocolUiTargetsShape {
+  if (isVo2ProtocolRuntimeV3(runtime)) return vo2ProtocolUiTargetsV3(runtime, phaseId);
+  return vo2ProtocolUiTargets(runtime, phaseId);
+}
+
+export function vo2ProtocolHoldForPhaseForRuntime(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null | undefined,
+  phaseId: string
+): { resistance: number; cadenceRpm: number } | undefined {
+  if (isVo2ProtocolRuntimeV3(runtime)) return vo2ProtocolHoldForPhaseV3(runtime, phaseId);
+  return vo2ProtocolHoldForPhase(runtime, phaseId);
+}
+
+export function buildVo2ProtocolEvidenceForRuntime(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
+  telemetrySamples: readonly BikeTelemetrySample[] = []
+): CurrentVo2ProtocolEvidence | AdaptiveVo2ProtocolEvidence | undefined {
+  if (isVo2ProtocolRuntimeV3(runtime)) return buildVo2ProtocolEvidenceV3(runtime, telemetrySamples);
+  return buildVo2ProtocolEvidence(runtime, telemetrySamples);
 }

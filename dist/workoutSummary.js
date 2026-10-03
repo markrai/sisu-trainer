@@ -10,7 +10,8 @@ import { learnShadowPredictionsFromCompletedWorkout } from "./machines/predictio
 import { learnHrDynamicsFromCompletedWorkout } from "./machines/dynamics/index.js";
 import { actualElapsedSeconds, adjustedBlockLengths } from "./workoutLogic.js";
 import { attachVo2Evidence, buildVo2Evidence } from "./vo2Evidence.js";
-import { buildVo2ProtocolEvidence, isVo2WorkoutSelector } from "./vo2Protocol.js";
+import { isVo2WorkoutSelector } from "./vo2Protocol.js";
+import { buildVo2ProtocolEvidenceForRuntime } from "./vo2ProtocolV3.js";
 import { assessVo2 } from "./vo2Estimator.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { getBikeTelemetrySamples } from "./bikeTelemetryTrace.js";
@@ -188,7 +189,7 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
         machineGuidanceTraceEntryCount: (_j = summary.machine_guidance_trace) === null || _j === void 0 ? void 0 : _j.length,
         vo2Protocol: session.vo2ProtocolRuntime,
         protocol: session.vo2ProtocolRuntime
-            ? buildVo2ProtocolEvidence(session.vo2ProtocolRuntime, session.sessionId || sessionId ? getBikeTelemetrySamples(session.sessionId || sessionId) : [])
+            ? buildVo2ProtocolEvidenceForRuntime(session.vo2ProtocolRuntime, session.sessionId || sessionId ? getBikeTelemetrySamples(session.sessionId || sessionId) : [])
             : undefined,
     }));
     if (isVo2WorkoutSelector(day)) {

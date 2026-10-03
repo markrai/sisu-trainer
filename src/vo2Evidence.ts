@@ -12,12 +12,14 @@ import type {
   WorkoutPhaseKind,
   WorkoutSummary,
   CurrentVo2ProtocolEvidence,
+  AdaptiveVo2ProtocolEvidence,
   ResolvedWorkoutPrescription,
 } from "./types.js";
 import { VO2_EVIDENCE_SCHEMA_VERSION } from "./types.js";
 import type { MachineId } from "./machines/trace.js";
 import { getPhase, type GetPhaseOptions } from "./workoutLogic.js";
 import type { Vo2ProtocolRuntime } from "./vo2Protocol.js";
+import type { Vo2ProtocolRuntimeV3 } from "./vo2ProtocolV3.js";
 import { findResolvedPhaseTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
 
 export interface Vo2EvidenceBuildInput {
@@ -36,8 +38,8 @@ export interface Vo2EvidenceBuildInput {
   machineProfileVersion?: number;
   /** Count-only provenance; full trace stays on WorkoutSummary. */
   machineGuidanceTraceEntryCount?: number;
-  vo2Protocol?: Vo2ProtocolRuntime | null;
-  protocol?: CurrentVo2ProtocolEvidence;
+  vo2Protocol?: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null;
+  protocol?: CurrentVo2ProtocolEvidence | AdaptiveVo2ProtocolEvidence;
 }
 
 function naturalWorkEndSec(blocks: PlanBlock): number {
@@ -123,7 +125,7 @@ export function deriveVo2EvidencePhases(input: {
   earlyCooldownElapsed?: number | null;
   hrTargets?: HrTargetsForDay | null;
   resolvedPrescription?: ResolvedWorkoutPrescription | null;
-  vo2Protocol?: Vo2ProtocolRuntime | null;
+  vo2Protocol?: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null;
 }): Vo2EvidencePhase[] {
   const activeDurationSec = Math.max(0, Math.floor(input.activeDurationSec));
   if (activeDurationSec <= 0) return [];

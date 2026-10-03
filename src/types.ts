@@ -858,8 +858,9 @@ export const LEGACY_VO2_PROTOCOL_VERSION_V1 = 1 as const;
 export const LEGACY_VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION_V1;
 export const VO2_PROTOCOL_VERSION_V2 = 2 as const;
 export const VO2_PROTOCOL_VERSION_V3 = 3 as const;
-/** Protocol identity used for new formal assessments in this build. Default writer stays v2; adaptive v3 is explicit opt-in. */
+/** Protocol identity shared by formal assessments. New athlete-started sessions write v3; v2 remains the reader for historical evidence. */
 export const VO2_PROTOCOL_ID = LEGACY_VO2_PROTOCOL_ID;
+/** v2 marker used by the v2 reader/validators. Do not point at v3: v2 validation depends on this staying 2. */
 export const VO2_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION_V2;
 export type Vo2ProtocolId = typeof VO2_PROTOCOL_ID;
 export type Vo2ProtocolVersion =

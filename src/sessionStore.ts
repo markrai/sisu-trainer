@@ -12,6 +12,12 @@ import {
   readPersistedVo2ProtocolRuntime,
   type Vo2ProtocolRuntime,
 } from "./vo2Protocol.js";
+import {
+  isValidVo2ProtocolRuntimeV3,
+  isVo2ProtocolRuntimeV3,
+  parseVo2ProtocolRuntimeV3,
+  type Vo2ProtocolRuntimeV3,
+} from "./vo2ProtocolV3.js";
 import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import {
   parsePersistedHrTargetsForDay,
@@ -57,7 +63,7 @@ export interface SessionData {
   athleteFitnessSnapshot?: AthleteFitnessSnapshot;
   /** Blocks + HR targets frozen at workout start for phase evidence replay. */
   phasePlan: PhasePlanSnapshot | null;
-  vo2ProtocolRuntime: Vo2ProtocolRuntime | null;
+  vo2ProtocolRuntime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null;
   /** A persisted protocol-v1 assessment must be restarted rather than resumed with v2 rules. */
   vo2ProtocolRestartRequired: boolean;
   blockedVo2ProtocolVersion?: number;
@@ -191,11 +197,23 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
   const persistedVo2Runtime = (() => {
     const raw = store.getItem(vo2ProtocolRuntimeKey(day));
     if (!raw) return readPersistedVo2ProtocolRuntime(null);
+    let parsedVo2: unknown = null;
     try {
-      return readPersistedVo2ProtocolRuntime(JSON.parse(raw));
+      parsedVo2 = JSON.parse(raw);
     } catch {
       return readPersistedVo2ProtocolRuntime(null);
     }
+    const persisted = readPersistedVo2ProtocolRuntime(parsedVo2);
+    if (persisted.runtime || persisted.restartRequired) return persisted;
+    const v3 = parseVo2ProtocolRuntimeV3(parsedVo2);
+    if (v3) {
+      return {
+        runtime: v3,
+        restartRequired: false,
+        observedProtocolVersion: v3.plan.protocol_version,
+      };
+    }
+    return persisted;
   })();
   return {
     startTime: store.getItem("start_" + day),
@@ -314,10 +332,13 @@ export function clearSession(day: string, storage?: SessionStorage): void {
 
 export function persistVo2ProtocolRuntime(
   day: string,
-  runtime: Vo2ProtocolRuntime,
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
   storage?: SessionStorage
 ): void {
-  if (!isValidVo2ProtocolRuntime(runtime)) return;
+  const valid = isVo2ProtocolRuntimeV3(runtime)
+    ? isValidVo2ProtocolRuntimeV3(runtime)
+    : isValidVo2ProtocolRuntime(runtime);
+  if (!valid) return;
   storageOrBrowser(storage).setItem(vo2ProtocolRuntimeKey(day), JSON.stringify(runtime));
 }
 

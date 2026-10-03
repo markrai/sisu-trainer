@@ -1,5 +1,6 @@
 import { isActivity } from "./workoutActivity.js";
 import { isValidVo2ProtocolRuntime, readPersistedVo2ProtocolRuntime, } from "./vo2Protocol.js";
+import { isValidVo2ProtocolRuntimeV3, isVo2ProtocolRuntimeV3, parseVo2ProtocolRuntimeV3, } from "./vo2ProtocolV3.js";
 import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import { parsePersistedHrTargetsForDay, parseResolvedWorkoutPrescription, persistedHrTargetsFitBlocks, } from "./workoutPrescription.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
@@ -121,12 +122,25 @@ export function getSession(day, storage) {
         const raw = store.getItem(vo2ProtocolRuntimeKey(day));
         if (!raw)
             return readPersistedVo2ProtocolRuntime(null);
+        let parsedVo2 = null;
         try {
-            return readPersistedVo2ProtocolRuntime(JSON.parse(raw));
+            parsedVo2 = JSON.parse(raw);
         }
         catch {
             return readPersistedVo2ProtocolRuntime(null);
         }
+        const persisted = readPersistedVo2ProtocolRuntime(parsedVo2);
+        if (persisted.runtime || persisted.restartRequired)
+            return persisted;
+        const v3 = parseVo2ProtocolRuntimeV3(parsedVo2);
+        if (v3) {
+            return {
+                runtime: v3,
+                restartRequired: false,
+                observedProtocolVersion: v3.plan.protocol_version,
+            };
+        }
+        return persisted;
     })();
     return {
         startTime: store.getItem("start_" + day),
@@ -226,7 +240,10 @@ export function clearSession(day, storage) {
     store.removeItem(vo2ProtocolRuntimeKey(day));
 }
 export function persistVo2ProtocolRuntime(day, runtime, storage) {
-    if (!isValidVo2ProtocolRuntime(runtime))
+    const valid = isVo2ProtocolRuntimeV3(runtime)
+        ? isValidVo2ProtocolRuntimeV3(runtime)
+        : isValidVo2ProtocolRuntime(runtime);
+    if (!valid)
         return;
     storageOrBrowser(storage).setItem(vo2ProtocolRuntimeKey(day), JSON.stringify(runtime));
 }

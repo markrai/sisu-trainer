@@ -30,6 +30,8 @@ import {
   predictedHrMaxBpm,
   type Vo2ProfileInputs,
 } from "./vo2Estimator.js";
+/** Type-only: widened helpers below accept v3 runtimes without a runtime import cycle. */
+import type { Vo2ProtocolRuntimeV3 } from "./vo2ProtocolV3.js";
 
 export { VO2_PRESCRIBED_CADENCE_RPM };
 export const VO2_WORKOUT_SELECTOR_ID = "VO2MaxEstimation";
@@ -564,7 +566,10 @@ export function vo2ProtocolNeedsHrEvaluation(
   return evalAt > 0 && evalAt > open.last_eval_relative_sec;
 }
 
-export function isStaleVo2ProtocolTick(runtime: Vo2ProtocolRuntime, elapsedSec: number): boolean {
+export function isStaleVo2ProtocolTick(
+  runtime: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
+  elapsedSec: number
+): boolean {
   const elapsed = Math.max(0, Math.floor(elapsedSec));
   for (const stage of runtime.stages) {
     if (stage.active_start_sec > elapsed) return true;
@@ -834,8 +839,8 @@ export function vo2ProtocolHoldForPhase(runtime: Vo2ProtocolRuntime | null | und
 }
 
 export function vo2ProtocolVoiceCues(
-  previous: Vo2ProtocolRuntime | null | undefined,
-  next: Vo2ProtocolRuntime,
+  previous: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3 | null | undefined,
+  next: Vo2ProtocolRuntime | Vo2ProtocolRuntimeV3,
   _elapsedSec: number
 ): string[] {
   const cues: string[] = [];

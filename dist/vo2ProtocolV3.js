@@ -12,7 +12,7 @@
  * selection and termination provenance are adaptive.
  */
 import { VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION_V3, } from "./types.js";
-import { VO2_CALIBRATION_MACHINE_ID, VO2_COOLDOWN_DURATION_SEC, VO2_EVAL_RELATIVE_SECONDS, VO2_HR_FRESHNESS_MS, VO2_MAX_EXTENSION_MINUTES, VO2_MAX_STAGE_DURATION_SEC, VO2_NOMINAL_STAGE_DURATION_SEC, VO2_PRESCRIBED_CADENCE_RPM, VO2_PROTOCOL_MAX_RESISTANCE, VO2_TARGET_WORK_STAGES, VO2_UPCOMING_RESISTANCE_LEAD_SEC, VO2_WARMUP_DURATION_SEC, VO2_WORKOUT_INTENT, VO2_WORKOUT_LABEL, VO2_WORKOUT_SELECTOR_ID, evaluateStageHr, isValidStageWorkload, isValidVo2ResolvedWorkload, listCalibrated70RpmWorkloads, } from "./vo2Protocol.js";
+import { VO2_CALIBRATION_MACHINE_ID, VO2_COOLDOWN_DURATION_SEC, VO2_EVAL_RELATIVE_SECONDS, VO2_HR_FRESHNESS_MS, VO2_MAX_EXTENSION_MINUTES, VO2_MAX_STAGE_DURATION_SEC, VO2_NOMINAL_STAGE_DURATION_SEC, VO2_PRESCRIBED_CADENCE_RPM, VO2_PROTOCOL_MAX_RESISTANCE, VO2_TARGET_WORK_STAGES, VO2_UPCOMING_RESISTANCE_LEAD_SEC, VO2_WARMUP_DURATION_SEC, VO2_WORKOUT_INTENT, VO2_WORKOUT_LABEL, VO2_WORKOUT_SELECTOR_ID, advanceVo2Protocol, buildVo2ProtocolEvidence, evaluateStageHr, getVo2ProtocolPhase, isValidStageWorkload, isValidVo2ResolvedWorkload, listCalibrated70RpmWorkloads, vo2ProtocolHoldForPhase, vo2ProtocolNeedsHrEvaluation, vo2ProtocolUiTargets, } from "./vo2Protocol.js";
 import { AUTOMATIC_RESISTANCE_MIN } from "./machines/proformSmartPower10.js";
 import { getEstimatedWattsAt70Rpm } from "./machines/proformSmartPower10.js";
 import { getMachineDefinition } from "./machines/registry.js";
@@ -767,4 +767,53 @@ export function parseVo2ProtocolRuntimeV3(raw) {
     if (!isValidVo2ProtocolRuntimeV3(raw))
         return null;
     return raw;
+}
+/**
+ * Live-session version routing. New athlete-started sessions are v3; a
+ * persisted v2 runtime keeps v2 semantics on every path below. Anything
+ * that is not v3 takes the v2 branch, preserving historical behavior.
+ */
+export function isVo2ProtocolRuntimeV3(runtime) {
+    var _a;
+    return ((_a = runtime === null || runtime === void 0 ? void 0 : runtime.plan) === null || _a === void 0 ? void 0 : _a.protocol_version) === VO2_PROTOCOL_VERSION_V3;
+}
+export function advanceVo2ProtocolRuntime(runtime, input) {
+    if (isVo2ProtocolRuntimeV3(runtime))
+        return advanceVo2ProtocolV3(runtime, input);
+    return advanceVo2Protocol(runtime, input);
+}
+export function getVo2ProtocolPhaseForRuntime(elapsedSec, runtime, earlyCooldownElapsed) {
+    if (isVo2ProtocolRuntimeV3(runtime))
+        return getVo2ProtocolPhaseV3(elapsedSec, runtime, earlyCooldownElapsed);
+    return getVo2ProtocolPhase(elapsedSec, runtime, earlyCooldownElapsed);
+}
+export function vo2ProtocolNeedsHrEvaluationForRuntime(runtime, elapsedSec, paused) {
+    if (isVo2ProtocolRuntimeV3(runtime))
+        return vo2ProtocolV3NeedsHrEvaluation(runtime, elapsedSec, paused);
+    return vo2ProtocolNeedsHrEvaluation(runtime, elapsedSec, paused);
+}
+export function vo2ProtocolUiTargetsV3(runtime, phaseId) {
+    const hold = vo2ProtocolHoldForPhaseV3(runtime, phaseId);
+    return {
+        hrTargetTextValue: "",
+        targetHeartRateMin: undefined,
+        targetHeartRateMax: undefined,
+        holdResistance: hold === null || hold === void 0 ? void 0 : hold.resistance,
+        holdCadenceRpm: hold === null || hold === void 0 ? void 0 : hold.cadenceRpm,
+    };
+}
+export function vo2ProtocolUiTargetsForRuntime(runtime, phaseId) {
+    if (isVo2ProtocolRuntimeV3(runtime))
+        return vo2ProtocolUiTargetsV3(runtime, phaseId);
+    return vo2ProtocolUiTargets(runtime, phaseId);
+}
+export function vo2ProtocolHoldForPhaseForRuntime(runtime, phaseId) {
+    if (isVo2ProtocolRuntimeV3(runtime))
+        return vo2ProtocolHoldForPhaseV3(runtime, phaseId);
+    return vo2ProtocolHoldForPhase(runtime, phaseId);
+}
+export function buildVo2ProtocolEvidenceForRuntime(runtime, telemetrySamples = []) {
+    if (isVo2ProtocolRuntimeV3(runtime))
+        return buildVo2ProtocolEvidenceV3(runtime, telemetrySamples);
+    return buildVo2ProtocolEvidence(runtime, telemetrySamples);
 }

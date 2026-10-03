@@ -6,7 +6,8 @@ import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
 import { formatHrvDisplay } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
-import { isVo2WorkoutSelector, vo2ProtocolDisplayName, vo2ProtocolHoldForPhase, vo2ProtocolUiTargets, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
+import { isVo2WorkoutSelector, vo2ProtocolDisplayName, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
+import { vo2ProtocolHoldForPhaseForRuntime, vo2ProtocolUiTargetsForRuntime } from "./vo2ProtocolV3.js";
 import { genericWorkoutBlocksText, vo2AssessmentPresentation, vo2CancelModalBody, vo2CancelModalTitle, vo2EndWorkoutButtonLabel, vo2HistoryOutcomeText, vo2LimitReachedButtonVisible, vo2SelectorOptionText, vo2WorkoutBlocksText, } from "./vo2AssessmentView.js";
 import { startDownregulationView, stopDownregulationView } from "./downregulation/index.js";
 import { listMachinesForActivity, isMachineId } from "./machines/registry.js";
@@ -881,11 +882,11 @@ function renderWorkout(state) {
     }
     const session = getSession(active.day);
     const vo2Targets = isVo2WorkoutSelector(active.day)
-        ? vo2ProtocolUiTargets(session.vo2ProtocolRuntime, active.phase.phaseId)
+        ? vo2ProtocolUiTargetsForRuntime(session.vo2ProtocolRuntime, active.phase.phaseId)
         : null;
     const hold = vo2Targets
         ? { resistance: vo2Targets.holdResistance, cadenceRpm: vo2Targets.holdCadenceRpm }
-        : vo2ProtocolHoldForPhase(session.vo2ProtocolRuntime, active.phase.phaseId);
+        : vo2ProtocolHoldForPhaseForRuntime(session.vo2ProtocolRuntime, active.phase.phaseId);
     const machineHeartRateTarget = machineHeartRateTargetFromResolved(active.resolvedPhaseTarget);
     const machineUpdate = session.sessionId && active.activity
         ? updateMachineGuidanceRuntime({

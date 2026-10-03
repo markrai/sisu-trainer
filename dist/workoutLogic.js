@@ -4,7 +4,8 @@ import { getSession, startSession, pauseSession, resumeSession, clearSession, ge
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
-import { advanceVo2Protocol, createVo2ProtocolRuntime, evaluateVo2PreflightForUi, getVo2ProtocolPhase, isVo2WorkoutSelector, vo2ProtocolNeedsHrEvaluation, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, } from "./vo2Protocol.js";
+import { isVo2WorkoutSelector, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, } from "./vo2Protocol.js";
+import { advanceVo2ProtocolRuntime, createVo2ProtocolRuntimeV3, evaluateVo2PreflightV3ForUi, getVo2ProtocolPhaseForRuntime, vo2ProtocolNeedsHrEvaluationForRuntime, } from "./vo2ProtocolV3.js";
 import { clearOrdinaryBikeTelemetry, getHrSamples } from "./workoutStorage.js";
 import { clearBikeTelemetrySamples, getBikeTelemetrySamples, recordBikeTelemetrySample, } from "./bikeTelemetryTrace.js";
 import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
@@ -322,7 +323,7 @@ function beginWorkout(activity) {
     var _a, _b, _c, _d;
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
     if (isVo2WorkoutSelector(day)) {
-        const preflight = evaluateVo2PreflightForUi();
+        const preflight = evaluateVo2PreflightV3ForUi();
         if (preflight.ok === false) {
             if (typeof window.showToast === "function") {
                 window.showToast(preflight.message, "error");
@@ -337,7 +338,7 @@ function beginWorkout(activity) {
             return;
         const startTime = Date.now();
         const startContext = captureWorkoutStartContext(day, resolved, new Date(startTime).toISOString());
-        const runtime = createVo2ProtocolRuntime(preflight.plan, preflight.assessmentProfile);
+        const runtime = createVo2ProtocolRuntimeV3(preflight.plan, preflight.assessmentProfile);
         let sessionId = null;
         if (typeof window.generateUUID === "function") {
             sessionId = window.generateUUID();
@@ -458,7 +459,7 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
     const day = (_a = options === null || options === void 0 ? void 0 : options.day) !== null && _a !== void 0 ? _a : (typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName());
     const vo2Runtime = resolveVo2ProtocolRuntime(day, options);
     if (vo2Runtime)
-        return getVo2ProtocolPhase(elapsedSec, vo2Runtime, earlyCooldownElapsed);
+        return getVo2ProtocolPhaseForRuntime(elapsedSec, vo2Runtime, earlyCooldownElapsed);
     const w = blocks.warm * 60;
     const s = blocks.sustain * 60;
     const c = blocks.cool * 60;
@@ -521,7 +522,7 @@ function tickVo2Protocol(day, elapsedSec, paused, storage, samples = [], telemet
     if (isStaleVo2ProtocolTick(before, elapsedSec)) {
         return { runtime: before, cues: [] };
     }
-    const next = advanceVo2Protocol(before, {
+    const next = advanceVo2ProtocolRuntime(before, {
         elapsedSec,
         paused,
         samples,
@@ -538,7 +539,7 @@ async function tickVo2ProtocolWithCanonicalHr(day, elapsedSec, paused, storage) 
     let samples = [];
     let telemetrySamples = [];
     if (session.sessionId &&
-        vo2ProtocolNeedsHrEvaluation(session.vo2ProtocolRuntime, elapsedSec, paused)) {
+        vo2ProtocolNeedsHrEvaluationForRuntime(session.vo2ProtocolRuntime, elapsedSec, paused)) {
         samples = await getHrSamples(session.sessionId);
         telemetrySamples = getBikeTelemetrySamples(session.sessionId, storage);
     }
@@ -548,7 +549,7 @@ function markVo2ProtocolCancelled(day, elapsedSec, storage) {
     const session = getSession(day, storage);
     if (!session.vo2ProtocolRuntime)
         return;
-    persistVo2ProtocolRuntime(day, advanceVo2Protocol(session.vo2ProtocolRuntime, {
+    persistVo2ProtocolRuntime(day, advanceVo2ProtocolRuntime(session.vo2ProtocolRuntime, {
         elapsedSec,
         paused: session.paused,
         samples: [],
@@ -559,7 +560,7 @@ function markVo2ProtocolLimitReached(day, elapsedSec, storage) {
     const session = getSession(day, storage);
     if (!session.vo2ProtocolRuntime)
         return;
-    persistVo2ProtocolRuntime(day, advanceVo2Protocol(session.vo2ProtocolRuntime, {
+    persistVo2ProtocolRuntime(day, advanceVo2ProtocolRuntime(session.vo2ProtocolRuntime, {
         elapsedSec,
         paused: session.paused,
         samples: [],
