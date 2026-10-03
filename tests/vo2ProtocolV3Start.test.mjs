@@ -166,6 +166,27 @@ test("v3 live ceiling breach before the first checkpoint stops promptly with obs
   }
 });
 
+test("observed breach during stage 1 reports zero completed work stages", async () => {
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    globalThis.window.liveBpm = 150;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const tick = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, false);
+    assert.ok(tick);
+    assert.equal(tick.runtime.segment, "cooldown");
+    const provenance = tick.runtime.adaptive_termination;
+    assert.ok(provenance);
+    assert.equal(provenance.reason_code, "observed_hr_above_ceiling");
+    // The open stage is still open when the breach fires: nothing completed.
+    assert.equal(provenance.completed_work_stage_count, 0);
+    assert.equal(provenance.eligible_stage_count, 0);
+  } finally {
+    restore();
+  }
+});
+
 test("v3 live ceiling reached exactly still stops (matches estimator >= rule)", async () => {
   const restore = installStartFakes();
   try {
@@ -210,6 +231,7 @@ test("stale or invalid live HR does not trigger the v3 guard", async () => {
     const w = globalThis.window;
     const cases = [
       { name: "stale", liveBpm: 150, lastBpmUpdateTime: Date.now() - 10000, hrDeviceName: "Test Strap" },
+      { name: "future", liveBpm: 150, lastBpmUpdateTime: Date.now() + 60000, hrDeviceName: "Test Strap" },
       { name: "zero", liveBpm: 0, lastBpmUpdateTime: Date.now(), hrDeviceName: "Test Strap" },
       { name: "null", liveBpm: null, lastBpmUpdateTime: Date.now(), hrDeviceName: "Test Strap" },
       { name: "no-device", liveBpm: 150, lastBpmUpdateTime: Date.now(), hrDeviceName: undefined },
@@ -253,6 +275,31 @@ test("paused v3 workout does not trigger on over-ceiling live HR", async () => {
     const evidence = buildVo2ProtocolEvidenceForRuntime(tick.runtime, []);
     assert.ok(evidence);
     assert.equal(evidence.automatic_submax_hr_ceiling_available, false);
+  } finally {
+    restore();
+  }
+});
+
+test("every pre-checkpoint tick evaluates the guard independently", async () => {
+  // Pins the production wiring contract from the tick side: with the 1 Hz
+  // display timer calling the canonical tick unconditionally, a breach is
+  // detected within ~1s at any elapsed -- no checkpoint gating inside.
+  const restore = installStartFakes();
+  try {
+    startWorkout();
+    tickVo2Protocol(VO2_WORKOUT_SELECTOR_ID, 300, false);
+    globalThis.window.liveBpm = 130;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const first = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 330, false);
+    assert.ok(first);
+    assert.equal(first.runtime.segment, "work");
+    // One second later, still far from any checkpoint, a breach stops promptly.
+    globalThis.window.liveBpm = 150;
+    globalThis.window.lastBpmUpdateTime = Date.now();
+    const second = await tickVo2ProtocolWithCanonicalHr(VO2_WORKOUT_SELECTOR_ID, 331, false);
+    assert.ok(second);
+    assert.equal(second.runtime.segment, "cooldown");
+    assert.equal(second.runtime.adaptive_termination.reason_code, "observed_hr_above_ceiling");
   } finally {
     restore();
   }

@@ -1063,6 +1063,8 @@ async function updateDisplayAsync() {
     const pausedElapsed = typeof getPausedElapsed === "function" ? getPausedElapsed(day) : 0;
     const liveBpm = (window as any).liveBpm as number | null;
     const lastBpmUpdateTime = (window as any).lastBpmUpdateTime as number | null;
+    // Live-HR guard contract: the v3 ceiling guard evaluates inside the tick below, so this
+    // call must stay unconditional (every refresh, any elapsed) -- never gate it on checkpoints.
     if (startTime && isVo2WorkoutSelector(day)) {
       const elapsedSec = paused ? pausedElapsed : Math.floor((Date.now() - parseInt(startTime, 10)) / 1000);
       const tick = await tickVo2ProtocolWithCanonicalHr(day, elapsedSec, paused);

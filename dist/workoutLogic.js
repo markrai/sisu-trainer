@@ -516,9 +516,9 @@ function getPhase(elapsedSec, blocks, earlyCooldownElapsed, options) {
 }
 /**
  * Fresh live-HR spot reading (bpm) for the v3 ceiling guard. Mirrors the
- * preflight trust rule exactly: strap attached, finite positive bpm, and an
- * update within VO2_HR_FRESHNESS_MS. Null when unknown, stale, invalid, or
- * when no browser HR feed exists. Finite guards fail closed on garbage.
+ * preflight trust rule (strap attached, positive bpm, update within freshness),
+ * tightened to fail closed: rejects future timestamps and non-finite garbage.
+ * Null when unknown, stale, invalid, or when no browser HR feed exists.
  */
 function readFreshLiveHrBpm(now = Date.now()) {
     if (typeof window === "undefined")
@@ -531,7 +531,8 @@ function readFreshLiveHrBpm(now = Date.now()) {
         return null;
     if (!Number.isFinite(liveBpm) || !Number.isFinite(lastUpdate))
         return null;
-    if (liveBpm <= 0 || now - lastUpdate > VO2_HR_FRESHNESS_MS)
+    const ageMs = now - lastUpdate;
+    if (liveBpm <= 0 || ageMs > VO2_HR_FRESHNESS_MS || ageMs < 0)
         return null;
     return liveBpm;
 }

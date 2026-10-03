@@ -376,7 +376,7 @@ export function advanceVo2ProtocolV3(runtime, input) {
             enterCooldownV3(next, elapsed, "submax_hr_ceiling", {
                 provenance_version: 1,
                 eligible_stage_count: eligibleObservationsV3(next).length,
-                completed_work_stage_count: next.stages.length,
+                completed_work_stage_count: next.stages.filter((stage) => stage.status !== "open").length,
                 retry_count: next.retry_count_after_above_ceiling,
                 hard_hr_ceiling_bpm: hard,
                 planning_hr_ceiling_bpm: hard - next.plan.adaptive_policy.safety_margin_bpm,
