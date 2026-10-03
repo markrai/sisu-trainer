@@ -43,6 +43,7 @@ export const LEGACY_VO2_PROTOCOL_VERSION_V1 = 1;
 /** Backward-compatible name for the permanent historical protocol identity. */
 export const LEGACY_VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION_V1;
 export const VO2_PROTOCOL_VERSION_V2 = 2;
-/** Protocol identity used for new formal assessments in this build. */
+export const VO2_PROTOCOL_VERSION_V3 = 3;
+/** Protocol identity used for new formal assessments in this build. Default writer stays v2; adaptive v3 is explicit opt-in. */
 export const VO2_PROTOCOL_ID = LEGACY_VO2_PROTOCOL_ID;
 export const VO2_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION_V2;

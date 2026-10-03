@@ -857,13 +857,15 @@ export const LEGACY_VO2_PROTOCOL_VERSION_V1 = 1 as const;
 /** Backward-compatible name for the permanent historical protocol identity. */
 export const LEGACY_VO2_PROTOCOL_VERSION = LEGACY_VO2_PROTOCOL_VERSION_V1;
 export const VO2_PROTOCOL_VERSION_V2 = 2 as const;
-/** Protocol identity used for new formal assessments in this build. */
+export const VO2_PROTOCOL_VERSION_V3 = 3 as const;
+/** Protocol identity used for new formal assessments in this build. Default writer stays v2; adaptive v3 is explicit opt-in. */
 export const VO2_PROTOCOL_ID = LEGACY_VO2_PROTOCOL_ID;
 export const VO2_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION_V2;
 export type Vo2ProtocolId = typeof VO2_PROTOCOL_ID;
 export type Vo2ProtocolVersion =
   | typeof LEGACY_VO2_PROTOCOL_VERSION_V1
-  | typeof VO2_PROTOCOL_VERSION_V2;
+  | typeof VO2_PROTOCOL_VERSION_V2
+  | typeof VO2_PROTOCOL_VERSION_V3;
 
 export type Vo2ProtocolStageStatus =
   | "accepted"
@@ -885,7 +887,13 @@ export type Vo2ProtocolTerminationReasonV2 =
   | Vo2ProtocolTerminationReasonV1
   | "insufficient_eligible_stages";
 
-export type Vo2ProtocolTerminationReason = Vo2ProtocolTerminationReasonV1 | Vo2ProtocolTerminationReasonV2;
+/** Adaptive v3 reuses the v2 vocabulary; per-stage/termination provenance distinguishes subcases. */
+export type Vo2ProtocolTerminationReasonV3 = Vo2ProtocolTerminationReasonV2;
+
+export type Vo2ProtocolTerminationReason =
+  | Vo2ProtocolTerminationReasonV1
+  | Vo2ProtocolTerminationReasonV2
+  | Vo2ProtocolTerminationReasonV3;
 
 export interface Vo2ProtocolStageHrEvidence {
   sample_count: number;
@@ -893,6 +901,55 @@ export interface Vo2ProtocolStageHrEvidence {
   minute_3_mean_bpm?: number;
   final_two_window_delta_bpm?: number;
   steady_state_bpm?: number;
+}
+
+/** Compact versioned reason codes for adaptive v3 planner decisions. Source of truth; no free-form strings. */
+export type Vo2AdaptiveDecisionReasonCode =
+  | "sufficient_evidence"
+  | "bootstrap_first_stage"
+  | "conservative_step_insufficient_evidence"
+  | "safe_increment"
+  | "reduced_increment_near_ceiling"
+  | "retry_lower_after_above_ceiling"
+  | "hr_safety_no_safe_target"
+  | "below_floor_no_safe_target"
+  | "workload_bounds_exhausted"
+  | "stage_limit_reached"
+  | "retry_limit_reached"
+  | "insufficient_separation"
+  | "nonpositive_slope";
+
+/** Per-stage provenance explaining why adaptive v3 chose this workload. Only v3 writes this. */
+export interface Vo2AdaptiveStageProvenance {
+  provenance_version: 1;
+  prior_eligible_stage_count: number;
+  previous_measured_watts?: number;
+  previous_steady_hr_bpm?: number;
+  hard_hr_ceiling_bpm: number;
+  planning_hr_ceiling_bpm: number;
+  planning_margin_bpm: number;
+  predicted_next_hr_bpm?: number;
+  selected_target_watts: number;
+  selected_calibrated_watts: number;
+  selected_resistance: number;
+  decision: "next" | "retry";
+  reason_code: Vo2AdaptiveDecisionReasonCode;
+}
+
+/** Protocol-level provenance for a v3 planner refusal. Set when no safe/useful stage exists. */
+export interface Vo2AdaptiveTerminationProvenance {
+  provenance_version: 1;
+  eligible_stage_count: number;
+  completed_work_stage_count: number;
+  retry_count: number;
+  hard_hr_ceiling_bpm: number;
+  planning_hr_ceiling_bpm: number;
+  planning_margin_bpm: number;
+  last_measured_watts?: number;
+  last_steady_hr_bpm?: number;
+  predicted_hr_bpm?: number;
+  reason_code: Vo2AdaptiveDecisionReasonCode;
+  termination_reason: Vo2ProtocolTerminationReasonV3;
 }
 
 export interface Vo2ProtocolStageEvidence {
@@ -907,6 +964,8 @@ export interface Vo2ProtocolStageEvidence {
   actual_duration_sec: number;
   hr?: Vo2ProtocolStageHrEvidence;
   workload?: Vo2ProtocolStageWorkloadEvidence;
+  /** Present only on adaptive v3 stages. V1/v2 readers ignore it. */
+  adaptive?: Vo2AdaptiveStageProvenance;
 }
 
 interface Vo2ProtocolEvidenceBase {
@@ -936,8 +995,19 @@ export interface Vo2ProtocolEvidenceV2 extends Omit<Vo2ProtocolEvidenceBase, "pr
   };
 }
 
-export type Vo2ProtocolEvidence = Vo2ProtocolEvidenceV1 | Vo2ProtocolEvidenceV2;
+/** Adaptive v3 protocol evidence. Reuses v2 termination vocabulary; provenance explains refusals. */
+export interface Vo2ProtocolEvidenceV3 extends Omit<Vo2ProtocolEvidenceBase, "protocol_version"> {
+  protocol_version: typeof VO2_PROTOCOL_VERSION_V3;
+  termination: {
+    reason: Vo2ProtocolTerminationReasonV3;
+  };
+  adaptive_termination?: Vo2AdaptiveTerminationProvenance;
+}
+
+export type Vo2ProtocolEvidence = Vo2ProtocolEvidenceV1 | Vo2ProtocolEvidenceV2 | Vo2ProtocolEvidenceV3;
 export type CurrentVo2ProtocolEvidence = Vo2ProtocolEvidenceV2;
+/** Explicit adaptive evidence; not the default writer. */
+export type AdaptiveVo2ProtocolEvidence = Vo2ProtocolEvidenceV3;
 
 interface Vo2EvidenceBase {
   activity?: Activity;
@@ -966,10 +1036,10 @@ export interface Vo2EvidenceV1 extends Vo2EvidenceBase {
   protocol?: Vo2ProtocolEvidenceV1;
 }
 
-/** Current evidence writer record. */
+/** Current evidence writer record. Outer envelope stays v2; protocol v2 or adaptive v3 may sit inside. */
 export interface Vo2EvidenceV2 extends Vo2EvidenceBase {
   schema_version: typeof VO2_EVIDENCE_SCHEMA_VERSION_V2;
-  protocol?: Vo2ProtocolEvidenceV2;
+  protocol?: Vo2ProtocolEvidenceV2 | Vo2ProtocolEvidenceV3;
 }
 
 export type Vo2Evidence = Vo2EvidenceV1 | Vo2EvidenceV2;

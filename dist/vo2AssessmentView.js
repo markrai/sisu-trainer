@@ -264,6 +264,10 @@ function workloadSourceLine(result) {
     }
     return "Estimated from your cycling heart-rate response.";
 }
+function isHrBoundaryShortfall(result) {
+    return (result.eligible_stage_count < VO2_MIN_ELIGIBLE_STAGES &&
+        result.reason_codes.includes("hr_above_submax_ceiling"));
+}
 export function vo2AssessmentPresentation(result) {
     if (!result) {
         return {
@@ -288,6 +292,16 @@ export function vo2AssessmentPresentation(result) {
                 workloadSourceLine(result),
             detail: fitQualityLine(result),
             estimated: true,
+            stages: vo2StageDiagnostics(result),
+        };
+    }
+    if (isHrBoundaryShortfall(result)) {
+        return {
+            title: "Not enough submaximal stages to estimate VO₂ max",
+            valueText: "",
+            body: "We recorded the assessment, but your heart rate reached the test's submaximal limit before we collected enough usable stages for a reliable estimate.",
+            detail: vo2InsufficientDetail(result),
+            estimated: false,
             stages: vo2StageDiagnostics(result),
         };
     }

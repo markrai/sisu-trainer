@@ -1,4 +1,4 @@
-import { VO2_ASSESSMENT_SCHEMA_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_ASSESSMENT_SCHEMA_VERSION_V2, VO2_EVIDENCE_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V2, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION_V1, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
+import { VO2_ASSESSMENT_SCHEMA_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_ASSESSMENT_SCHEMA_VERSION_V2, VO2_EVIDENCE_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V2, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION_V1, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, VO2_PROTOCOL_VERSION_V2, VO2_PROTOCOL_VERSION_V3, } from "./types.js";
 import { VO2_CADENCE_MIN_IN_BAND_RATIO, VO2_CADENCE_TOLERANCE_RPM, VO2_PRESCRIBED_CADENCE_RPM, VO2_WORKLOAD_MIN_SAMPLES, } from "./vo2Workload.js";
 /** Permanent historical identity for the v1 submaximal cycle-ergometer estimator; keep readable after newer estimators ship. */
 export const LEGACY_VO2_ESTIMATOR_ID = "bike-submax-linear-hr-workload";
@@ -9,8 +9,13 @@ export const VO2_ESTIMATOR_VERSION_V2 = 2;
 /** Estimator used for new formal assessments in this build. */
 export const VO2_ESTIMATOR_ID = LEGACY_VO2_ESTIMATOR_ID;
 export const VO2_ESTIMATOR_VERSION = VO2_ESTIMATOR_VERSION_V2;
-/** The current estimator consumes only the current corrected protocol. */
+/** Primary protocol consumed by the current estimator. Adaptive v3 is also accepted (same stage semantics). */
 export const VO2_ESTIMATOR_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION;
+/** Estimator v2 accepts both fixed-ladder v2 and adaptive v3 protocols; logic is identical. */
+export const VO2_ESTIMATOR_ACCEPTED_PROTOCOL_VERSIONS = [
+    VO2_PROTOCOL_VERSION_V2,
+    VO2_PROTOCOL_VERSION_V3,
+];
 export const VO2_FORMAL_ASSESSMENT_CONTRACT_V1 = {
     estimatorId: LEGACY_VO2_ESTIMATOR_ID,
     estimatorVersion: LEGACY_VO2_ESTIMATOR_VERSION_V1,
@@ -27,9 +32,23 @@ export const VO2_FORMAL_ASSESSMENT_CONTRACT_V2 = {
     evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V2,
     assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
 };
+/**
+ * Adaptive v3 uses the same estimator logic, evidence envelope (v2), and
+ * assessment output (v2) as fixed v2; only the protocol collection version
+ * differs. No estimator semantic change, so no estimator version bump.
+ */
+export const VO2_FORMAL_ASSESSMENT_CONTRACT_V2_PROTOCOL_V3 = {
+    estimatorId: VO2_ESTIMATOR_ID,
+    estimatorVersion: VO2_ESTIMATOR_VERSION_V2,
+    protocolId: VO2_PROTOCOL_ID,
+    protocolVersion: VO2_PROTOCOL_VERSION_V3,
+    evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V2,
+    assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
+};
 export const SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS = [
     VO2_FORMAL_ASSESSMENT_CONTRACT_V1,
     VO2_FORMAL_ASSESSMENT_CONTRACT_V2,
+    VO2_FORMAL_ASSESSMENT_CONTRACT_V2_PROTOCOL_V3,
 ];
 export function isSupportedVo2EstimatorProtocolPair(estimatorId, estimatorVersion, protocolId, protocolVersion) {
     return SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS.some((contract) => contract.estimatorId === estimatorId &&
@@ -350,13 +369,15 @@ export function assessVo2(evidence, profile = {}) {
     if (evidence && evidence.schema_version !== VO2_EVIDENCE_SCHEMA_VERSION_V2) {
         reasons.push("unsupported_evidence_schema");
     }
+    // Estimator v2 logic is identical for fixed v2 and adaptive v3 protocols.
+    // Diagnostics keep expected=2 (primary) while observed records 2 or 3.
     if (!protocol) {
         reasons.push("missing_protocol_evidence");
     }
     else if (protocol.protocol_id !== VO2_PROTOCOL_ID) {
         reasons.push("unsupported_protocol_id");
     }
-    else if (protocol.protocol_version !== VO2_ESTIMATOR_PROTOCOL_VERSION) {
+    else if (!VO2_ESTIMATOR_ACCEPTED_PROTOCOL_VERSIONS.includes(protocol.protocol_version)) {
         reasons.push("unsupported_protocol_version");
     }
     if (profile.age_years == null || (typeof profile.age_years === "number" && !Number.isFinite(profile.age_years))) {
@@ -546,7 +567,7 @@ export function assessVo2V1(evidence, profile = {}) {
     }
     // Assessment schema v1 has no dedicated evidence-schema reason code. Keep
     // its permanent vocabulary while treating any schema mismatch as an
-    // unsupported v1 protocol contract, before inspecting stage data.
+    // unsupported v1 protocol contract that cannot produce an estimate.
     if (evidence && evidence.schema_version !== VO2_EVIDENCE_SCHEMA_VERSION_V1) {
         reasons.push("unsupported_protocol_version");
     }

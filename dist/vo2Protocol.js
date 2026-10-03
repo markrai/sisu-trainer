@@ -218,6 +218,14 @@ function mean(values) {
         return undefined;
     return values.reduce((sum, value) => sum + value, 0) / values.length;
 }
+/**
+ * Steady-state windows slide with extensions, so actual_duration_sec is
+ * 180 when steady at minute 3, 240 after one extension minute, 300 after two.
+ * A stage with nominal 180 but actual 240 is deliberate (not steady at 180,
+ * steady at 240), not a timing bug. See VO2-TEST-PROTOCOL-V1.md extension
+ * behavior. Workload medians use the last 120s from stage end, aligned to
+ * within one shared boundary second of these HR windows.
+ */
 export function stageWindowBounds(stageStartSec, relativeEvalSec) {
     if (relativeEvalSec < VO2_NOMINAL_STAGE_DURATION_SEC)
         return undefined;
@@ -678,7 +686,7 @@ function isProtocolResistance(value) {
 function isBooleanFlag(value) {
     return typeof value === "boolean";
 }
-function isValidStageWorkload(value) {
+export function isValidStageWorkload(value) {
     if (!value || typeof value !== "object")
         return false;
     const workload = value;

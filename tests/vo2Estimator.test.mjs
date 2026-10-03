@@ -464,7 +464,7 @@ test("correct protocol id and version 2 remains eligible", () => {
 
 test("future protocol version is insufficient", () => {
   const evidence = evidenceFromStages(linearThree);
-  evidence.protocol.protocol_version = 3;
+  evidence.protocol.protocol_version = 99;
   const result = assessVo2(evidence, profile40_80);
   assert.equal(result.status, "insufficient_evidence");
   assert.equal(result.estimate_ml_kg_min, undefined);
@@ -473,6 +473,15 @@ test("future protocol version is insufficient", () => {
   assert.equal(result.diagnostics.expected_protocol_id, "bike-submax-70rpm");
   assert.equal(result.diagnostics.expected_protocol_version, 2);
   assert.equal(result.diagnostics.observed_protocol_id, "bike-submax-70rpm");
+  assert.equal(result.diagnostics.observed_protocol_version, 99);
+});
+
+test("adaptive protocol v3 remains eligible under estimator v2 (same stage semantics)", () => {
+  const evidence = evidenceFromStages(linearThree);
+  evidence.protocol.protocol_version = 3;
+  const result = assessVo2(evidence, profile40_80);
+  assert.equal(result.status, "estimated");
+  assert.equal(result.reason_codes.includes("unsupported_protocol_version"), false);
   assert.equal(result.diagnostics.observed_protocol_version, 3);
 });
 

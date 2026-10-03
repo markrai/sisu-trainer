@@ -8,6 +8,8 @@ import {
   LEGACY_VO2_PROTOCOL_VERSION_V1,
   VO2_PROTOCOL_ID,
   VO2_PROTOCOL_VERSION,
+  VO2_PROTOCOL_VERSION_V2,
+  VO2_PROTOCOL_VERSION_V3,
   type CurrentVo2AssessmentDiagnostics,
   type Vo2AssessmentFitQuality,
   type Vo2AssessmentInputSnapshot,
@@ -40,8 +42,13 @@ export const VO2_ESTIMATOR_VERSION_V2 = 2 as const;
 /** Estimator used for new formal assessments in this build. */
 export const VO2_ESTIMATOR_ID = LEGACY_VO2_ESTIMATOR_ID;
 export const VO2_ESTIMATOR_VERSION = VO2_ESTIMATOR_VERSION_V2;
-/** The current estimator consumes only the current corrected protocol. */
+/** Primary protocol consumed by the current estimator. Adaptive v3 is also accepted (same stage semantics). */
 export const VO2_ESTIMATOR_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION;
+/** Estimator v2 accepts both fixed-ladder v2 and adaptive v3 protocols; logic is identical. */
+export const VO2_ESTIMATOR_ACCEPTED_PROTOCOL_VERSIONS = [
+  VO2_PROTOCOL_VERSION_V2,
+  VO2_PROTOCOL_VERSION_V3,
+] as const;
 
 export const VO2_FORMAL_ASSESSMENT_CONTRACT_V1 = {
   estimatorId: LEGACY_VO2_ESTIMATOR_ID,
@@ -61,9 +68,24 @@ export const VO2_FORMAL_ASSESSMENT_CONTRACT_V2 = {
   assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
 } as const;
 
+/**
+ * Adaptive v3 uses the same estimator logic, evidence envelope (v2), and
+ * assessment output (v2) as fixed v2; only the protocol collection version
+ * differs. No estimator semantic change, so no estimator version bump.
+ */
+export const VO2_FORMAL_ASSESSMENT_CONTRACT_V2_PROTOCOL_V3 = {
+  estimatorId: VO2_ESTIMATOR_ID,
+  estimatorVersion: VO2_ESTIMATOR_VERSION_V2,
+  protocolId: VO2_PROTOCOL_ID,
+  protocolVersion: VO2_PROTOCOL_VERSION_V3,
+  evidenceSchemaVersion: VO2_EVIDENCE_SCHEMA_VERSION_V2,
+  assessmentSchemaVersion: VO2_ASSESSMENT_SCHEMA_VERSION_V2,
+} as const;
+
 export const SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS = [
   VO2_FORMAL_ASSESSMENT_CONTRACT_V1,
   VO2_FORMAL_ASSESSMENT_CONTRACT_V2,
+  VO2_FORMAL_ASSESSMENT_CONTRACT_V2_PROTOCOL_V3,
 ] as const;
 
 export function isSupportedVo2EstimatorProtocolPair(
@@ -439,11 +461,15 @@ export function assessVo2(
   if (evidence && evidence.schema_version !== VO2_EVIDENCE_SCHEMA_VERSION_V2) {
     reasons.push("unsupported_evidence_schema");
   }
+  // Estimator v2 logic is identical for fixed v2 and adaptive v3 protocols.
+  // Diagnostics keep expected=2 (primary) while observed records 2 or 3.
   if (!protocol) {
     reasons.push("missing_protocol_evidence");
   } else if (protocol.protocol_id !== VO2_PROTOCOL_ID) {
     reasons.push("unsupported_protocol_id");
-  } else if (protocol.protocol_version !== VO2_ESTIMATOR_PROTOCOL_VERSION) {
+  } else if (
+    !(VO2_ESTIMATOR_ACCEPTED_PROTOCOL_VERSIONS as readonly unknown[]).includes(protocol.protocol_version)
+  ) {
     reasons.push("unsupported_protocol_version");
   }
 
