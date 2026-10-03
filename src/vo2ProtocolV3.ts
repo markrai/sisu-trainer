@@ -67,7 +67,10 @@ import {
 } from "./vo2Estimator.js";
 import {
   DEFAULT_VO2_ADAPTIVE_POLICY,
+  VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC,
+  isValidVo2AdaptivePolicy,
   planNextVo2Stage,
+  vo2AdaptiveMaxTotalDurationSec,
   type Vo2AdaptivePolicy,
   type Vo2EligibleObservation,
 } from "./vo2AdaptivePlanner.js";
@@ -128,13 +131,20 @@ export interface Vo2ProtocolRuntimeV3 {
   adaptive_termination?: Vo2AdaptiveTerminationProvenance;
 }
 
-export function vo2PlanBlocksV3(): PlanBlock {
+export function vo2PlanBlocksV3(policy: Vo2AdaptivePolicy = DEFAULT_VO2_ADAPTIVE_POLICY): PlanBlock {
   return {
     warm: VO2_WARMUP_DURATION_SEC / 60,
-    sustain: (DEFAULT_VO2_ADAPTIVE_POLICY.max_work_stages * VO2_MAX_STAGE_DURATION_SEC) / 60,
+    sustain: (policy.max_work_stages * VO2_MAX_STAGE_DURATION_SEC) / 60,
     cool: VO2_COOLDOWN_DURATION_SEC / 60,
   };
 }
+
+/** Maximum end-to-end seconds allowed under a v3 policy (warmup + work + cooldown). */
+export function vo2V3MaxTotalDurationSec(policy: Vo2AdaptivePolicy = DEFAULT_VO2_ADAPTIVE_POLICY): number {
+  return vo2AdaptiveMaxTotalDurationSec(policy);
+}
+
+export { VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC };
 
 export function vo2WorkoutMetadataV3(): WorkoutMetadata {
   return { type: VO2_WORKOUT_LABEL, intent: VO2_WORKOUT_INTENT, activities: ["bike"] };
@@ -153,6 +163,8 @@ export function buildVo2ProtocolPlanV3(
     (entry) => entry.calibrated_watts_at_70rpm > easiest.calibrated_watts_at_70rpm
   );
   if (increasingAboveWarmup.length < VO2_TARGET_WORK_STAGES) return undefined;
+  const adaptive_policy = { ...DEFAULT_VO2_ADAPTIVE_POLICY, ...policy };
+  if (!isValidVo2AdaptivePolicy(adaptive_policy)) return undefined;
   return {
     protocol_id: VO2_PROTOCOL_ID,
     protocol_version: VO2_PROTOCOL_VERSION_V3,
@@ -162,7 +174,7 @@ export function buildVo2ProtocolPlanV3(
     warmup_duration_sec: VO2_WARMUP_DURATION_SEC,
     cooldown_duration_sec: VO2_COOLDOWN_DURATION_SEC,
     workloads: [],
-    adaptive_policy: { ...DEFAULT_VO2_ADAPTIVE_POLICY, ...policy },
+    adaptive_policy,
   };
 }
 
@@ -327,7 +339,7 @@ function eligibleObservationsV3(runtime: Vo2ProtocolRuntimeV3): Vo2EligibleObser
     if (!point.estimator_eligible) continue;
     if (point.watts == null || point.steady_state_bpm == null) continue;
     out.push({
-      watts: point.watts,
+      estimatorWatts: point.watts,
       steadyHrBpm: point.steady_state_bpm,
       calibratedWatts: evidence.calibrated_watts_at_70rpm,
       resistance: evidence.prescribed_resistance,
@@ -338,7 +350,7 @@ function eligibleObservationsV3(runtime: Vo2ProtocolRuntimeV3): Vo2EligibleObser
 
 function lastCompletedInfoV3(runtime: Vo2ProtocolRuntimeV3): {
   calibratedWatts: number;
-  measuredWatts?: number;
+  estimatorWatts?: number;
   steadyHrBpm?: number;
   resistance: number;
   aboveCeiling: boolean;
@@ -355,7 +367,7 @@ function lastCompletedInfoV3(runtime: Vo2ProtocolRuntimeV3): {
   );
   return {
     calibratedWatts: evidence.calibrated_watts_at_70rpm,
-    measuredWatts: point.watts,
+    estimatorWatts: point.watts,
     steadyHrBpm: point.steady_state_bpm,
     resistance: evidence.prescribed_resistance,
     aboveCeiling: point.ineligibility_reasons.includes("hr_above_submax_ceiling"),
@@ -748,43 +760,7 @@ function isTerminationReasonV3(value: unknown): value is Vo2ProtocolTerminationR
 }
 
 function isValidAdaptivePolicyValue(value: unknown): value is Vo2AdaptivePolicy {
-  if (!value || typeof value !== "object") return false;
-  const policy = value as Vo2AdaptivePolicy;
-  if (policy.policy_version !== 1) return false;
-  const numbers: Array<[unknown, number, number]> = [
-    [policy.safety_margin_bpm, 0, 30],
-    [policy.min_watt_separation, 1, 50],
-    [policy.normal_watt_increment, 1, 100],
-    [policy.max_watt_increment, 1, 100],
-    [policy.min_watt_increment, 1, 50],
-    [policy.bootstrap_watt_step, 1, 100],
-    [policy.fallback_watt_step, 1, 100],
-    [policy.fallback_min_headroom_bpm, 0, 40],
-    [policy.near_ceiling_threshold_bpm, 0, 40],
-  ];
-  for (const [entry, lo, hi] of numbers) {
-    if (typeof entry !== "number" || !Number.isFinite(entry) || entry < lo || entry > hi) return false;
-  }
-  if (!Number.isInteger(policy.max_work_stages) || policy.max_work_stages < 1 || policy.max_work_stages > 6) {
-    return false;
-  }
-  if (
-    !Number.isInteger(policy.max_retries_after_above_ceiling) ||
-    policy.max_retries_after_above_ceiling < 0 ||
-    policy.max_retries_after_above_ceiling > 3
-  ) {
-    return false;
-  }
-  if (
-    !Number.isInteger(policy.min_resistance) ||
-    !Number.isInteger(policy.max_resistance) ||
-    policy.min_resistance < AUTOMATIC_RESISTANCE_MIN ||
-    policy.max_resistance > VO2_PROTOCOL_MAX_RESISTANCE ||
-    policy.min_resistance > policy.max_resistance
-  ) {
-    return false;
-  }
-  return true;
+  return isValidVo2AdaptivePolicy(value);
 }
 
 function isValidAdaptiveStageProvenance(value: unknown): boolean {
@@ -848,8 +824,11 @@ export function isValidVo2ProtocolPlanV3(value: unknown): value is Vo2ProtocolPl
   if (plan.warmup_duration_sec !== VO2_WARMUP_DURATION_SEC) return false;
   if (plan.cooldown_duration_sec !== VO2_COOLDOWN_DURATION_SEC) return false;
   if (!Array.isArray(plan.workloads)) return false;
-  if (plan.workloads.length > DEFAULT_VO2_ADAPTIVE_POLICY.max_work_stages + 2) return false;
   if (!isValidAdaptivePolicyValue(plan.adaptive_policy)) return false;
+  if (plan.workloads.length > plan.adaptive_policy.max_work_stages) return false;
+  if (vo2AdaptiveMaxTotalDurationSec(plan.adaptive_policy) > VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC) {
+    return false;
+  }
   const resistances = new Set<number>([plan.warmup_resistance]);
   for (const workload of plan.workloads) {
     if (!isValidVo2ResolvedWorkload(workload)) return false;
@@ -880,7 +859,7 @@ export function isValidVo2ProtocolRuntimeV3(value: unknown): value is Vo2Protoco
   if (
     !Number.isInteger(runtime.retry_count_after_above_ceiling) ||
     runtime.retry_count_after_above_ceiling < 0 ||
-    runtime.retry_count_after_above_ceiling > 3
+    runtime.retry_count_after_above_ceiling > runtime.plan.adaptive_policy.max_retries_after_above_ceiling
   ) {
     return false;
   }
@@ -891,6 +870,7 @@ export function isValidVo2ProtocolRuntimeV3(value: unknown): value is Vo2Protoco
     return false;
   }
   if (!Array.isArray(runtime.stages)) return false;
+  if (runtime.stages.length > runtime.plan.adaptive_policy.max_work_stages) return false;
   for (const stage of runtime.stages) {
     if (!stage || typeof stage !== "object") return false;
     if (typeof stage.stage_id !== "string" || !stage.stage_id) return false;

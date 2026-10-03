@@ -1,52 +1,106 @@
-/**
- * Pure adaptive VO2 stage planner (protocol v3).
- *
- * Portable: no DOM, Capacitor, BLE, or machine UI state. Machine-specific
- * watts<->resistance conversion stays behind the injected calibration lookup
- * (existing machine-profile seam); this module never invents a watts table.
- *
- * The estimator remains authoritative. This planner provides preventative
- * guidance only: it predicts likely HR response from eligible observations
- * and refuses to prescribe a stage it cannot justify as safe and useful.
- * It never overrides estimator rejection.
- */
-import { VO2_PROTOCOL_VERSION_V3, } from "./types.js";
-import { VO2_ESTIMATOR_MIN_HR_BPM, VO2_ESTIMATOR_SUBMAX_HRMAX_FRACTION, VO2_MIN_ELIGIBLE_STAGES, VO2_PREDICTED_HRMAX_MAX, VO2_PREDICTED_HRMAX_MIN, estimatorSubmaxHrCeilingBpm, fitHrVsWatts, } from "./vo2Estimator.js";
-import { VO2_PROTOCOL_MAX_RESISTANCE } from "./vo2Protocol.js";
+import { VO2_ESTIMATOR_MIN_HR_BPM, VO2_MIN_ELIGIBLE_STAGES, VO2_PREDICTED_HRMAX_MAX, VO2_PREDICTED_HRMAX_MIN, estimatorSubmaxHrCeilingBpm, fitHrVsWatts, } from "./vo2Estimator.js";
+import { VO2_COOLDOWN_DURATION_SEC, VO2_MAX_STAGE_DURATION_SEC, VO2_PROTOCOL_MAX_RESISTANCE, VO2_WARMUP_DURATION_SEC, } from "./vo2Protocol.js";
 import { AUTOMATIC_RESISTANCE_MIN } from "./machines/proformSmartPower10.js";
 export const VO2_ADAPTIVE_PLANNER_VERSION = 1;
+/** Advertised upper bound for a v3 assessment: 30 minutes end-to-end. */
+export const VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC = 30 * 60;
 /**
  * HR safety margin below the hard estimator ceiling.
  * planning_ceiling = hard_ceiling - margin.
  *
- * Rationale: the real age-46 trace (85W/121.2bpm, 102W/132.3bpm) predicts
- * 143.3bpm at 119W via two-point linear fit, but measured 154.1bpm
- * (10.8bpm underprediction). Margin 5 would still allow v1's unsafe 119W
- * (143.3 < 144.4 planning). Margin 10 refuses any third stage (max-safe
- * 113W admits no calibrated level above 108W). Margin 8 steers 102W->114W
- * (R9, predicted 140.1 < 141.4 planning, 9.3bpm total below hard 149.4)
- * instead of v1's 102W->123W (R10). Meaningful (>>0.1bpm), not 84.9% vs 85%.
+ * Control problem: after each completed stage the planner holds exactly two
+ * eligible (calibratedWatts, steadyHr) points -- it completes at three --
+ * both strictly below the hard submax ceiling (85% of Tanaka HRmax) and
+ * at/above the 110bpm estimator floor. It must choose one unused resistance
+ * (calibrated watts) whose likely steady HR stays below the hard ceiling
+ * with useful separation from prior points, or stop truthfully. The model
+ * is the secant line through the two points (ordinary least squares via
+ * the shared estimator fit). Slope must be positive; otherwise the planner
+ * stops (nonpositive_slope) instead of extrapolating.
+ *
+ * Quantified evidence (n=1, age-46 session): calibrated points
+ * (86W/121.15bpm, 108W/132.25bpm) fit slope 0.5045 bpm/W, predicting
+ * 139.81bpm at 123W, while the performed stage measured 154.12bpm --
+ * 14.31bpm of underprediction for a 15W extrapolation (~0.95 bpm/W).
+ * That geometry belongs to the OLD v2 ladder: fit two low points, then
+ * jump 15W past the fitted region with no re-fit, no margin, and no early
+ * stop. The actual v3 sequence for the same subject diverges at stage 2
+ * (bootstrap R6/86W, conservative R7/97W) and either completes at three
+ * eligible stages or terminates truthfully; from the v3 stage-3 base of
+ * 97W the failed 123W level is 26W away and structurally excluded by the
+ * 25W maximum increment, and any prediction at or above planning is
+ * refused outright. The portable part of the observation is the rate
+ * (~0.95 bpm/W of unmodeled steepening), not the 14.31 total.
+ *
+ * Why margin 12 is retained. The margin covers the observed rate for steps
+ * up to ~12W, and steps are forced small exactly where a crossing is
+ * within reach: near the ceiling the max-safe clamp holds the target at or
+ * below maxSafe, bounding the prescribed step by roughly headroom/slope,
+ * while far from the ceiling deep headroom absorbs larger absolute errors.
+ * Every prescription is prediction-checked strictly below planning; flat
+ * or negative response stops (nonpositive_slope); sparse tables refuse
+ * rather than jump past the maximum increment; the session stops at three
+ * eligible stages. What the margin does NOT cover is sharp convex
+ * steepening inside a single large (up to 25W) step, where underprediction
+ * can exceed the margin plus residual headroom. That residual is contained,
+ * not prevented: the shared estimator classifier rejects any above-ceiling
+ * point, the runtime retries lower at most once, then terminates truthfully.
+ * v3's worst case (one 25W step) equals v2's every step, while v3
+ * additionally refuses unsafe predictions, steps smaller on dense tables,
+ * and stops early -- strictly safer than the status quo it replaces.
+ * Usable planning range is (hard - margin) - 110bpm; for older athletes
+ * with low HRmax this is intentionally tight (e.g. age 70: hard 135.15,
+ * planning 123.15, usable 13.15bpm) rather than unsafe. Machine granularity
+ * never justifies a smaller margin: when no calibrated level is both safe
+ * and useful, the planner terminates with hr_safety_no_safe_target instead
+ * of prescribing an unsafe workload.
+ *
+ * The margin stays fixed and is deliberately NOT tuned to make this one
+ * session succeed: a single session cannot justify a distance-dependent or
+ * heteroscedastic uncertainty rule, and fitting one to this fixture would
+ * be overfitting. Revisit with multi-session data only.
  */
-export const VO2_ADAPTIVE_SAFETY_MARGIN_BPM = 8;
-/** Minimum useful workload separation in watts (estimator watts). */
+export const VO2_ADAPTIVE_SAFETY_MARGIN_BPM = 12;
+/**
+ * Minimum useful workload separation in calibrated watts (controllable
+ * domain). Successive stages must differ by at least this much to improve
+ * the HR-vs-workload regression. Enforced as a lower bound on every
+ * prescribed increment alongside min_watt_increment (effective lower bound
+ * is the larger of the two).
+ */
 export const VO2_ADAPTIVE_MIN_WATT_SEPARATION = 5;
-/** Preferred step when far from the ceiling. */
+/** Preferred calibrated-watt increment when far from the ceiling. */
 export const VO2_ADAPTIVE_NORMAL_WATT_INCREMENT = 20;
-/** Never exceed v1's fixed 25W step. */
+/**
+ * Maximum calibrated-watt increment allowed in a single step, in every
+ * planner path (bootstrap, conservative, normal, retry). Never exceed v2's
+ * fixed 25W step. Sparse calibration tables must refuse rather than jump
+ * farther than this.
+ */
 export const VO2_ADAPTIVE_MAX_WATT_INCREMENT = 25;
-/** Minimum step; planner refuses if it cannot achieve this safely. */
+/**
+ * Minimum calibrated-watt increment the planner will prescribe. The planner
+ * refuses (cannot) when no safe candidate achieves at least this increment
+ * (and the separation bound). Always enforced; never decorative.
+ */
 export const VO2_ADAPTIVE_MIN_WATT_INCREMENT = 5;
-/** Preserve the "up to 30 min" bound: 5 warmup + 4x5 work + 5 cooldown. */
-export const VO2_ADAPTIVE_MAX_WORK_STAGES = 4;
+/**
+ * Maximum work stages derived from the advertised duration contract, not a
+ * magic number: floor((advertisedTotal - warmup - cooldown) / maxStage).
+ * With 1800 - 300 - 300 over 300-second stages this is 4, preserving the
+ * "up to 30 min" bound (5 warmup + 4x5 work + 5 cooldown).
+ */
+export const VO2_ADAPTIVE_MAX_WORK_STAGES = Math.floor((VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC - VO2_WARMUP_DURATION_SEC - VO2_COOLDOWN_DURATION_SEC) /
+    VO2_MAX_STAGE_DURATION_SEC);
 /** One lower retry after an above-ceiling stage; prevents oscillation. */
 export const VO2_ADAPTIVE_MAX_RETRIES_AFTER_ABOVE_CEILING = 1;
-/** First stage bootstraps with v1's rule (no HR data yet): warmup + 25W. */
+/** First stage bootstraps with v2's rule (no HR data yet): warmup + 25W. */
 export const VO2_ADAPTIVE_BOOTSTRAP_WATT_STEP = 25;
-/** Conservative step when slope is unknown (<2 eligible points). */
+/** Conservative calibrated-watt step when slope is unknown (<2 eligible points). */
 export const VO2_ADAPTIVE_FALLBACK_WATT_STEP = 15;
 /**
  * With <2 points the slope is unknown, so require this much headroom below
- * planning (18bpm below hard with margin 8) before attempting a small step.
+ * planning (22bpm below hard with margin 12) before attempting a small step.
  */
 export const VO2_ADAPTIVE_FALLBACK_MIN_HEADROOM_BPM = 10;
 /** Provenance label: predicted within this of planning counts as "near ceiling". */
@@ -86,18 +140,26 @@ function listCandidates(calibration, policy, used) {
         const watts = calibration(r);
         if (!isPositiveFinite(watts))
             continue;
-        out.push({ resistance: r, watts: watts });
+        out.push({ resistance: r, calibratedWatts: watts });
     }
-    out.sort((a, b) => a.watts - b.watts || a.resistance - b.resistance);
+    out.sort((a, b) => a.calibratedWatts - b.calibratedWatts || a.resistance - b.resistance);
     return out;
 }
+/**
+ * Linear HR-vs-calibrated-watts fit in the controllable domain. Estimator
+ * watts are never used here; see module header for the domain contract.
+ */
 function slopeFromEligible(eligible) {
     if (eligible.length < 2)
         return undefined;
-    const fit = fitHrVsWatts(eligible.map((point) => ({ watts: point.watts, steady_state_bpm: point.steadyHrBpm })));
+    const fit = fitHrVsWatts(eligible.map((point) => ({ watts: point.calibratedWatts, steady_state_bpm: point.steadyHrBpm })));
     if (!fit || !Number.isFinite(fit.slope) || !Number.isFinite(fit.intercept))
         return undefined;
     return { slope: fit.slope, intercept: fit.intercept };
+}
+/** Effective lower bound: both separation and minimum increment must hold. */
+function effectiveMinIncrementWatts(policy) {
+    return Math.max(policy.min_watt_increment, policy.min_watt_separation);
 }
 function cannot(reason_code, termination_reason, input, policy, hard, planning, extra) {
     var _a, _b, _c, _d, _e, _f;
@@ -113,7 +175,7 @@ function cannot(reason_code, termination_reason, input, policy, hard, planning, 
         reason_code,
         termination_reason,
     };
-    const measured = (_b = (_a = extra === null || extra === void 0 ? void 0 : extra.last_measured_watts) !== null && _a !== void 0 ? _a : last === null || last === void 0 ? void 0 : last.watts) !== null && _b !== void 0 ? _b : (_c = input.lastCompleted) === null || _c === void 0 ? void 0 : _c.measuredWatts;
+    const measured = (_b = (_a = extra === null || extra === void 0 ? void 0 : extra.last_measured_watts) !== null && _a !== void 0 ? _a : last === null || last === void 0 ? void 0 : last.estimatorWatts) !== null && _b !== void 0 ? _b : (_c = input.lastCompleted) === null || _c === void 0 ? void 0 : _c.estimatorWatts;
     const hr = (_e = (_d = extra === null || extra === void 0 ? void 0 : extra.last_steady_hr_bpm) !== null && _d !== void 0 ? _d : last === null || last === void 0 ? void 0 : last.steadyHrBpm) !== null && _e !== void 0 ? _e : (_f = input.lastCompleted) === null || _f === void 0 ? void 0 : _f.steadyHrBpm;
     if (measured != null)
         provenance.last_measured_watts = measured;
@@ -128,7 +190,7 @@ function cannot(reason_code, termination_reason, input, policy, hard, planning, 
  * Complete | NextStage(target) | CannotContinue(reason).
  */
 export function planNextVo2Stage(rawInput) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _j;
     const policy = resolvePolicy(rawInput.policy);
     const input = { ...rawInput, policy };
     const predictedHrMax = input.predictedHrMax;
@@ -151,39 +213,47 @@ export function planNextVo2Stage(rawInput) {
     }
     const last = lastEligible(input);
     const lastCompleted = input.lastCompleted;
-    void VO2_PROTOCOL_VERSION_V3;
-    void VO2_ESTIMATOR_SUBMAX_HRMAX_FRACTION;
+    const minIncrement = effectiveMinIncrementWatts(policy);
+    const maxIncrement = policy.max_watt_increment;
     if ((lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.aboveCeiling) === true) {
         if (input.retryCount >= policy.max_retries_after_above_ceiling) {
             return cannot("retry_limit_reached", "submax_hr_ceiling", input, policy, hard, planning, {
-                last_measured_watts: (_a = lastCompleted.measuredWatts) !== null && _a !== void 0 ? _a : last === null || last === void 0 ? void 0 : last.watts,
+                last_measured_watts: (_a = lastCompleted.estimatorWatts) !== null && _a !== void 0 ? _a : last === null || last === void 0 ? void 0 : last.estimatorWatts,
                 last_steady_hr_bpm: (_b = lastCompleted.steadyHrBpm) !== null && _b !== void 0 ? _b : last === null || last === void 0 ? void 0 : last.steadyHrBpm,
             });
         }
-        const baseCalibrated = (_c = last === null || last === void 0 ? void 0 : last.calibratedWatts) !== null && _c !== void 0 ? _c : input.warmupCalibratedWatts;
-        const ceilingWatts = lastCompleted.calibratedWatts;
-        const candidates = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.watts > baseCalibrated + policy.min_watt_separation - 1e-9 && entry.watts < ceilingWatts - 1e-9);
+        const baseCalibratedWatts = (_c = last === null || last === void 0 ? void 0 : last.calibratedWatts) !== null && _c !== void 0 ? _c : input.warmupCalibratedWatts;
+        const failedCalibratedWatts = lastCompleted.calibratedWatts;
+        const lowerBoundWatts = baseCalibratedWatts + minIncrement - 1e-9;
+        const candidates = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.calibratedWatts > lowerBoundWatts && entry.calibratedWatts < failedCalibratedWatts - 1e-9);
+        const withinMax = candidates.filter((entry) => entry.calibratedWatts <= baseCalibratedWatts + maxIncrement + 1e-9);
         if (candidates.length === 0) {
             return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
-                last_measured_watts: last === null || last === void 0 ? void 0 : last.watts,
+                last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
                 last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
             });
+        }
+        if (withinMax.length === 0) {
+            // A lower retry exists below the failed workload but every option
+            // violates the configured maximum increment from the last useful
+            // base. Being below the failure does not waive the increment bound.
+            return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
         }
         if (input.eligible.length >= 2) {
             const line = slopeFromEligible(input.eligible);
             if (!line || !(line.slope > 0)) {
                 return cannot("nonpositive_slope", "insufficient_eligible_stages", input, policy, hard, planning);
             }
-            const safe = candidates
-                .map((entry) => ({ entry, predicted: line.slope * entry.watts + line.intercept }))
+            const safe = withinMax
+                .map((entry) => ({ entry, predicted: line.slope * entry.calibratedWatts + line.intercept }))
                 .filter((row) => Number.isFinite(row.predicted) &&
                 row.predicted < planning - 1e-9 &&
                 row.predicted >= VO2_ESTIMATOR_MIN_HR_BPM - 1e-9)
-                .sort((a, b) => b.entry.watts - a.entry.watts);
+                .sort((a, b) => b.entry.calibratedWatts - a.entry.calibratedWatts);
             const chosen = safe[0];
             if (!chosen) {
                 return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
-                    last_measured_watts: last === null || last === void 0 ? void 0 : last.watts,
+                    last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
                     last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
                 });
             }
@@ -194,22 +264,22 @@ export function planNextVo2Stage(rawInput) {
                 planning_hr_ceiling_bpm: planning,
                 planning_margin_bpm: policy.safety_margin_bpm,
                 predicted_next_hr_bpm: chosen.predicted,
-                selected_target_watts: chosen.entry.watts,
-                selected_calibrated_watts: chosen.entry.watts,
+                selected_target_watts: chosen.entry.calibratedWatts,
+                selected_calibrated_watts: chosen.entry.calibratedWatts,
                 selected_resistance: chosen.entry.resistance,
                 decision: "retry",
                 reason_code: "retry_lower_after_above_ceiling",
             };
             if (last) {
-                provenance.previous_measured_watts = last.watts;
+                provenance.previous_measured_watts = last.estimatorWatts;
                 provenance.previous_steady_hr_bpm = last.steadyHrBpm;
             }
             return {
                 decision: "next",
                 reason_code: "retry_lower_after_above_ceiling",
-                target_watts: chosen.entry.watts,
+                target_watts: chosen.entry.calibratedWatts,
                 prescribed_resistance: chosen.entry.resistance,
-                calibrated_watts: chosen.entry.watts,
+                calibrated_watts: chosen.entry.calibratedWatts,
                 predicted_hr_bpm: chosen.predicted,
                 provenance,
             };
@@ -217,12 +287,13 @@ export function planNextVo2Stage(rawInput) {
         const headroomHr = last === null || last === void 0 ? void 0 : last.steadyHrBpm;
         if (headroomHr == null || headroomHr > planning - policy.fallback_min_headroom_bpm) {
             return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
-                last_measured_watts: last === null || last === void 0 ? void 0 : last.watts,
+                last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
                 last_steady_hr_bpm: headroomHr !== null && headroomHr !== void 0 ? headroomHr : lastCompleted.steadyHrBpm,
             });
         }
-        const target = baseCalibrated + policy.fallback_watt_step;
-        const sorted = [...candidates].sort((a, b) => Math.abs(a.watts - target) - Math.abs(b.watts - target) || a.watts - b.watts);
+        const targetCalibratedWatts = baseCalibratedWatts + policy.fallback_watt_step;
+        const sorted = [...withinMax].sort((a, b) => Math.abs(a.calibratedWatts - targetCalibratedWatts) - Math.abs(b.calibratedWatts - targetCalibratedWatts) ||
+            a.calibratedWatts - b.calibratedWatts);
         const chosen = sorted[0];
         const provenance = {
             provenance_version: VO2_ADAPTIVE_PLANNER_VERSION,
@@ -230,22 +301,22 @@ export function planNextVo2Stage(rawInput) {
             hard_hr_ceiling_bpm: hard,
             planning_hr_ceiling_bpm: planning,
             planning_margin_bpm: policy.safety_margin_bpm,
-            selected_target_watts: target,
-            selected_calibrated_watts: chosen.watts,
+            selected_target_watts: targetCalibratedWatts,
+            selected_calibrated_watts: chosen.calibratedWatts,
             selected_resistance: chosen.resistance,
             decision: "retry",
             reason_code: "retry_lower_after_above_ceiling",
         };
         if (last) {
-            provenance.previous_measured_watts = last.watts;
+            provenance.previous_measured_watts = last.estimatorWatts;
             provenance.previous_steady_hr_bpm = last.steadyHrBpm;
         }
         return {
             decision: "next",
             reason_code: "retry_lower_after_above_ceiling",
-            target_watts: target,
+            target_watts: targetCalibratedWatts,
             prescribed_resistance: chosen.resistance,
-            calibrated_watts: chosen.watts,
+            calibrated_watts: chosen.calibratedWatts,
             provenance,
         };
     }
@@ -254,47 +325,59 @@ export function planNextVo2Stage(rawInput) {
         if (!line || !(line.slope > 0)) {
             return cannot("nonpositive_slope", "insufficient_eligible_stages", input, policy, hard, planning);
         }
-        const maxSafeWatts = (planning - line.intercept) / line.slope;
+        const maxSafeCalibratedWatts = (planning - line.intercept) / line.slope;
         const minWattsForFloor = (VO2_ESTIMATOR_MIN_HR_BPM - line.intercept) / line.slope;
-        if (!(maxSafeWatts > 0) || minWattsForFloor > maxSafeWatts) {
+        if (!(maxSafeCalibratedWatts > 0) || minWattsForFloor > maxSafeCalibratedWatts) {
             return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
-                last_measured_watts: last === null || last === void 0 ? void 0 : last.watts,
+                last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
                 last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
             });
         }
-        const baseCalibrated = (_d = last === null || last === void 0 ? void 0 : last.calibratedWatts) !== null && _d !== void 0 ? _d : input.warmupCalibratedWatts;
-        let target = Math.min(baseCalibrated + policy.normal_watt_increment, maxSafeWatts);
-        target = Math.min(target, baseCalibrated + policy.max_watt_increment);
-        const allAboveBase = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.watts > baseCalibrated + 1e-9);
+        const baseCalibratedWatts = (_d = last === null || last === void 0 ? void 0 : last.calibratedWatts) !== null && _d !== void 0 ? _d : input.warmupCalibratedWatts;
+        if (maxSafeCalibratedWatts < baseCalibratedWatts + minIncrement - 1e-9) {
+            return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
+                last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
+                last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
+            });
+        }
+        let targetCalibratedWatts = Math.min(baseCalibratedWatts + policy.normal_watt_increment, maxSafeCalibratedWatts);
+        targetCalibratedWatts = Math.min(targetCalibratedWatts, baseCalibratedWatts + maxIncrement);
+        const allAboveBase = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.calibratedWatts > baseCalibratedWatts + 1e-9);
         if (allAboveBase.length === 0) {
             return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
         }
-        const above = allAboveBase.filter((entry) => entry.watts > baseCalibrated + policy.min_watt_separation - 1e-9);
-        if (above.length === 0) {
-            return cannot("insufficient_separation", "insufficient_eligible_stages", input, policy, hard, planning, {
-                last_measured_watts: last === null || last === void 0 ? void 0 : last.watts,
-                last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
-            });
+        const withinIncrement = allAboveBase.filter((entry) => entry.calibratedWatts >= baseCalibratedWatts + minIncrement - 1e-9 &&
+            entry.calibratedWatts <= baseCalibratedWatts + maxIncrement + 1e-9);
+        if (withinIncrement.length === 0) {
+            const nearestAbove = allAboveBase[0];
+            if (nearestAbove && nearestAbove.calibratedWatts < baseCalibratedWatts + minIncrement - 1e-9) {
+                return cannot("insufficient_separation", "insufficient_eligible_stages", input, policy, hard, planning, {
+                    last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
+                    last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
+                });
+            }
+            return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
         }
-        const safe = above
-            .map((entry) => ({ entry, predicted: line.slope * entry.watts + line.intercept }))
+        const safe = withinIncrement
+            .map((entry) => ({ entry, predicted: line.slope * entry.calibratedWatts + line.intercept }))
             .filter((row) => Number.isFinite(row.predicted) &&
             row.predicted < planning - 1e-9 &&
             row.predicted >= VO2_ESTIMATOR_MIN_HR_BPM - 1e-9);
         if (safe.length === 0) {
-            const anyAbovePlanning = above.some((entry) => {
-                const predicted = line.slope * entry.watts + line.intercept;
+            const anyAbovePlanning = withinIncrement.some((entry) => {
+                const predicted = line.slope * entry.calibratedWatts + line.intercept;
                 return Number.isFinite(predicted) && predicted >= planning - 1e-9;
             });
             if (anyAbovePlanning) {
                 return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
-                    last_measured_watts: last === null || last === void 0 ? void 0 : last.watts,
+                    last_measured_watts: last === null || last === void 0 ? void 0 : last.estimatorWatts,
                     last_steady_hr_bpm: last === null || last === void 0 ? void 0 : last.steadyHrBpm,
                 });
             }
             return cannot("below_floor_no_safe_target", "insufficient_eligible_stages", input, policy, hard, planning);
         }
-        safe.sort((a, b) => Math.abs(a.entry.watts - target) - Math.abs(b.entry.watts - target) || a.entry.watts - b.entry.watts);
+        safe.sort((a, b) => Math.abs(a.entry.calibratedWatts - targetCalibratedWatts) -
+            Math.abs(b.entry.calibratedWatts - targetCalibratedWatts) || a.entry.calibratedWatts - b.entry.calibratedWatts);
         const chosen = safe[0];
         const nearCeiling = planning - chosen.predicted < policy.near_ceiling_threshold_bpm;
         const reason_code = nearCeiling
@@ -307,33 +390,43 @@ export function planNextVo2Stage(rawInput) {
             planning_hr_ceiling_bpm: planning,
             planning_margin_bpm: policy.safety_margin_bpm,
             predicted_next_hr_bpm: chosen.predicted,
-            selected_target_watts: target,
-            selected_calibrated_watts: chosen.entry.watts,
+            selected_target_watts: targetCalibratedWatts,
+            selected_calibrated_watts: chosen.entry.calibratedWatts,
             selected_resistance: chosen.entry.resistance,
             decision: "next",
             reason_code,
         };
         if (last) {
-            provenance.previous_measured_watts = last.watts;
+            provenance.previous_measured_watts = last.estimatorWatts;
             provenance.previous_steady_hr_bpm = last.steadyHrBpm;
         }
         return {
             decision: "next",
             reason_code,
-            target_watts: target,
+            target_watts: targetCalibratedWatts,
             prescribed_resistance: chosen.entry.resistance,
-            calibrated_watts: chosen.entry.watts,
+            calibrated_watts: chosen.entry.calibratedWatts,
             predicted_hr_bpm: chosen.predicted,
             provenance,
         };
     }
     if (input.completedWorkStages === 0) {
-        const target = input.warmupCalibratedWatts + policy.bootstrap_watt_step;
-        const candidates = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.watts > input.warmupCalibratedWatts + policy.min_watt_separation - 1e-9);
-        if (candidates.length === 0) {
+        const targetCalibratedWatts = input.warmupCalibratedWatts + policy.bootstrap_watt_step;
+        const aboveBase = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.calibratedWatts > input.warmupCalibratedWatts + 1e-9);
+        if (aboveBase.length === 0) {
             return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
         }
-        const sorted = [...candidates].sort((a, b) => Math.abs(a.watts - target) - Math.abs(b.watts - target) || a.watts - b.watts);
+        const withinIncrement = aboveBase.filter((entry) => entry.calibratedWatts >= input.warmupCalibratedWatts + minIncrement - 1e-9 &&
+            entry.calibratedWatts <= input.warmupCalibratedWatts + maxIncrement + 1e-9);
+        if (withinIncrement.length === 0) {
+            const nearestAbove = aboveBase[0];
+            if (nearestAbove && nearestAbove.calibratedWatts < input.warmupCalibratedWatts + minIncrement - 1e-9) {
+                return cannot("insufficient_separation", "insufficient_eligible_stages", input, policy, hard, planning);
+            }
+            return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
+        }
+        const sorted = [...withinIncrement].sort((a, b) => Math.abs(a.calibratedWatts - targetCalibratedWatts) - Math.abs(b.calibratedWatts - targetCalibratedWatts) ||
+            a.calibratedWatts - b.calibratedWatts);
         const chosen = sorted[0];
         const provenance = {
             provenance_version: VO2_ADAPTIVE_PLANNER_VERSION,
@@ -341,8 +434,8 @@ export function planNextVo2Stage(rawInput) {
             hard_hr_ceiling_bpm: hard,
             planning_hr_ceiling_bpm: planning,
             planning_margin_bpm: policy.safety_margin_bpm,
-            selected_target_watts: target,
-            selected_calibrated_watts: chosen.watts,
+            selected_target_watts: targetCalibratedWatts,
+            selected_calibrated_watts: chosen.calibratedWatts,
             selected_resistance: chosen.resistance,
             decision: "next",
             reason_code: "bootstrap_first_stage",
@@ -350,26 +443,39 @@ export function planNextVo2Stage(rawInput) {
         return {
             decision: "next",
             reason_code: "bootstrap_first_stage",
-            target_watts: target,
+            target_watts: targetCalibratedWatts,
             prescribed_resistance: chosen.resistance,
-            calibrated_watts: chosen.watts,
+            calibrated_watts: chosen.calibratedWatts,
             provenance,
         };
     }
-    const baseCalibrated = (_f = (_e = last === null || last === void 0 ? void 0 : last.calibratedWatts) !== null && _e !== void 0 ? _e : lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.calibratedWatts) !== null && _f !== void 0 ? _f : input.warmupCalibratedWatts;
+    const baseCalibratedWatts = (_f = (_e = last === null || last === void 0 ? void 0 : last.calibratedWatts) !== null && _e !== void 0 ? _e : lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.calibratedWatts) !== null && _f !== void 0 ? _f : input.warmupCalibratedWatts;
     const headroomHr = (_g = last === null || last === void 0 ? void 0 : last.steadyHrBpm) !== null && _g !== void 0 ? _g : lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.steadyHrBpm;
     if (headroomHr != null && headroomHr > planning - policy.fallback_min_headroom_bpm) {
         return cannot("hr_safety_no_safe_target", "submax_hr_ceiling", input, policy, hard, planning, {
-            last_measured_watts: (_h = last === null || last === void 0 ? void 0 : last.watts) !== null && _h !== void 0 ? _h : lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.measuredWatts,
+            last_measured_watts: (_h = last === null || last === void 0 ? void 0 : last.estimatorWatts) !== null && _h !== void 0 ? _h : lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.estimatorWatts,
             last_steady_hr_bpm: headroomHr,
         });
     }
-    const target = baseCalibrated + policy.fallback_watt_step;
-    const candidates = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.watts > baseCalibrated + policy.min_watt_separation - 1e-9);
-    if (candidates.length === 0) {
+    const targetCalibratedWatts = baseCalibratedWatts + policy.fallback_watt_step;
+    const aboveBase = listCandidates(input.calibration, policy, input.usedResistances).filter((entry) => entry.calibratedWatts > baseCalibratedWatts + 1e-9);
+    if (aboveBase.length === 0) {
         return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
     }
-    const sorted = [...candidates].sort((a, b) => Math.abs(a.watts - target) - Math.abs(b.watts - target) || a.watts - b.watts);
+    const withinIncrement = aboveBase.filter((entry) => entry.calibratedWatts >= baseCalibratedWatts + minIncrement - 1e-9 &&
+        entry.calibratedWatts <= baseCalibratedWatts + maxIncrement + 1e-9);
+    if (withinIncrement.length === 0) {
+        const nearestAbove = aboveBase[0];
+        if (nearestAbove && nearestAbove.calibratedWatts < baseCalibratedWatts + minIncrement - 1e-9) {
+            return cannot("insufficient_separation", "insufficient_eligible_stages", input, policy, hard, planning, {
+                last_measured_watts: (_j = last === null || last === void 0 ? void 0 : last.estimatorWatts) !== null && _j !== void 0 ? _j : lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.estimatorWatts,
+                last_steady_hr_bpm: headroomHr,
+            });
+        }
+        return cannot("workload_bounds_exhausted", "insufficient_calibrated_workloads", input, policy, hard, planning);
+    }
+    const sorted = [...withinIncrement].sort((a, b) => Math.abs(a.calibratedWatts - targetCalibratedWatts) - Math.abs(b.calibratedWatts - targetCalibratedWatts) ||
+        a.calibratedWatts - b.calibratedWatts);
     const chosen = sorted[0];
     const provenance = {
         provenance_version: VO2_ADAPTIVE_PLANNER_VERSION,
@@ -377,28 +483,97 @@ export function planNextVo2Stage(rawInput) {
         hard_hr_ceiling_bpm: hard,
         planning_hr_ceiling_bpm: planning,
         planning_margin_bpm: policy.safety_margin_bpm,
-        selected_target_watts: target,
-        selected_calibrated_watts: chosen.watts,
+        selected_target_watts: targetCalibratedWatts,
+        selected_calibrated_watts: chosen.calibratedWatts,
         selected_resistance: chosen.resistance,
         decision: "next",
         reason_code: "conservative_step_insufficient_evidence",
     };
     if (last) {
-        provenance.previous_measured_watts = last.watts;
+        provenance.previous_measured_watts = last.estimatorWatts;
         provenance.previous_steady_hr_bpm = last.steadyHrBpm;
     }
     else if ((lastCompleted === null || lastCompleted === void 0 ? void 0 : lastCompleted.steadyHrBpm) != null) {
         provenance.previous_steady_hr_bpm = lastCompleted.steadyHrBpm;
-        if (lastCompleted.measuredWatts != null) {
-            provenance.previous_measured_watts = lastCompleted.measuredWatts;
+        if (lastCompleted.estimatorWatts != null) {
+            provenance.previous_measured_watts = lastCompleted.estimatorWatts;
         }
     }
     return {
         decision: "next",
         reason_code: "conservative_step_insufficient_evidence",
-        target_watts: target,
+        target_watts: targetCalibratedWatts,
         prescribed_resistance: chosen.resistance,
-        calibrated_watts: chosen.watts,
+        calibrated_watts: chosen.calibratedWatts,
         provenance,
     };
+}
+/**
+ * Validate an adaptive policy, including cross-field increment coherence
+ * and the advertised duration bound. Rejects policies that could exceed
+ * 30 minutes or prescribe incoherent increments.
+ */
+export function isValidVo2AdaptivePolicy(value) {
+    if (!value || typeof value !== "object")
+        return false;
+    const policy = value;
+    if (policy.policy_version !== 1)
+        return false;
+    const numbers = [
+        [policy.safety_margin_bpm, 0, 30],
+        [policy.min_watt_separation, 1, 50],
+        [policy.normal_watt_increment, 1, 100],
+        [policy.max_watt_increment, 1, 100],
+        [policy.min_watt_increment, 1, 50],
+        [policy.bootstrap_watt_step, 1, 100],
+        [policy.fallback_watt_step, 1, 100],
+        [policy.fallback_min_headroom_bpm, 0, 40],
+        [policy.near_ceiling_threshold_bpm, 0, 40],
+    ];
+    for (const [entry, lo, hi] of numbers) {
+        if (typeof entry !== "number" || !Number.isFinite(entry) || entry < lo || entry > hi)
+            return false;
+    }
+    if (!Number.isInteger(policy.max_work_stages) ||
+        policy.max_work_stages < 1 ||
+        policy.max_work_stages > VO2_ADAPTIVE_MAX_WORK_STAGES) {
+        return false;
+    }
+    if (VO2_WARMUP_DURATION_SEC + policy.max_work_stages * VO2_MAX_STAGE_DURATION_SEC + VO2_COOLDOWN_DURATION_SEC >
+        VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC) {
+        return false;
+    }
+    if (!Number.isInteger(policy.max_retries_after_above_ceiling) ||
+        policy.max_retries_after_above_ceiling < 0 ||
+        policy.max_retries_after_above_ceiling > 3) {
+        return false;
+    }
+    if (!Number.isInteger(policy.min_resistance) ||
+        !Number.isInteger(policy.max_resistance) ||
+        policy.min_resistance < AUTOMATIC_RESISTANCE_MIN ||
+        policy.max_resistance > VO2_PROTOCOL_MAX_RESISTANCE ||
+        policy.min_resistance > policy.max_resistance) {
+        return false;
+    }
+    // Increment coherence: minimum <= normal <= maximum; separation and
+    // bootstrap/fallback steps must fit inside the same controllable bounds.
+    if (policy.min_watt_increment > policy.normal_watt_increment)
+        return false;
+    if (policy.normal_watt_increment > policy.max_watt_increment)
+        return false;
+    if (policy.min_watt_separation > policy.max_watt_increment)
+        return false;
+    if (policy.bootstrap_watt_step < policy.min_watt_increment)
+        return false;
+    if (policy.bootstrap_watt_step > policy.max_watt_increment)
+        return false;
+    if (policy.fallback_watt_step < policy.min_watt_increment)
+        return false;
+    if (policy.fallback_watt_step > policy.max_watt_increment)
+        return false;
+    return true;
+}
+/** Maximum end-to-end seconds allowed under a policy (warmup + work + cooldown). */
+export function vo2AdaptiveMaxTotalDurationSec(policy) {
+    return VO2_WARMUP_DURATION_SEC + policy.max_work_stages * VO2_MAX_STAGE_DURATION_SEC + VO2_COOLDOWN_DURATION_SEC;
 }

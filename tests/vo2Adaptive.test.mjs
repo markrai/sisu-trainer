@@ -163,8 +163,8 @@ test("estimator v2 accepts adaptive v3 protocol without a version bump", () => {
 function plannerInputForFixture(policy) {
   return {
     eligible: [
-      { watts: 85, steadyHrBpm: 121.15, calibratedWatts: 86, resistance: 6 },
-      { watts: 102, steadyHrBpm: 132.25, calibratedWatts: 108, resistance: 8 },
+      { estimatorWatts: 85, steadyHrBpm: 121.15, calibratedWatts: 86, resistance: 6 },
+      { estimatorWatts: 102, steadyHrBpm: 132.25, calibratedWatts: 108, resistance: 8 },
     ],
     predictedHrMax: FIXTURE_HRMAX,
     warmupCalibratedWatts: 66,
@@ -206,9 +206,9 @@ test("4: adaptive selection stays below machine/protocol bounds; 5: respects pla
 test("6: enough eligible points terminate successfully (planner complete)", () => {
   const decision = planNextVo2Stage({
     eligible: [
-      { watts: 85, steadyHrBpm: 121, calibratedWatts: 86, resistance: 6 },
-      { watts: 95, steadyHrBpm: 128, calibratedWatts: 97, resistance: 7 },
-      { watts: 110, steadyHrBpm: 135, calibratedWatts: 114, resistance: 9 },
+      { estimatorWatts: 85, steadyHrBpm: 121, calibratedWatts: 86, resistance: 6 },
+      { estimatorWatts: 95, steadyHrBpm: 128, calibratedWatts: 97, resistance: 7 },
+      { estimatorWatts: 110, steadyHrBpm: 135, calibratedWatts: 114, resistance: 9 },
     ],
     predictedHrMax: 180,
     warmupCalibratedWatts: 66,
@@ -251,7 +251,7 @@ test("9: above-ceiling observation cannot cause a subsequent workload increase",
   const input = plannerInputForFixture(undefined);
   input.lastCompleted = {
     calibratedWatts: 123,
-    measuredWatts: 119,
+    estimatorWatts: 119,
     steadyHrBpm: 154.1167,
     resistance: 10,
     aboveCeiling: true,
@@ -272,7 +272,7 @@ test("10: retry behavior is bounded; 11: refusal carries an explicit termination
   const input = plannerInputForFixture(undefined);
   input.lastCompleted = {
     calibratedWatts: 123,
-    measuredWatts: 119,
+    estimatorWatts: 119,
     steadyHrBpm: 154.1167,
     resistance: 10,
     aboveCeiling: true,
@@ -290,12 +290,14 @@ test("10: retry behavior is bounded; 11: refusal carries an explicit termination
 });
 
 test("11: no safe/useful stage produces explicit HR-safety termination with provenance", () => {
-  const decision = planNextVo2Stage(plannerInputForFixture({ safety_margin_bpm: 10 }));
+  // Calibrated-domain planning with margin 15 refuses: R9 114W predicts
+  // 135.27bpm which exceeds planning 134.43bpm (hard 149.43 - 15).
+  const decision = planNextVo2Stage(plannerInputForFixture({ safety_margin_bpm: 15 }));
   assert.equal(decision.decision, "cannot");
   assert.equal(decision.reason_code, "hr_safety_no_safe_target");
   assert.equal(decision.termination_reason, "submax_hr_ceiling");
   assert.equal(decision.provenance.hard_hr_ceiling_bpm > 0, true);
-  assert.equal(decision.provenance.planning_margin_bpm, 10);
+  assert.equal(decision.provenance.planning_margin_bpm, 15);
 });
 
 test("13: new evidence records protocol v3 and adaptive provenance", () => {
@@ -349,8 +351,8 @@ test("boundary: exact planning ceiling is not prescribed", () => {
   assert.equal(exactWatts, 150);
   const decision = planNextVo2Stage({
     eligible: [
-      { watts: 100, steadyHrBpm: 120, calibratedWatts: 100, resistance: 5 },
-      { watts: 120, steadyHrBpm: 130, calibratedWatts: 120, resistance: 6 },
+      { estimatorWatts: 100, steadyHrBpm: 120, calibratedWatts: 100, resistance: 5 },
+      { estimatorWatts: 120, steadyHrBpm: 130, calibratedWatts: 120, resistance: 6 },
     ],
     predictedHrMax: 180,
     warmupCalibratedWatts: 66,
@@ -382,8 +384,8 @@ test("boundary: minimum useful separation is enforced", () => {
   const base = 100;
   const decision = planNextVo2Stage({
     eligible: [
-      { watts: 90, steadyHrBpm: 120, calibratedWatts: base, resistance: 5 },
-      { watts: 95, steadyHrBpm: 125, calibratedWatts: base + 2, resistance: 6 },
+      { estimatorWatts: 90, steadyHrBpm: 120, calibratedWatts: base, resistance: 5 },
+      { estimatorWatts: 95, steadyHrBpm: 125, calibratedWatts: base + 2, resistance: 6 },
     ],
     predictedHrMax: 180,
     warmupCalibratedWatts: 66,
@@ -405,7 +407,7 @@ test("boundary: minimum useful separation is enforced", () => {
 test("boundary: maximum workload and exhausted table fail closed explicitly", () => {
   const used = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   const decision = planNextVo2Stage({
-    eligible: [{ watts: 85, steadyHrBpm: 121, calibratedWatts: 86, resistance: 6 }],
+    eligible: [{ estimatorWatts: 85, steadyHrBpm: 121, calibratedWatts: 86, resistance: 6 }],
     predictedHrMax: 180,
     warmupCalibratedWatts: 66,
     warmupResistance: 1,
@@ -422,8 +424,8 @@ test("boundary: maximum workload and exhausted table fail closed explicitly", ()
 test("boundary: maximum stage count fails closed explicitly", () => {
   const decision = planNextVo2Stage({
     eligible: [
-      { watts: 85, steadyHrBpm: 121, calibratedWatts: 86, resistance: 6 },
-      { watts: 102, steadyHrBpm: 132, calibratedWatts: 108, resistance: 8 },
+      { estimatorWatts: 85, steadyHrBpm: 121, calibratedWatts: 86, resistance: 6 },
+      { estimatorWatts: 102, steadyHrBpm: 132, calibratedWatts: 108, resistance: 8 },
     ],
     predictedHrMax: 180,
     warmupCalibratedWatts: 66,

@@ -919,7 +919,12 @@ export type Vo2AdaptiveDecisionReasonCode =
   | "insufficient_separation"
   | "nonpositive_slope";
 
-/** Per-stage provenance explaining why adaptive v3 chose this workload. Only v3 writes this. */
+/**
+ * Per-stage provenance explaining why adaptive v3 chose this workload. Only v3 writes this.
+ * Planning regression/prediction use the controllable calibrated-watt domain
+ * (`selected_target_watts`/`selected_calibrated_watts`); `previous_measured_watts`
+ * records the authoritative estimator watts for audit and is never a planning input.
+ */
 export interface Vo2AdaptiveStageProvenance {
   provenance_version: 1;
   prior_eligible_stage_count: number;
@@ -936,7 +941,11 @@ export interface Vo2AdaptiveStageProvenance {
   reason_code: Vo2AdaptiveDecisionReasonCode;
 }
 
-/** Protocol-level provenance for a v3 planner refusal. Set when no safe/useful stage exists. */
+/**
+ * Protocol-level provenance for a v3 planner refusal. Set when no safe/useful stage exists.
+ * `last_measured_watts` records authoritative estimator watts for audit; planning
+ * decisions are made in the calibrated-watt domain.
+ */
 export interface Vo2AdaptiveTerminationProvenance {
   provenance_version: 1;
   eligible_stage_count: number;
