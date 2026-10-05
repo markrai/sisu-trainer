@@ -8,6 +8,7 @@ import {
   createPersonalizationDiagnosticsExport,
   extractTrustedPersonalizationAssessmentContexts,
   extractTrustedPersonalizationCharacterizations,
+  extractTrustedPersonalizationPerformedLoadContexts,
   extractTrustedPersonalizationWorkoutContexts,
   personalizationDiagnosticDetailHtml,
   personalizationDiagnosticsExportJson,
@@ -335,12 +336,112 @@ test("presentation makes candidate non-control semantics, domain, saturation, an
   const detail = personalizationDiagnosticDetailHtml(model.rows[0]);
   assert.match(html, /Candidate watts/);
   assert.match(html, /Observed in-band/);
+  assert.match(html, /Active prescription is the legacy heart-rate band/);
+  assert.match(html, /Bike work \+ threshold is the primary validated scope/);
   assert.match(detail, /Assessment domain/);
   assert.match(detail, /Edge/);
   assert.match(detail, /Late vs early HR/);
   assert.match(detail, /\+7 bpm/);
   assert.match(detail, /Controller saturation/);
   assert.doesNotMatch(`${html}${detail}`, /cardiovascular drift|fatigue|dehydration|ready to activate|personalization validated/i);
+});
+
+test("detail HTML distinguishes active legacy HR from shadow athlete-relative workload", () => {
+  const characterization = record("threshold-session", {
+    workoutIntent: "threshold",
+    phases: [phase({
+      intensityId: "threshold",
+      detailName: "Threshold",
+      legacyHeartRate: { min: 155, max: 162 },
+      candidatePower: { minWatts: 104, maxWatts: 113 },
+    })],
+  });
+  const model = buildPersonalizationDiagnosticsModel([characterization]);
+  const detail = personalizationDiagnosticDetailHtml(model.rows[0]);
+  assert.match(detail, /<h5>Active prescription<\/h5>/);
+  assert.match(detail, /Heart rate<\/dt><dd>155–162 bpm/);
+  assert.match(detail, /legacy-hr-target-resolver@1/);
+  assert.match(detail, /Live authority<\/dt><dd>yes/);
+  assert.match(detail, /<h5>Shadow athlete-relative prescription<\/h5>/);
+  assert.match(detail, /Workload<\/dt><dd>104–113 W/);
+  assert.match(detail, /formal VO₂ calibration/);
+  assert.match(detail, /Mode<\/dt><dd>shadow/);
+  assert.match(detail, /Live authority<\/dt><dd>no/);
+  assert.match(detail, /<h5>Observed response<\/h5>/);
+});
+
+test("shadow workload falls back to the explicit E1 reason when candidate watts are absent", () => {
+  const characterization = record("fallback-session", {
+    workoutIntent: "threshold",
+    phases: [phase({
+      intensityId: "threshold",
+      shadowOutcome: "fallback",
+      candidatePower: undefined,
+      comparison: undefined,
+      fallbackReason: "outside_observed_hr_range",
+      characterizationOutcome: "not_candidate",
+      exclusionReason: "phase_evidence_unavailable",
+    })],
+  });
+  const detail = personalizationDiagnosticDetailHtml(buildPersonalizationDiagnosticsModel([characterization]).rows[0]);
+  assert.match(detail, /<h5>Active prescription<\/h5>/);
+  assert.match(detail, /Live authority<\/dt><dd>yes/);
+  assert.match(detail, /Workload<\/dt><dd>Outside Observed Hr Range/);
+  assert.match(detail, /Live authority<\/dt><dd>no/);
+  assert.doesNotMatch(detail, /Workload<\/dt><dd>\d+–\d+ W/);
+});
+
+test("performed-load observations join durable WorkoutResponse fields without inventing missing values", () => {
+  const characterization = record();
+  const history = [historyRow(characterization, {
+    workout_response: {
+      sessionId: "session-a",
+      evidence: { bike: { freshRowCoverageRatio: 0.92, wattsProvenance: "measured_watts" } },
+      phases: [{
+        phaseInstanceId: "work-1",
+        phaseId: "sustain",
+        kind: "work",
+        intensityId: "aerobic_base",
+        activeStartSec: 0,
+        activeEndSec: 180,
+        plannedDurationSec: 180,
+        completedDurationSec: 180,
+        watts: {
+          sampleCount: 180, coverageRatio: 0.92, mean: 124, median: 124,
+          min: 100, max: 140, end: 125, provenance: "measured_watts",
+        },
+        cadenceRpm: {
+          sampleCount: 180, coverageRatio: 0.9, mean: 70, median: 70,
+          min: 68, max: 72, end: 70,
+        },
+        observedResistance: {
+          sampleCount: 180, coverageRatio: 0.91, mean: 8, median: 8,
+          min: 7, max: 9, end: 8,
+        },
+      }],
+    },
+  })];
+  const performedLoad = extractTrustedPersonalizationPerformedLoadContexts(history, "athlete-a");
+  assert.equal(performedLoad["session-a"][0].wattsMedian, 124);
+  assert.equal(performedLoad["session-a"][0].observedResistanceMode, undefined);
+  const model = buildPersonalizationDiagnosticsModel(
+    [characterization],
+    EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
+    {},
+    {},
+    performedLoad
+  );
+  const detail = personalizationDiagnosticDetailHtml(model.rows[0]);
+  assert.match(detail, /Observed watts \(response\)<\/dt><dd>124 W/);
+  assert.match(detail, /Observed resistance \(response\)<\/dt><dd>8/);
+  assert.match(detail, /Cadence \(response\)<\/dt><dd>70 rpm/);
+  assert.match(detail, /Bike-row coverage \(response\)<\/dt><dd>91%/);
+  assert.equal("performedLoadPhase" in createPersonalizationDiagnosticsExport(model).diagnosticRows[0], false);
+
+  const withoutResponse = extractTrustedPersonalizationPerformedLoadContexts([historyRow(characterization)], "athlete-a");
+  assert.deepEqual(withoutResponse, {});
+  const unavailable = personalizationDiagnosticDetailHtml(buildPersonalizationDiagnosticsModel([characterization]).rows[0]);
+  assert.match(unavailable, /Observed watts \(response\)<\/dt><dd>unavailable/);
 });
 
 test("empty history renders an explanatory no-data state and clean zero aggregate", () => {
@@ -376,6 +477,8 @@ test("E3 presentation has no import path into prescription, machine control, fit
   const statusSource = await readFile(new URL("../src/personalizationStatus.ts", import.meta.url), "utf8");
   const uiSource = await readFile(new URL("../src/uiControls.ts", import.meta.url), "utf8");
   assert.doesNotMatch(diagnosticsSource, /from ["']\.\/(?:workoutPrescription|bikeBridge|fitnessState|fitnessRefinement|sisuSync)|indexedDB|parsePersonalizedPrescription/);
+  assert.match(diagnosticsSource, /from ["']\.\/performedLoad\.js["']/);
+  assert.doesNotMatch(diagnosticsSource, /evaluatePersonalizedPrescription|candidatePower\s*=/);
   assert.doesNotMatch(statusSource, /personalizedPrescription|workoutPrescription|bikeBridge|fitnessRefinement|sisuSync/);
   assert.match(uiSource, /getAllWorkoutSummaries\(\)[\s\S]*extractTrustedPersonalizationCharacterizations/);
   assert.match(uiSource, /exportPersonalizationDiagnostics\(\)[\s\S]*EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS/);
@@ -387,6 +490,7 @@ test("UI markup identifies diagnostics as developer-only and keeps normal histor
   const uiSource = await readFile(new URL("../src/uiControls.ts", import.meta.url), "utf8");
   assert.match(html, /Personalization diagnostics/);
   assert.match(html, /Candidate watts are experimental predictions[^<]+They did not control the workout/);
+  assert.match(html, /Active prescription remains the legacy heart-rate band/);
   assert.match(html, /Observed in-band watts represent settled workload while heart rate was within the legacy target range/);
   assert.match(uiSource, /Personalization evaluation recorded/);
   assert.doesNotMatch(uiSource, /Your personalized target was/);

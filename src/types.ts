@@ -73,7 +73,12 @@ export interface ResolvedWorkoutPrescription {
   phases: ResolvedWorkoutPhaseTarget[];
 }
 
-/** Permanent Phase E1 shadow schema identity. This record has no control authority. */
+/**
+ * Permanent Phase E1 shadow schema identity.
+ * E1 is the canonical shadow athlete-relative mechanical workload prescription
+ * derived from formal calibration for supported ordinary-workout phases.
+ * It does not personalize the active heart-rate prescription and has no control authority.
+ */
 export const PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1 = 1 as const;
 export const PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1 = "personalized-prescription-resolver" as const;
 export const PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1 = 1 as const;
@@ -182,9 +187,15 @@ export interface PersonalizedPrescriptionPhaseEvaluationV1 {
   intervalIndex?: number;
   activeStartSec?: number;
   activeEndSec?: number;
-  /** Exact authoritative legacy HR bounds used by UI/control, copied rather than recalculated. */
+  /**
+   * Exact authoritative legacy HR bounds used by UI/control, copied rather than recalculated.
+   * This is the active physiological prescription, not a personalized HR band.
+   */
   activeHeartRate?: ResolvedHeartRateTarget;
-  /** Descriptive interpolation candidate only; never a controller target. */
+  /**
+   * Shadow athlete-relative mechanical workload associated with the active HR region.
+   * Descriptive interpolation candidate only; never a controller target.
+   */
   candidatePower?: {
     minWatts: number;
     maxWatts: number;
@@ -194,6 +205,11 @@ export interface PersonalizedPrescriptionPhaseEvaluationV1 {
   safetyChecks: PersonalizedPrescriptionSafetyChecksV1;
 }
 
+/**
+ * Frozen start-time E1 record. The legacy heart-rate prescription remains active
+ * control authority. E1 estimates the athlete-specific mechanical workload
+ * associated with that physiological region and records it for shadow evaluation.
+ */
 export interface PersonalizedPrescriptionEvaluationV1 {
   schemaVersion: typeof PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1;
   resolver: {

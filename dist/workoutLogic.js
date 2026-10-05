@@ -269,7 +269,8 @@ function capturePhasePlanSnapshot(day, resolvedAt = new Date().toISOString()) {
 }
 /**
  * Read athlete evidence once at workout start and freeze the non-authoritative
- * E1 evaluation beside the already-authoritative legacy prescription.
+ * E1 shadow workload evaluation beside the already-authoritative legacy HR
+ * prescription. E1 does not personalize or replace the active heart-rate target.
  */
 function captureWorkoutStartContext(day, activity, resolvedAt, storage) {
     var _a, _b;

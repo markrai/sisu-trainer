@@ -4,13 +4,16 @@ import {
   type PersonalizedPrescriptionCharacterizationAggregateV1,
   type PersonalizedPrescriptionCharacterizationAggregateV2,
 } from "./personalizedPrescriptionCharacterization.js";
-import type {
-  PersonalizedPrescriptionCharacterizationExclusionReasonV1,
-  PersonalizedPrescriptionCharacterization,
-  PersonalizedPrescriptionCharacterizationV1,
-  PersonalizedPrescriptionEvaluationV1,
-  PersonalizedPrescriptionPhaseCharacterizationV1,
-  WorkoutSummary,
+import { buildPhasePerformedLoadViews, type PhasePerformedLoadView } from "./performedLoad.js";
+import {
+  LEGACY_HR_TARGET_RESOLVER_ID,
+  LEGACY_HR_TARGET_RESOLVER_VERSION,
+  type PersonalizedPrescriptionCharacterizationExclusionReasonV1,
+  type PersonalizedPrescriptionCharacterization,
+  type PersonalizedPrescriptionCharacterizationV1,
+  type PersonalizedPrescriptionEvaluationV1,
+  type PersonalizedPrescriptionPhaseCharacterizationV1,
+  type WorkoutSummary,
 } from "./types.js";
 
 export const PERSONALIZATION_DIAGNOSTIC_EXCLUSIONS: readonly PersonalizedPrescriptionCharacterizationExclusionReasonV1[] = [
@@ -78,6 +81,8 @@ export interface PersonalizationDiagnosticPresentationRow {
   exclusion: string;
   assessmentContext: FrozenAssessmentDiagnosticContext | null;
   workoutContext: FrozenWorkoutDiagnosticContext | null;
+  /** Durable WorkoutResponse observation only; never used to generate E1 candidates. */
+  performedLoadPhase: PhasePerformedLoadView | null;
   record: PersonalizedPrescriptionCharacterization;
   phaseRecord: PersonalizedPrescriptionPhaseCharacterizationV1;
 }
@@ -259,6 +264,48 @@ export function extractTrustedPersonalizationWorkoutContexts(
   return contexts;
 }
 
+function matchPerformedLoadPhase(
+  phase: PersonalizedPrescriptionPhaseCharacterizationV1,
+  views: readonly PhasePerformedLoadView[]
+): PhasePerformedLoadView | null {
+  const matches = views.filter((view) =>
+    view.phaseId === phase.phaseId &&
+    view.kind === phase.kind &&
+    view.intensityId === phase.intensityId &&
+    view.intervalIndex === phase.intervalIndex
+  );
+  if (matches.length === 0) return null;
+  if (phase.activeStartSec !== undefined) {
+    const timed = matches.find((view) => view.activeStartSec === phase.activeStartSec);
+    if (timed) return timed;
+  }
+  return matches[0];
+}
+
+/**
+ * Observation-only views from durable WorkoutResponse. Raw telemetry is not
+ * consulted here so performed-load never participates in E1 candidate generation.
+ */
+export function extractTrustedPersonalizationPerformedLoadContexts(
+  history: readonly TrustedWorkoutHistoryRow[],
+  currentAthleteId: string
+): Record<string, PhasePerformedLoadView[]> {
+  const contexts: Record<string, PhasePerformedLoadView[]> = {};
+  for (const { summary } of history) {
+    const evaluation = summary.shadow_prescription_evaluation;
+    const record = summary.shadow_prescription_characterization;
+    const response = summary.workout_response;
+    if (!evaluation || !record || !response || summary.athlete_id !== currentAthleteId ||
+        record.athleteId !== currentAthleteId || evaluation.athleteId !== currentAthleteId ||
+        record.workoutSessionId !== summary.external_session_id ||
+        response.sessionId !== summary.external_session_id ||
+        record.workoutSelector !== summary.day || evaluation.workoutSelector !== summary.day ||
+        record.activity !== summary.activity || evaluation.activity !== summary.activity) continue;
+    contexts[record.workoutSessionId] = buildPhasePerformedLoadViews(response, []);
+  }
+  return contexts;
+}
+
 function exclusionCountsFor(
   records: readonly PersonalizedPrescriptionCharacterization[]
 ): Record<PersonalizedPrescriptionCharacterizationExclusionReasonV1, number> {
@@ -318,7 +365,8 @@ export function buildPersonalizationDiagnosticsModel(
   records: readonly PersonalizedPrescriptionCharacterization[],
   filters: PersonalizationDiagnosticsFilters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
   assessmentContexts: Readonly<Record<string, FrozenAssessmentDiagnosticContext>> = {},
-  workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>> = {}
+  workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>> = {},
+  performedLoadContexts: Readonly<Record<string, readonly PhasePerformedLoadView[]>> = {}
 ): PersonalizationDiagnosticsModel {
   const normalizedFilters = { ...EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, ...filters };
   const filtered = filterPersonalizationCharacterizations(records, normalizedFilters);
@@ -335,6 +383,7 @@ export function buildPersonalizationDiagnosticsModel(
       agreement: phase.comparison?.agreement ?? "not_available",
       assessmentContext: assessmentContexts[record.workoutSessionId] ?? null,
       workoutContext: workoutContexts[record.workoutSessionId] ?? null,
+      performedLoadPhase: matchPerformedLoadPhase(phase, performedLoadContexts[record.workoutSessionId] ?? []),
       record,
       phaseRecord: phase,
     };
@@ -359,7 +408,7 @@ export interface PersonalizationDiagnosticsExportV1 {
   filters: PersonalizationDiagnosticsFilters;
   aggregate: PersonalizedPrescriptionCharacterizationAggregateV1;
   diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow,
-    "record" | "phaseRecord" | "formalAssessmentProvenance">>;
+    "record" | "phaseRecord" | "formalAssessmentProvenance" | "performedLoadPhase">>;
   characterizationRecords: PersonalizedPrescriptionCharacterizationV1[];
 }
 
@@ -367,7 +416,7 @@ export interface PersonalizationDiagnosticsExportV2 {
   schemaVersion: typeof PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2;
   filters: PersonalizationDiagnosticsFilters;
   aggregate: PersonalizedPrescriptionCharacterizationAggregateV2;
-  diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord">>;
+  diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord" | "performedLoadPhase">>;
   characterizationRecords: PersonalizedPrescriptionCharacterization[];
 }
 
@@ -384,7 +433,12 @@ export function createPersonalizationDiagnosticsExport(
     schemaVersion: PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION,
     filters: { ...model.filters },
     aggregate: model.aggregate,
-    diagnosticRows: model.rows.map(({ record: _record, phaseRecord: _phaseRecord, ...row }) => row),
+    diagnosticRows: model.rows.map(({
+      record: _record,
+      phaseRecord: _phaseRecord,
+      performedLoadPhase: _performedLoadPhase,
+      ...row
+    }) => row),
     characterizationRecords: [...model.records]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.workoutSessionId.localeCompare(b.workoutSessionId))
       .map((record) => ({ ...record, phases: [...record.phases] })),
@@ -457,7 +511,7 @@ function optionMarkup(values: readonly string[], selected: string): string {
 /** Responsive developer presentation only; every number comes from E2 helpers or frozen fields. */
 export function personalizationDiagnosticsHtml(model: PersonalizationDiagnosticsModel): string {
   if (model.sourceRecordCount === 0) {
-    return `<div class="personalization-diagnostics-empty"><strong>No personalization characterization data yet.</strong><span>Complete a qualifying bike workout after a formal VO₂ assessment to begin collecting shadow validation data.</span></div>`;
+    return `<div class="personalization-diagnostics-empty"><strong>No personalization characterization data yet.</strong><span>Complete a qualifying bike threshold workout after a formal VO₂ assessment to begin collecting shadow workload validation data. Candidate watts do not control the workout.</span></div>`;
   }
   const aggregate = model.aggregate;
   const evidence = model.evidenceCollectionSummary;
@@ -493,7 +547,8 @@ export function personalizationDiagnosticsHtml(model: PersonalizationDiagnostics
     <td>${escapeHtml(personalizationDiagnosticLabel(row.calibrationProvenance))}</td><td>${escapeHtml(personalizationDiagnosticLabel(row.observedPowerProvenance))}</td><td>${escapeHtml(personalizationDiagnosticLabel(row.outcome))}</td><td>${escapeHtml(personalizationDiagnosticLabel(row.exclusion))}</td>
     <td><button type="button" class="button secondary personalization-detail-button" onclick="openPersonalizationDiagnostic(${row.index})">Inspect</button></td>
   </tr>`).join("");
-  return `<section class="personalization-evidence-summary"><h4>All persisted E2 evidence</h4>
+  return `<p class="developer-diagnostics-note">Active prescription is the legacy heart-rate band. Shadow athlete-relative prescription is candidate watts from formal VO₂ calibration. Bike work + threshold is the primary validated scope. These candidates have no live authority.</p>
+    <section class="personalization-evidence-summary"><h4>All persisted E2 evidence</h4>
     <div class="personalization-count-grid">
       <div><strong>${evidence.completedWorkoutsWithE2}</strong><span>Completed workouts with E2</span></div>
       <div><strong>${evidence.candidatePhases}</strong><span>Candidate phases</span></div>
@@ -520,6 +575,32 @@ function detailRow(label: string, value: string | number | undefined): string {
   return `<div><dt>${escapeHtml(label)}</dt><dd>${value === undefined ? "n/a" : escapeHtml(value)}</dd></div>`;
 }
 
+function formatBoundHeartRate(target: { min?: number; max?: number } | undefined): string {
+  if (target?.min === undefined || target?.max === undefined) return "unavailable";
+  return `${target.min}–${target.max} bpm`;
+}
+
+function formatWattsBand(power: { minWatts?: number; maxWatts?: number } | undefined): string {
+  if (power?.minWatts === undefined || power?.maxWatts === undefined) return "unavailable";
+  return `${power.minWatts}–${power.maxWatts} W`;
+}
+
+function formatOptionalWatts(value: number | undefined): string {
+  return value === undefined ? "unavailable" : `${formatOptionalNumber(value)} W`;
+}
+
+function formatOptionalRpm(value: number | undefined): string {
+  return value === undefined ? "unavailable" : `${formatOptionalNumber(value)} rpm`;
+}
+
+function formatOptionalNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Math.round(value * 10) / 10);
+}
+
+function formatOptionalPercent(value: number | undefined): string {
+  return value === undefined ? "unavailable" : percent(value);
+}
+
 export function personalizationDiagnosticDetailHtml(row: PersonalizationDiagnosticPresentationRow): string {
   const phase = row.phaseRecord;
   const record = row.record;
@@ -531,10 +612,19 @@ export function personalizationDiagnosticDetailHtml(row: PersonalizationDiagnost
   const controller = phase.controllerContext;
   const assessment = row.assessmentContext;
   const workout = row.workoutContext;
+  const performed = row.performedLoadPhase;
   const signed = (value: number | undefined, suffix: string) => value === undefined ? "n/a" : `${value > 0 ? "+" : ""}${Math.round(value * 10) / 10}${suffix}`;
+  const shadowWorkload = phase.candidatePower
+    ? formatWattsBand(phase.candidatePower)
+    : phase.fallbackReason
+      ? personalizationDiagnosticLabel(phase.fallbackReason)
+      : "unavailable";
+  const activeHeartRate = formatBoundHeartRate(phase.legacyHeartRate);
   return `<div class="personalization-detail-heading"><div><h4>${escapeHtml(row.workout)} · ${escapeHtml(row.phase)}</h4><span>${escapeHtml(new Date(row.date).toLocaleString())}</span></div><button type="button" class="button secondary" onclick="closePersonalizationDiagnostic()">Close</button></div>
+    <section><h5>Active prescription</h5><dl>${detailRow("Heart rate", activeHeartRate)}${detailRow("Resolver", `${LEGACY_HR_TARGET_RESOLVER_ID}@${LEGACY_HR_TARGET_RESOLVER_VERSION}`)}${detailRow("Live authority", "yes")}</dl></section>
+    <section><h5>Shadow athlete-relative prescription</h5><dl>${detailRow("Workload", shadowWorkload)}${detailRow("Source", "formal VO₂ calibration")}${detailRow("Mode", "shadow")}${detailRow("Live authority", "no")}${detailRow("Outcome", personalizationDiagnosticLabel(row.outcome))}</dl></section>
+    <section><h5>Observed response</h5><dl>${detailRow("Planned / observed duration", `${coverage.plannedDurationSec} / ${coverage.observedDurationSec} sec`)}${detailRow("HR / power / joint coverage", `${percent(coverage.hrCoverageRatio)} / ${percent(coverage.powerCoverageRatio)} / ${percent(coverage.jointCoverageRatio)}`)}${detailRow("HR median / min / max", heartRate ? `${heartRate.medianBpm} / ${heartRate.minBpm} / ${heartRate.maxBpm} bpm` : "n/a")}${detailRow("HR seconds below / inside / above", heartRate ? `${heartRate.belowBandSeconds} / ${heartRate.insideBandSeconds} / ${heartRate.aboveBandSeconds}` : "n/a")}${detailRow("Power median / IQR / min / max", power ? `${power.medianWatts} / ${power.q1Watts}–${power.q3Watts} / ${power.minWatts}–${power.maxWatts} W` : "n/a")}${detailRow("Power seconds below / inside / above candidate", power ? `${power.belowCandidateSeconds} / ${power.insideCandidateSeconds} / ${power.aboveCandidateSeconds}` : "n/a")}${detailRow("Settled in-band samples", stable?.sampleCount)}${detailRow("Settled median / IQR", stable ? `${stable.medianWatts} W / ${stable.q1Watts}–${stable.q3Watts} W` : "n/a")}${detailRow("Late vs early HR", signed(heartRate?.heartRateChangeLateVsEarlyBpm, " bpm"))}${detailRow("Controller saturation", `${percent(controller.saturationRatio)} · lower ${controller.lowerBoundaryDecisionCount}, upper ${controller.upperBoundaryDecisionCount} decisions`)}${detailRow("Observed watts (response)", formatOptionalWatts(performed?.wattsMedian))}${detailRow("Observed resistance (response)", performed?.observedResistanceMedian === undefined ? "unavailable" : String(performed.observedResistanceMedian))}${detailRow("Cadence (response)", formatOptionalRpm(performed?.cadenceMedianRpm))}${detailRow("Bike-row coverage (response)", formatOptionalPercent(performed?.observedResistanceCoverageRatio ?? performed?.freshBikeRowCoverageRatio))}</dl></section>
     <section><h5>Frozen evidence provenance</h5><dl>${detailRow("App version", workout?.appVersion ?? "unavailable")}${detailRow("Machine", workout?.machineId ?? "unavailable")}${detailRow("Machine profile version", workout?.machineProfileVersion ?? "unavailable")}${detailRow("Active / E1 / E2 schema", workout ? `${workout.activePrescriptionSchemaVersion ?? "n/a"} / ${workout.shadowSchemaVersion ?? "n/a"} / ${workout.characterizationSchemaVersion}` : "n/a")}${detailRow("Assessment evidence sessions", assessment?.evidenceSessionIds?.join(", ") ?? "n/a")}${detailRow("Assessment algorithm", assessment?.algorithm ? `${assessment.algorithm.id}@${assessment.algorithm.version}` : "n/a")}${detailRow("Assessment protocol", assessment?.protocol ? `${assessment.protocol.id}@${assessment.protocol.version}` : "n/a")}</dl></section>
     <section><h5>Frozen assessment context</h5><dl>${detailRow("Assessment date", assessment ? new Date(assessment.observedAt).toLocaleDateString() : "n/a")}${detailRow("Assessment quality", personalizationDiagnosticLabel(assessment?.quality ?? record.formalAssessmentQuality ?? "unavailable"))}${detailRow("Calibration provenance", personalizationDiagnosticLabel(assessment?.calibrationProvenance ?? record.calibrationWorkloadProvenance ?? "unavailable"))}${detailRow("Calibration HR range", assessment ? `${assessment.observedMinHeartRateBpm}–${assessment.observedMaxHeartRateBpm} bpm` : "n/a")}${detailRow("Calibration watt range", assessment ? `${assessment.observedMinWatts}–${assessment.observedMaxWatts} W` : "n/a")}${detailRow("Candidate watts", row.candidateWatts)}${detailRow("Assessment domain", personalizationDiagnosticLabel(row.assessmentDomain))}${detailRow("Domain HR margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.heartRateToLowerBoundaryBpm} / ${phase.candidateDomainMargins.heartRateToUpperBoundaryBpm} bpm` : "n/a")}${detailRow("Domain watt margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.wattsToLowerBoundary} / ${phase.candidateDomainMargins.wattsToUpperBoundary} W` : "n/a")}</dl></section>
-    <section><h5>Workout observation</h5><dl>${detailRow("Planned / observed duration", `${coverage.plannedDurationSec} / ${coverage.observedDurationSec} sec`)}${detailRow("HR / power / joint coverage", `${percent(coverage.hrCoverageRatio)} / ${percent(coverage.powerCoverageRatio)} / ${percent(coverage.jointCoverageRatio)}`)}${detailRow("HR median / min / max", heartRate ? `${heartRate.medianBpm} / ${heartRate.minBpm} / ${heartRate.maxBpm} bpm` : "n/a")}${detailRow("HR seconds below / inside / above", heartRate ? `${heartRate.belowBandSeconds} / ${heartRate.insideBandSeconds} / ${heartRate.aboveBandSeconds}` : "n/a")}${detailRow("Power median / IQR / min / max", power ? `${power.medianWatts} / ${power.q1Watts}–${power.q3Watts} / ${power.minWatts}–${power.maxWatts} W` : "n/a")}${detailRow("Power seconds below / inside / above candidate", power ? `${power.belowCandidateSeconds} / ${power.insideCandidateSeconds} / ${power.aboveCandidateSeconds}` : "n/a")}${detailRow("Settled in-band samples", stable?.sampleCount)}${detailRow("Settled median / IQR", stable ? `${stable.medianWatts} W / ${stable.q1Watts}–${stable.q3Watts} W` : "n/a")}${detailRow("Late vs early HR", signed(heartRate?.heartRateChangeLateVsEarlyBpm, " bpm"))}${detailRow("Controller saturation", `${percent(controller.saturationRatio)} · lower ${controller.lowerBoundaryDecisionCount}, upper ${controller.upperBoundaryDecisionCount} decisions`)}</dl></section>
     <section><h5>Comparison</h5><dl>${detailRow("Candidate midpoint", comparison ? `${comparison.candidateMidpointWatts} W` : "n/a")}${detailRow("Observed settled median", comparison ? `${comparison.observedInBandMedianWatts} W` : "n/a")}${detailRow("Signed / absolute difference", comparison ? `${signed(comparison.signedDifferenceWatts, " W")} / ${comparison.absoluteDifferenceWatts} W` : "n/a")}${detailRow("Percentage difference", comparison ? signed(comparison.signedDifferencePercent, "%") : "n/a")}${detailRow("Candidate contains observed median", comparison ? (comparison.candidateContainsObservedMedian ? "Yes" : "No") : "n/a")}${detailRow("Observed IQR overlap", comparison ? `${comparison.candidateObservedOverlapWatts} W · ${percent(comparison.candidateObservedOverlapRatio)}` : "n/a")}${detailRow("Descriptive agreement", personalizationDiagnosticLabel(row.agreement))}${detailRow("Outcome", personalizationDiagnosticLabel(row.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel(row.exclusion))}</dl></section>`;
 }

@@ -4,6 +4,12 @@ import { parseFitnessState } from "./fitnessState.js";
 import { SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS, isSupportedVo2EstimatorProtocolPair, } from "./vo2Estimator.js";
 import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
 /**
+ * E1 is the canonical shadow athlete-relative mechanical workload prescription
+ * derived from formal calibration for supported ordinary-workout phases.
+ * It does not personalize the active heart-rate prescription. The legacy HR
+ * prescription remains live control authority; E1 records the associated
+ * athlete-specific watts for shadow evaluation only.
+ *
  * E1 intentionally has no activation-approved freshness lifetime. Production
  * shadow capture records freshness as not evaluated until policy owners supply
  * an explicit provisional characterization value.
@@ -372,7 +378,7 @@ function policyIsValid(policy) {
         policy.roundingRule === "nearest_integer_watt" &&
         policy.extrapolationPolicy === "none";
 }
-/** Pure Phase E1 evaluation. The returned candidate has no runtime/controller path. */
+/** Pure Phase E1 shadow workload evaluation. The returned candidate has no runtime/controller path. */
 export function evaluatePersonalizedPrescription(input) {
     if (!isAthleteId(input.athleteId))
         throw new Error("Invalid athlete identity for shadow prescription");
