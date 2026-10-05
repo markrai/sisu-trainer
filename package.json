@@ -1,6 +1,6 @@
 {
   "name": "sisu-trainer",
-  "version": "0.9.11",
+  "version": "0.10.13",
   "private": true,
   "type": "module",
   "scripts": {

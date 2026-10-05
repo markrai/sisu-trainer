@@ -705,7 +705,16 @@ function renderBikeBridgeHud() {
   const rpm = formatBikeBridgeNumber(state.rpm);
   const watts = formatBikeBridgeNumber(state.watts);
   const stale = state.telemetryStale ? " (stale)" : "";
-  live.textContent = `Bike observed ${observed} · ${rpm} RPM · ${watts} W${stale}`;
+  // Live resistance/RPM use Bike Bridge colors when measurements are present.
+  const observedHtml =
+    observed === "-"
+      ? observed
+      : `<span class="machine-guidance-resistance">${observed}</span>`;
+  const rpmHtml =
+    rpm === "-"
+      ? `${rpm} RPM`
+      : `<span class="machine-guidance-rpm">${rpm} RPM</span>`;
+  live.innerHTML = `Bike observed ${observedHtml} · ${rpmHtml} · ${watts} W${stale}`;
 }
 
 function recordVo2BikeTelemetryIfActive(): void {
@@ -759,20 +768,38 @@ function recordOrdinaryBikeTelemetryIfActive(): void {
   if (sample) queueOrdinaryBikeTelemetrySample(sample);
 }
 
+function escapeBikeBridgeHudText(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function renderBikeBridgeSettingsStatus() {
   const el = document.getElementById("bikeBridgeStatus");
   if (!el) return;
   const state = getBikeBridgeSession().getViewState();
+  const observedResistance = formatBikeBridgeNumber(state.observedResistance);
+  const resistanceLine =
+    observedResistance === "-"
+      ? `Resistance: ${observedResistance}`
+      : `Resistance: <span class="machine-guidance-resistance">${observedResistance}</span>`;
+  const rpm = formatBikeBridgeNumber(state.rpm);
+  const rpmLine =
+    rpm === "-"
+      ? `RPM: ${rpm}`
+      : `RPM: <span class="machine-guidance-rpm">${rpm}</span>`;
   const lines = [
-    `Bike Bridge: ${formatBikeBridgeReadiness(state.readiness)}`,
-    `Control: ${formatBikeBridgeControl(state)}`,
-    `Resistance: ${formatBikeBridgeNumber(state.observedResistance)}`,
+    `Bike Bridge: ${escapeBikeBridgeHudText(formatBikeBridgeReadiness(state.readiness))}`,
+    `Control: ${escapeBikeBridgeHudText(formatBikeBridgeControl(state))}`,
+    resistanceLine,
     `Target: ${formatBikeBridgeNumber(state.desiredResistance ?? state.commandedResistance ?? state.requestedResistance)}`,
-    `RPM: ${formatBikeBridgeNumber(state.rpm)}`,
+    rpmLine,
     `Watts: ${formatBikeBridgeNumber(state.watts)}`,
   ];
-  if (state.lastError) lines.push(state.lastError);
-  el.textContent = lines.join("\n");
+  if (state.lastError) lines.push(escapeBikeBridgeHudText(state.lastError));
+  el.innerHTML = lines.join("\n");
 }
 
 function syncBikeBridgeGuidance(
