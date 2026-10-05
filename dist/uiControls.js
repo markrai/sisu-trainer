@@ -1,6 +1,6 @@
 import { adjustedBlockLengths, beginWorkout, formatTime, getPhase, getPausedElapsed, getStartTime, isPaused, pauseWorkout, restartWorkout, resumeWorkout, requestEarlyCooldown, planEarlyCooldownTransition, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, startWorkout, todayName, updateRing, tickVo2ProtocolWithCanonicalHr, requestVo2LimitReached, } from "./workoutLogic.js";
 import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
-import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples, queueOrdinaryBikeTelemetrySample, } from "./workoutStorage.js";
+import { getAllWorkoutSummaries, deleteWorkoutSummary, getHrSamples, getOrdinaryBikeTelemetrySamples, queueOrdinaryBikeTelemetrySample, } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
 import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
@@ -20,6 +20,8 @@ import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidati
 import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
 import { loadAthleteProfile } from "./profile.js";
 import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, extractTrustedPersonalizationWorkoutContexts, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
+import { PERFORMED_LOAD_DIAGNOSTICS_RECENT_LIMIT, buildPerformedLoadWorkoutView, } from "./performedLoad.js";
+import { performedLoadDiagnosticsHtml } from "./performedLoadDiagnosticsView.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
 import { findResolvedPhaseTarget, formatResolvedHeartRateTarget, machineHeartRateTargetFromResolved, resolveWorkoutPrescription, } from "./workoutPrescription.js";
 let selectedDay = null;
@@ -567,7 +569,17 @@ function renderBikeBridgeHud() {
     const rpm = formatBikeBridgeNumber(state.rpm);
     const watts = formatBikeBridgeNumber(state.watts);
     const stale = state.telemetryStale ? " (stale)" : "";
-    live.textContent = `Bike observed ${observed} · ${rpm} RPM · ${watts} W${stale}`;
+    // Live resistance/RPM/watts use Bike Bridge colors when measurements are present.
+    const observedHtml = observed === "-"
+        ? observed
+        : `<span class="machine-guidance-resistance">${observed}</span>`;
+    const rpmHtml = rpm === "-"
+        ? `${rpm} RPM`
+        : `<span class="machine-guidance-rpm">${rpm} RPM</span>`;
+    const wattsHtml = watts === "-"
+        ? `${watts} W`
+        : `<span class="machine-guidance-power">${watts} W</span>`;
+    live.innerHTML = `Bike observed ${observedHtml} · ${rpmHtml} · ${wattsHtml}${stale}`;
 }
 function recordVo2BikeTelemetryIfActive() {
     const day = getSelectedDay();
@@ -620,23 +632,42 @@ function recordOrdinaryBikeTelemetryIfActive() {
     if (sample)
         queueOrdinaryBikeTelemetrySample(sample);
 }
+function escapeBikeBridgeHudText(value) {
+    return value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+}
 function renderBikeBridgeSettingsStatus() {
     var _a, _b;
     const el = document.getElementById("bikeBridgeStatus");
     if (!el)
         return;
     const state = getBikeBridgeSession().getViewState();
+    const observedResistance = formatBikeBridgeNumber(state.observedResistance);
+    const resistanceLine = observedResistance === "-"
+        ? `Resistance: ${observedResistance}`
+        : `Resistance: <span class="machine-guidance-resistance">${observedResistance}</span>`;
+    const rpm = formatBikeBridgeNumber(state.rpm);
+    const rpmLine = rpm === "-"
+        ? `RPM: ${rpm}`
+        : `RPM: <span class="machine-guidance-rpm">${rpm}</span>`;
+    const watts = formatBikeBridgeNumber(state.watts);
+    const wattsLine = watts === "-"
+        ? `Watts: ${watts}`
+        : `Watts: <span class="machine-guidance-power">${watts}</span>`;
     const lines = [
-        `Bike Bridge: ${formatBikeBridgeReadiness(state.readiness)}`,
-        `Control: ${formatBikeBridgeControl(state)}`,
-        `Resistance: ${formatBikeBridgeNumber(state.observedResistance)}`,
+        `Bike Bridge: ${escapeBikeBridgeHudText(formatBikeBridgeReadiness(state.readiness))}`,
+        `Control: ${escapeBikeBridgeHudText(formatBikeBridgeControl(state))}`,
+        resistanceLine,
         `Target: ${formatBikeBridgeNumber((_b = (_a = state.desiredResistance) !== null && _a !== void 0 ? _a : state.commandedResistance) !== null && _b !== void 0 ? _b : state.requestedResistance)}`,
-        `RPM: ${formatBikeBridgeNumber(state.rpm)}`,
-        `Watts: ${formatBikeBridgeNumber(state.watts)}`,
+        rpmLine,
+        wattsLine,
     ];
     if (state.lastError)
-        lines.push(state.lastError);
-    el.textContent = lines.join("\n");
+        lines.push(escapeBikeBridgeHudText(state.lastError));
+    el.innerHTML = lines.join("\n");
 }
 function syncBikeBridgeGuidance(update, workoutActive, paused) {
     getBikeBridgeSession().onGuidance({
@@ -1054,6 +1085,7 @@ function loadEquipmentSettings() {
     renderHrDynamicsPanel();
     renderShadowPredictionPanel();
     void loadPersonalizationDiagnostics();
+    void loadPerformedLoadDiagnostics();
 }
 function renderPersonalizationDiagnostics(model) {
     personalizationDiagnosticsModel = model;
@@ -1063,6 +1095,39 @@ function renderPersonalizationDiagnostics(model) {
     const exportButton = document.getElementById("exportPersonalizationDiagnosticsButton");
     if (exportButton)
         exportButton.disabled = model.sourceRecordCount === 0;
+}
+async function loadPerformedLoadDiagnostics() {
+    const content = document.getElementById("performedLoadDiagnosticsContent");
+    if (!content)
+        return;
+    content.innerHTML = '<div class="personalization-diagnostics-empty"><span>Loading ordinary bike performed-load evidence…</span></div>';
+    try {
+        const history = await getAllWorkoutSummaries();
+        const athleteId = loadAthleteProfile(localStorage).athleteId;
+        const rows = history.filter((row) => {
+            const summary = row.summary;
+            return ((summary === null || summary === void 0 ? void 0 : summary.activity) === "bike" &&
+                summary.athlete_id === athleteId &&
+                summary.workout_response != null);
+        }).slice(0, PERFORMED_LOAD_DIAGNOSTICS_RECENT_LIMIT);
+        const workouts = [];
+        for (const row of rows) {
+            const samples = await getOrdinaryBikeTelemetrySamples(row.summary.external_session_id);
+            workouts.push(buildPerformedLoadWorkoutView({
+                response: row.summary.workout_response,
+                samples,
+                startedAt: row.summary.startedAt,
+                day: typeof row.summary.day === "string" ? row.summary.day : undefined,
+                intent: row.summary.intent,
+                cancelled: row.summary.cancelled,
+            }));
+        }
+        content.innerHTML = performedLoadDiagnosticsHtml(workouts);
+    }
+    catch (error) {
+        console.error("Error loading performed-load diagnostics:", error);
+        content.innerHTML = '<div class="personalization-diagnostics-empty personalization-diagnostics-error"><strong>Performed-load diagnostics could not be loaded.</strong><span>Workout data was not changed.</span></div>';
+    }
 }
 async function loadPersonalizationDiagnostics() {
     const content = document.getElementById("personalizationDiagnosticsContent");
@@ -1990,6 +2055,7 @@ function registerUiGlobals(phaseBoxEl) {
     window.confirmResetShadowPredictions = confirmResetShadowPredictions;
     window.exportMachineDiagnostics = exportMachineDiagnostics;
     window.loadPersonalizationDiagnostics = loadPersonalizationDiagnostics;
+    window.loadPerformedLoadDiagnostics = loadPerformedLoadDiagnostics;
     window.applyPersonalizationDiagnosticsFilters = applyPersonalizationDiagnosticsFilters;
     window.resetPersonalizationDiagnosticsFilters = resetPersonalizationDiagnosticsFilters;
     window.openPersonalizationDiagnostic = openPersonalizationDiagnostic;

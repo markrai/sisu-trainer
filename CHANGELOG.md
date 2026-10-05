@@ -4,10 +4,10 @@
 
 ### Changed
 
-- **Bike Bridge metric colors.** Machine-guidance and Bike Bridge status RPM
-  and resistance values now use the same colors as Fitbaus Bike Bridge:
-  magenta (`#FF00FF`) for RPM and orange (`#FF8C00`) for resistance, when a
-  live measurement is present.
+- **Bike Bridge metric colors.** Machine-guidance and Bike Bridge status RPM,
+  resistance, and watts values now use the same colors as Fitbaus Bike Bridge:
+  magenta (`#FF00FF`) for RPM, orange (`#FF8C00`) for resistance, and blue
+  (`#0096FF`) for watts, when a live measurement is present.
 
 ## [0.10.12] - 2026-08-31
 

@@ -27,6 +27,7 @@ import {
   getAllWorkoutSummaries,
   deleteWorkoutSummary,
   getHrSamples,
+  getOrdinaryBikeTelemetrySamples,
   queueOrdinaryBikeTelemetrySample,
 } from "./workoutStorage.js";
 import { sendWorkoutToSisu } from "./sisuSync.js";
@@ -98,6 +99,11 @@ import {
   type PersonalizationDiagnosticsFilters,
   type PersonalizationDiagnosticsModel,
 } from "./personalizationDiagnosticsView.js";
+import {
+  PERFORMED_LOAD_DIAGNOSTICS_RECENT_LIMIT,
+  buildPerformedLoadWorkoutView,
+} from "./performedLoad.js";
+import { performedLoadDiagnosticsHtml } from "./performedLoadDiagnosticsView.js";
 import type {
   Activity,
   ResolvedHeartRateTarget,
@@ -705,7 +711,7 @@ function renderBikeBridgeHud() {
   const rpm = formatBikeBridgeNumber(state.rpm);
   const watts = formatBikeBridgeNumber(state.watts);
   const stale = state.telemetryStale ? " (stale)" : "";
-  // Live resistance/RPM use Bike Bridge colors when measurements are present.
+  // Live resistance/RPM/watts use Bike Bridge colors when measurements are present.
   const observedHtml =
     observed === "-"
       ? observed
@@ -714,7 +720,11 @@ function renderBikeBridgeHud() {
     rpm === "-"
       ? `${rpm} RPM`
       : `<span class="machine-guidance-rpm">${rpm} RPM</span>`;
-  live.innerHTML = `Bike observed ${observedHtml} · ${rpmHtml} · ${watts} W${stale}`;
+  const wattsHtml =
+    watts === "-"
+      ? `${watts} W`
+      : `<span class="machine-guidance-power">${watts} W</span>`;
+  live.innerHTML = `Bike observed ${observedHtml} · ${rpmHtml} · ${wattsHtml}${stale}`;
 }
 
 function recordVo2BikeTelemetryIfActive(): void {
@@ -790,13 +800,18 @@ function renderBikeBridgeSettingsStatus() {
     rpm === "-"
       ? `RPM: ${rpm}`
       : `RPM: <span class="machine-guidance-rpm">${rpm}</span>`;
+  const watts = formatBikeBridgeNumber(state.watts);
+  const wattsLine =
+    watts === "-"
+      ? `Watts: ${watts}`
+      : `Watts: <span class="machine-guidance-power">${watts}</span>`;
   const lines = [
     `Bike Bridge: ${escapeBikeBridgeHudText(formatBikeBridgeReadiness(state.readiness))}`,
     `Control: ${escapeBikeBridgeHudText(formatBikeBridgeControl(state))}`,
     resistanceLine,
     `Target: ${formatBikeBridgeNumber(state.desiredResistance ?? state.commandedResistance ?? state.requestedResistance)}`,
     rpmLine,
-    `Watts: ${formatBikeBridgeNumber(state.watts)}`,
+    wattsLine,
   ];
   if (state.lastError) lines.push(escapeBikeBridgeHudText(state.lastError));
   el.innerHTML = lines.join("\n");
@@ -1207,6 +1222,7 @@ function loadEquipmentSettings() {
   renderHrDynamicsPanel();
   renderShadowPredictionPanel();
   void loadPersonalizationDiagnostics();
+  void loadPerformedLoadDiagnostics();
 }
 
 function renderPersonalizationDiagnostics(model: PersonalizationDiagnosticsModel) {
@@ -1215,6 +1231,40 @@ function renderPersonalizationDiagnostics(model: PersonalizationDiagnosticsModel
   if (content) content.innerHTML = personalizationDiagnosticsHtml(model);
   const exportButton = document.getElementById("exportPersonalizationDiagnosticsButton") as HTMLButtonElement | null;
   if (exportButton) exportButton.disabled = model.sourceRecordCount === 0;
+}
+
+async function loadPerformedLoadDiagnostics() {
+  const content = document.getElementById("performedLoadDiagnosticsContent");
+  if (!content) return;
+  content.innerHTML = '<div class="personalization-diagnostics-empty"><span>Loading ordinary bike performed-load evidence…</span></div>';
+  try {
+    const history = await getAllWorkoutSummaries();
+    const athleteId = loadAthleteProfile(localStorage).athleteId;
+    const rows = history.filter((row) => {
+      const summary = row.summary;
+      return (
+        summary?.activity === "bike" &&
+        summary.athlete_id === athleteId &&
+        summary.workout_response != null
+      );
+    }).slice(0, PERFORMED_LOAD_DIAGNOSTICS_RECENT_LIMIT);
+    const workouts = [];
+    for (const row of rows) {
+      const samples = await getOrdinaryBikeTelemetrySamples(row.summary.external_session_id);
+      workouts.push(buildPerformedLoadWorkoutView({
+        response: row.summary.workout_response!,
+        samples,
+        startedAt: row.summary.startedAt,
+        day: typeof row.summary.day === "string" ? row.summary.day : undefined,
+        intent: row.summary.intent,
+        cancelled: row.summary.cancelled,
+      }));
+    }
+    content.innerHTML = performedLoadDiagnosticsHtml(workouts);
+  } catch (error) {
+    console.error("Error loading performed-load diagnostics:", error);
+    content.innerHTML = '<div class="personalization-diagnostics-empty personalization-diagnostics-error"><strong>Performed-load diagnostics could not be loaded.</strong><span>Workout data was not changed.</span></div>';
+  }
 }
 
 async function loadPersonalizationDiagnostics() {
@@ -2197,6 +2247,7 @@ function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   (window as any).confirmResetShadowPredictions = confirmResetShadowPredictions;
   (window as any).exportMachineDiagnostics = exportMachineDiagnostics;
   (window as any).loadPersonalizationDiagnostics = loadPersonalizationDiagnostics;
+  (window as any).loadPerformedLoadDiagnostics = loadPerformedLoadDiagnostics;
   (window as any).applyPersonalizationDiagnosticsFilters = applyPersonalizationDiagnosticsFilters;
   (window as any).resetPersonalizationDiagnosticsFilters = resetPersonalizationDiagnosticsFilters;
   (window as any).openPersonalizationDiagnostic = openPersonalizationDiagnostic;

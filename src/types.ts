@@ -714,13 +714,24 @@ export interface OrdinaryBikeTelemetrySampleV1 {
     source: "measured";
     freshnessMs: number;
   };
+  /**
+   * Observed bike resistance from telemetry. Never copied from desired or commanded.
+   * Absence means not observed, not zero.
+   */
   observedResistance?: {
     value: number;
     source: "observed";
     freshnessMs: number;
   };
-  /** Controller/audit values. Never physiological workload evidence. */
+  /**
+   * Controller recommendation / desired machine setting at this active second.
+   * Recommendation is intent, not observation.
+   */
   desiredResistance?: number;
+  /**
+   * Resistance posted to Bike Bridge when automatic actuation exists.
+   * Command is not observation and is not required for observed evidence.
+   */
   commandedResistance?: number;
 }
 
@@ -729,6 +740,7 @@ export type OrdinaryBikeTelemetrySample = OrdinaryBikeTelemetrySampleV1;
 /** Writer alias. Advance this only when a new writer and matching parser are introduced. */
 export type CurrentOrdinaryBikeTelemetrySample = OrdinaryBikeTelemetrySampleV1;
 
+/** Compact phase-level scalar series. Absence of a summary means not recorded, not zero. */
 export interface WorkoutResponseScalarSummary {
   sampleCount: number;
   coverageRatio: number;
@@ -739,6 +751,11 @@ export interface WorkoutResponseScalarSummary {
   end: number;
 }
 
+/**
+ * Per-phase durable evidence. Observed mechanical fields come from Bike Bridge
+ * telemetry. Desired/commanded resistance retain recommendation and command
+ * context and must never populate observed fields.
+ */
 export interface WorkoutPhaseResponse {
   phaseInstanceId: string;
   phaseId: string;
@@ -756,11 +773,24 @@ export interface WorkoutPhaseResponse {
     provenance: "measured_watts" | "calibrated_watts" | "mixed";
   };
   cadenceRpm?: WorkoutResponseScalarSummary;
+  /** Observed resistance from telemetry. */
   observedResistance?: WorkoutResponseScalarSummary;
+  /** Recommendation / desired setting context. Not an observation. */
   desiredResistance?: WorkoutResponseScalarSummary;
+  /** Commanded Bike Bridge setting when automatic control posted. Not an observation. */
   commandedResistance?: WorkoutResponseScalarSummary;
 }
 
+/**
+ * WorkoutResponse is the durable phase-level summary of observed mechanical
+ * workload and physiological response for ordinary workouts. It may also
+ * retain recommendation and command context, but those fields are not
+ * observations.
+ *
+ * prescription ≠ recommendation ≠ command ≠ observation ≠ physiological response
+ *
+ * Recommendation is intent. Observation is evidence of what physically happened.
+ */
 export interface WorkoutResponseV1 {
   schemaVersion: typeof WORKOUT_RESPONSE_SCHEMA_VERSION_V1;
   athleteId: string;

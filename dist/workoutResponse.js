@@ -1,6 +1,21 @@
 import { ORDINARY_BIKE_TELEMETRY_SCHEMA_VERSION_V1, WORKOUT_RESPONSE_SCHEMA_VERSION, WORKOUT_RESPONSE_SCHEMA_VERSION_V1, } from "./types.js";
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseResolvedWorkoutPrescription } from "./workoutPrescription.js";
+import { canonicalMedian } from "./stats.js";
+/**
+ * WorkoutResponse is the durable phase-level summary of observed mechanical
+ * workload and physiological response for ordinary workouts. It may also
+ * retain recommendation and command context, but those fields are not
+ * observations.
+ *
+ * Authority chain:
+ *   prescription ≠ recommendation ≠ command ≠ observation ≠ physiological response
+ *
+ * Recommendation is intent. Observation is evidence of what physically happened.
+ * Derived performed-load statistics (mode, MAD, paired-row agreement) describe
+ * variation and are not compliance grades; they are computed at read time and
+ * are not persisted on this schema.
+ */
 const OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
 const MAX_ACTIVE_DURATION_SEC = 24 * 60 * 60;
 const MAX_PHASE_COUNT = 2000;
@@ -39,23 +54,19 @@ function ratio(count, expected) {
 function ratiosEqual(actual, expected) {
     return Math.abs(actual - expected) <= 1e-9;
 }
-function median(values) {
-    const sorted = [...values].sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0
-        ? (sorted[middle - 1] + sorted[middle]) / 2
-        : sorted[middle];
-}
 function summarize(values, expectedDurationSec) {
     if (values.length === 0)
         return undefined;
     const ordered = [...values].sort((a, b) => a.at - b.at);
     const numbers = ordered.map((entry) => entry.value);
+    const median = canonicalMedian(numbers);
+    if (median === undefined)
+        return undefined;
     return {
         sampleCount: numbers.length,
         coverageRatio: ratio(numbers.length, expectedDurationSec),
         mean: numbers.reduce((sum, value) => sum + value, 0) / numbers.length,
-        median: median(numbers),
+        median,
         min: Math.min(...numbers),
         max: Math.max(...numbers),
         end: ordered[ordered.length - 1].value,

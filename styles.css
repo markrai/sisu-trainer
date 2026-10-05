@@ -30,14 +30,16 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .machine-guidance-value { min-width: 0; }
 .machine-guidance-label { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.68; }
 .machine-guidance-number { margin-top: 3px; font-size: 1.65rem; font-weight: 750; font-variant-numeric: tabular-nums; }
-/* Match Fitbaus Bike Bridge RpmColor / ResistanceColor. */
+/* Match Fitbaus Bike Bridge RpmColor / ResistanceColor / WattsColor. */
 .machine-guidance-rpm { color: #ff00ff; }
 .machine-guidance-resistance { color: #ff8c00; }
+.machine-guidance-power { color: #0096ff; }
 .machine-guidance-watts { margin-top: 9px; font-size: 0.82rem; opacity: 0.72; }
 .machine-guidance-bike-live { margin-top: 8px; font-size: 0.78rem; opacity: 0.78; font-variant-numeric: tabular-nums; }
 .bike-bridge-status { margin-top: 10px; line-height: 1.45; text-align: left; white-space: pre-line; }
 .bike-bridge-status .machine-guidance-rpm,
-.bike-bridge-status .machine-guidance-resistance { font-weight: 650; }
+.bike-bridge-status .machine-guidance-resistance,
+.bike-bridge-status .machine-guidance-power { font-weight: 650; }
 .time-left { text-align: center; font-size: 1.1rem; margin-top: 10px; opacity: .9; }
 .work-blocks { text-align: center; margin-top: 8px; font-size: 0.55rem; opacity: .8; }
 .hr-target { text-align: center; font-size: 0.7rem; opacity: .9; }
@@ -116,6 +118,18 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .developer-diagnostics-badge { padding: 3px 7px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; color: rgba(255,255,255,0.62); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .developer-diagnostics-body { padding: 4px 14px 16px; min-width: 0; }
 .developer-diagnostics-note { margin: 8px 0; color: rgba(255,255,255,0.72); font-size: 0.78rem; line-height: 1.45; }
+.performed-load-workout { margin: 14px 0 20px; }
+.performed-load-workout h3 { margin: 0 0 6px; font-size: 0.92rem; }
+.performed-load-workout h3 span { color: rgba(255,255,255,0.58); font-weight: 500; font-size: 0.72rem; }
+.performed-load-phase { margin-top: 10px; padding: 10px; border: 1px solid #333; border-radius: 9px; background: #202020; }
+.performed-load-phase h4 { margin: 0 0 4px; font-size: 0.84rem; }
+.performed-load-hr-target { margin: 0 0 8px; color: rgba(255,255,255,0.68); font-size: 0.74rem; }
+.performed-load-phase dl { margin: 0; display: grid; gap: 8px; }
+.performed-load-phase dt { margin-bottom: 4px; color: rgba(255,255,255,0.62); font-size: 0.7rem; letter-spacing: 0.04em; text-transform: uppercase; }
+.performed-load-phase dd { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px; }
+.performed-load-phase dd div { display: flex; justify-content: space-between; gap: 8px; font-size: 0.78rem; }
+.performed-load-phase dd span { color: rgba(255,255,255,0.6); }
+.performed-load-phase dd strong { font-variant-numeric: tabular-nums; }
 .personalization-diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .personalization-diagnostics-actions .button { min-height: 44px; width: auto; flex: 1 1 180px; }
 .personalization-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }

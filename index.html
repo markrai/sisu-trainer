@@ -292,6 +292,18 @@
         <div class="label" style="opacity: 0.7; margin: 10px 0 12px;">Export the local machine-learning state used for equipment guidance.</div>
         <button type="button" class="button secondary" onclick="exportMachineDiagnostics()">Export diagnostics</button>
       </div>
+      <details id="performedLoadDiagnosticsSection" class="modal-section developer-diagnostics">
+        <summary>
+          <span>Performed-load diagnostics</span>
+          <span class="developer-diagnostics-badge">Developer</span>
+        </summary>
+        <div class="developer-diagnostics-body">
+          <p class="developer-diagnostics-note"><strong>Recommendation is intent. Observation is evidence of what physically happened.</strong> These figures describe variation; they are not workout grades and did not control the session.</p>
+          <div id="performedLoadDiagnosticsContent" aria-live="polite">
+            <div class="personalization-diagnostics-empty"><span>Open Equipment settings to load ordinary bike workout evidence.</span></div>
+          </div>
+        </div>
+      </details>
       <details id="personalizationDiagnosticsSection" class="modal-section developer-diagnostics">
         <summary>
           <span>Personalization diagnostics</span>
@@ -499,7 +511,7 @@
         <div id="machineGuidanceCadence" class="machine-guidance-number machine-guidance-rpm"></div>
       </div>
     </div>
-    <div id="machineGuidanceWatts" class="machine-guidance-watts" hidden></div>
+    <div id="machineGuidanceWatts" class="machine-guidance-watts machine-guidance-power" hidden></div>
     <div id="machineGuidanceBikeLive" class="machine-guidance-bike-live" hidden></div>
   </section>
 
