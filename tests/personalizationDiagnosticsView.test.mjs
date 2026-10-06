@@ -341,7 +341,7 @@ test("presentation makes candidate non-control semantics, domain, saturation, an
   assert.match(html, /Bike work \+ threshold is the primary validated scope/);
   assert.match(html, /Threshold transfer series/);
   assert.match(html, /does not use inside-candidate rate as a success score/);
-  assert.match(html, /No characterized bike threshold work sessions yet/);
+  assert.match(html, /No comparable bike threshold work sessions yet/);
   assert.match(detail, /Assessment domain/);
   assert.match(detail, /Edge/);
   assert.match(detail, /Late vs early HR/);
@@ -454,6 +454,7 @@ test("empty history renders an explanatory no-data state and clean zero aggregat
   assert.equal(model.rows.length, 0);
   assert.equal(model.thresholdLongitudinal.sessionCount, 0);
   assert.equal(model.thresholdLongitudinal.cohorts.length, 0);
+  assert.equal(model.thresholdLongitudinal.exclusions.length, 0);
   assert.match(personalizationDiagnosticsHtml(model), /No personalization characterization data yet/);
 });
 
@@ -466,7 +467,10 @@ test("diagnostic export is deterministic, provenance-preserving, and excludes pr
   const exported = createPersonalizationDiagnosticsExport(model);
   assert.equal(exported.schemaVersion, 2);
   assert.equal(exported.aggregate.schemaVersion, 2);
-  assert.equal(exported.thresholdLongitudinal.sessionCount, 0);
+  assert.deepEqual(Object.keys(exported), [
+    "schemaVersion", "filters", "aggregate", "diagnosticRows", "characterizationRecords",
+  ]);
+  assert.equal("thresholdLongitudinal" in exported, false);
   assert.equal(exported.characterizationRecords[0].calibrationWorkloadProvenance, "measured_watts");
   assert.equal(exported.characterizationRecords[0].phases[0].candidatePower.minWatts, 110);
   assert.equal(exported.characterizationRecords[0].phases[0].evidenceCoverage.jointCoverageRatio, 1);
@@ -524,21 +528,32 @@ function thresholdRecord(id, overrides = {}) {
   });
 }
 
-function frozenEvaluation(evidenceSessionIds, observedAt = "2026-09-18T14:30:00.000Z") {
-  return evaluation({
-    workoutSelector: "Thursday",
-    fitnessEvidenceSnapshot: {
-      metricObservedAt: observedAt,
-      quality: "high",
-      evidenceSessionIds,
-      calibration: {
-        workloadProvenance: "measured_watts",
-        observedMinWatts: 90,
-        observedMaxWatts: 180,
-        points: [{ heartRateBpm: 150 }, { heartRateBpm: 165 }],
-      },
-    },
-  });
+function thresholdAssessmentContext(overrides = {}) {
+  return {
+    observedAt: "2026-09-18T14:30:00.000Z",
+    quality: "high",
+    calibrationProvenance: "measured_watts",
+    observedMinHeartRateBpm: 150,
+    observedMaxHeartRateBpm: 165,
+    observedMinWatts: 90,
+    observedMaxWatts: 180,
+    algorithm: { id: "bike-submax-linear-hr-workload", version: 1 },
+    protocol: { id: "bike-submax-70rpm", version: 1 },
+    evidenceSessionIds: ["formal-a"],
+    ...overrides,
+  };
+}
+
+function thresholdWorkoutContext(overrides = {}) {
+  return {
+    appVersion: "0.10.13",
+    machineId: "proform-smart-power-10",
+    machineProfileVersion: 1,
+    activePrescriptionSchemaVersion: 1,
+    shadowSchemaVersion: 1,
+    characterizationSchemaVersion: 2,
+    ...overrides,
+  };
 }
 
 test("threshold transfer series is session-level, grouped by calibration instance, and never pools provenance", () => {
@@ -587,41 +602,34 @@ test("threshold transfer series is session-level, grouped by calibration instanc
     })],
   });
   const aerobic = record("monday");
-  const history = [
-    historyRow(first, {
-      day: "Thursday",
-      machine_id: "proform-smart-power-10",
-      machine_profile_version: 1,
-      shadow_prescription_evaluation: frozenEvaluation(sameInstance),
-    }),
-    historyRow(second, {
-      day: "Thursday",
-      machine_id: "proform-smart-power-10",
-      machine_profile_version: 1,
-      shadow_prescription_evaluation: frozenEvaluation(sameInstance),
-    }),
-    historyRow(calibrated, {
-      day: "Thursday",
-      shadow_prescription_evaluation: frozenEvaluation(sameInstance),
-    }),
-    historyRow(otherCalibration, {
-      day: "Thursday",
-      shadow_prescription_evaluation: frozenEvaluation(["formal-b"]),
-    }),
-    historyRow(aerobic),
-  ];
   const analysis = buildThresholdLongitudinalAnalysis(
-    [first, second, calibrated, otherCalibration, aerobic],
-    extractTrustedPersonalizationAssessmentContexts(history, "athlete-a"),
-    extractTrustedPersonalizationWorkoutContexts(history, "athlete-a")
+    [otherCalibration, second, aerobic, calibrated, first],
+    {
+      "thu-1": thresholdAssessmentContext({ evidenceSessionIds: sameInstance }),
+      "thu-2": thresholdAssessmentContext({ evidenceSessionIds: sameInstance }),
+      "thu-calibrated": thresholdAssessmentContext({
+        evidenceSessionIds: sameInstance,
+        calibrationProvenance: "calibrated_at_verified_cadence",
+      }),
+      "thu-other": thresholdAssessmentContext({ evidenceSessionIds: ["formal-b"] }),
+    },
+    {
+      "thu-1": thresholdWorkoutContext(),
+      "thu-2": thresholdWorkoutContext(),
+      "thu-calibrated": thresholdWorkoutContext(),
+      "thu-other": thresholdWorkoutContext(),
+    }
   );
   assert.equal(analysis.sessionCount, 4);
   assert.equal(analysis.cohorts.length, 3);
   const measuredSame = analysis.cohorts.find((cohort) =>
-    cohort.calibrationInstanceId === "formal-a" && cohort.observedPowerProvenance === "measured_watts");
+    cohort.key.calibration.evidenceSessionIds[0] === "formal-a" &&
+    cohort.key.observedPowerProvenance === "measured_watts" &&
+    cohort.key.calibration.workloadProvenance === "measured_watts");
   const calibratedSame = analysis.cohorts.find((cohort) =>
-    cohort.calibrationInstanceId === "formal-a" && cohort.observedPowerProvenance === "calibrated_watts");
-  const other = analysis.cohorts.find((cohort) => cohort.calibrationInstanceId === "formal-b");
+    cohort.key.calibration.evidenceSessionIds[0] === "formal-a" &&
+    cohort.key.observedPowerProvenance === "calibrated_watts");
+  const other = analysis.cohorts.find((cohort) => cohort.key.calibration.evidenceSessionIds[0] === "formal-b");
   assert.equal(measuredSame.sessionCount, 2);
   assert.equal(calibratedSame.sessionCount, 1);
   assert.equal(other.sessionCount, 1);
@@ -638,10 +646,188 @@ test("threshold transfer series is session-level, grouped by calibration instanc
   assert.equal(measuredSame.sessions[0].machineId, "proform-smart-power-10");
   assert.equal(measuredSame.sessions[0].domainBucket, "interior");
   assert.equal(measuredSame.sessions[1].widthNormalizedAbsoluteError, 6 / 30);
-  assert.equal(calibratedSame.calibrationProvenance, "calibrated_at_verified_cadence");
+  assert.equal(calibratedSame.key.calibration.workloadProvenance, "calibrated_at_verified_cadence");
+  assert.equal(analysis.exclusions.length, 0);
 });
 
-test("threshold transfer series keeps one phase per workout and omits uncharacterized rows", () => {
+test("threshold cohort identity includes evidence, estimator, protocol, and athlete with stable evidence ordering", () => {
+  const sameA = thresholdRecord("same-a", { createdAt: "2026-09-22T14:30:00.000Z" });
+  const sameB = thresholdRecord("same-b", { createdAt: "2026-09-23T14:30:00.000Z" });
+  const evidence = thresholdRecord("different-evidence");
+  const estimator = thresholdRecord("different-estimator");
+  const protocol = thresholdRecord("different-protocol");
+  const athlete = thresholdRecord("different-athlete", { athleteId: "athlete-b" });
+  const records = [protocol, sameB, athlete, evidence, sameA, estimator];
+  const contexts = {
+    "same-a": thresholdAssessmentContext({ evidenceSessionIds: ["formal-b", "formal-a"] }),
+    "same-b": thresholdAssessmentContext({ evidenceSessionIds: ["formal-a", "formal-b"] }),
+    "different-evidence": thresholdAssessmentContext({ evidenceSessionIds: ["formal-c"] }),
+    "different-estimator": thresholdAssessmentContext({
+      evidenceSessionIds: ["formal-a", "formal-b"],
+      algorithm: { id: "bike-submax-linear-hr-workload", version: 2 },
+    }),
+    "different-protocol": thresholdAssessmentContext({
+      evidenceSessionIds: ["formal-a", "formal-b"],
+      protocol: { id: "bike-submax-70rpm", version: 2 },
+    }),
+    "different-athlete": thresholdAssessmentContext({ evidenceSessionIds: ["formal-a", "formal-b"] }),
+  };
+  const workouts = Object.fromEntries(records.map((value) => [value.workoutSessionId, thresholdWorkoutContext()]));
+  const analysis = buildThresholdLongitudinalAnalysis(records, contexts, workouts);
+  assert.equal(analysis.sessionCount, 6);
+  assert.equal(analysis.cohorts.length, 5);
+  const shared = analysis.cohorts.find((cohort) => cohort.sessionCount === 2);
+  assert.deepEqual(shared.key.calibration.evidenceSessionIds, ["formal-a", "formal-b"]);
+  assert.deepEqual(shared.sessions.map((session) => session.workoutSessionId), ["same-a", "same-b"]);
+  assert.equal(analysis.cohorts.some((cohort) => cohort.key.calibration.estimator.version === 2), true);
+  assert.equal(analysis.cohorts.some((cohort) => cohort.key.calibration.protocol.version === 2), true);
+  assert.equal(analysis.cohorts.some((cohort) => cohort.key.athleteId === "athlete-b"), true);
+});
+
+test("incomplete calibration identities fail closed instead of pooling under an unavailable key", () => {
+  const missingEvidence = thresholdRecord("missing-evidence");
+  const missingEstimator = thresholdRecord("missing-estimator");
+  const analysis = buildThresholdLongitudinalAnalysis(
+    [missingEstimator, missingEvidence],
+    {
+      "missing-evidence": thresholdAssessmentContext({ evidenceSessionIds: [] }),
+      "missing-estimator": thresholdAssessmentContext({ algorithm: undefined }),
+    },
+    {
+      "missing-evidence": thresholdWorkoutContext(),
+      "missing-estimator": thresholdWorkoutContext(),
+    }
+  );
+  assert.equal(analysis.sessionCount, 0);
+  assert.equal(analysis.cohorts.length, 0);
+  assert.deepEqual(analysis.exclusions.map((value) => value.reason), [
+    "incomplete_calibration_identity", "incomplete_calibration_identity",
+  ]);
+  assert.equal(JSON.stringify(analysis).includes("unavailable"), false);
+});
+
+test("machine, machine profile, and both power-provenance dimensions define separate cohorts", () => {
+  const base = thresholdRecord("base");
+  const otherMachine = thresholdRecord("other-machine");
+  const otherProfile = thresholdRecord("other-profile");
+  const observedCalibrated = thresholdRecord("observed-calibrated", {
+    phases: [phase({
+      intensityId: "threshold",
+      observedPowerProvenance: "calibrated_watts",
+      observedPower: { ...phase().observedPower, provenance: "calibrated_watts" },
+    })],
+  });
+  const formalCalibrated = thresholdRecord("formal-calibrated", {
+    calibrationWorkloadProvenance: "calibrated_at_verified_cadence",
+  });
+  const missingMachine = thresholdRecord("missing-machine");
+  const missingProfile = thresholdRecord("missing-profile");
+  const records = [missingProfile, observedCalibrated, otherMachine, base, formalCalibrated, missingMachine, otherProfile];
+  const contexts = Object.fromEntries(records.map((value) => [value.workoutSessionId,
+    thresholdAssessmentContext(value.workoutSessionId === "formal-calibrated"
+      ? { calibrationProvenance: "calibrated_at_verified_cadence" } : {})]));
+  const workouts = {
+    base: thresholdWorkoutContext(),
+    "other-machine": thresholdWorkoutContext({ machineId: "bike-b" }),
+    "other-profile": thresholdWorkoutContext({ machineProfileVersion: 2 }),
+    "observed-calibrated": thresholdWorkoutContext(),
+    "formal-calibrated": thresholdWorkoutContext(),
+    "missing-machine": thresholdWorkoutContext({ machineId: null }),
+    "missing-profile": thresholdWorkoutContext({ machineProfileVersion: null }),
+  };
+  const analysis = buildThresholdLongitudinalAnalysis(records, contexts, workouts);
+  assert.equal(analysis.sessionCount, 5);
+  assert.equal(analysis.cohorts.length, 5);
+  assert.equal(analysis.cohorts.some((cohort) => cohort.key.machineId === "bike-b"), true);
+  assert.equal(analysis.cohorts.some((cohort) => cohort.key.machineProfileVersion === 2), true);
+  assert.equal(analysis.cohorts.some((cohort) =>
+    cohort.key.observedPowerProvenance === "calibrated_watts"), true);
+  assert.equal(analysis.cohorts.some((cohort) =>
+    cohort.key.calibration.workloadProvenance === "calibrated_at_verified_cadence"), true);
+  assert.deepEqual(analysis.exclusions.map((value) => [value.workoutSessionId, value.reason]), [
+    ["missing-machine", "missing_machine_identity"],
+    ["missing-profile", "missing_machine_profile_identity"],
+  ]);
+});
+
+test("threshold cohorts and sessions are deterministic for scrambled inputs", () => {
+  const laterB = thresholdRecord("b-later", { createdAt: "2026-09-24T14:30:00.000Z" });
+  const earlierB = thresholdRecord("b-earlier", { createdAt: "2026-09-21T14:30:00.000Z" });
+  const onlyA = thresholdRecord("a-only", { createdAt: "2026-09-25T14:30:00.000Z" });
+  const records = [laterB, onlyA, earlierB];
+  const contexts = {
+    "b-later": thresholdAssessmentContext({ evidenceSessionIds: ["formal-b"] }),
+    "b-earlier": thresholdAssessmentContext({ evidenceSessionIds: ["formal-b"] }),
+    "a-only": thresholdAssessmentContext({ evidenceSessionIds: ["formal-a"] }),
+  };
+  const workouts = Object.fromEntries(records.map((value) => [value.workoutSessionId, thresholdWorkoutContext()]));
+  const analysis = buildThresholdLongitudinalAnalysis(records, contexts, workouts);
+  assert.deepEqual(analysis.cohorts.map((cohort) => cohort.key.calibration.evidenceSessionIds[0]),
+    ["formal-a", "formal-b"]);
+  assert.deepEqual(analysis.cohorts[1].sessions.map((session) => session.workoutSessionId),
+    ["b-earlier", "b-later"]);
+  assert.deepEqual(analysis, buildThresholdLongitudinalAnalysis([...records].reverse(), contexts, workouts));
+});
+
+test("threshold metric edge cases remain descriptive and fail safely", () => {
+  const zeroWidth = thresholdRecord("zero-width", {
+    phases: [phase({
+      intensityId: "threshold",
+      candidatePower: { minWatts: 125, maxWatts: 125 },
+      comparison: thresholdComparison(),
+    })],
+  });
+  const positiveWidth = thresholdRecord("positive-width", {
+    createdAt: "2026-09-21T12:30:00.000Z",
+    phases: [phase({
+      intensityId: "threshold",
+      candidatePower: { minWatts: 120, maxWatts: 140 },
+      comparison: thresholdComparison({
+        candidateMidpointWatts: 130,
+        observedInBandMedianWatts: 135,
+        signedDifferenceWatts: 5,
+        absoluteDifferenceWatts: 5,
+        signedDifferencePercent: 5 / 130,
+      }),
+      controllerContext: { ...phase().controllerContext, saturationRatio: 0.2 },
+    })],
+  });
+  const futureAssessment = thresholdRecord("future-assessment");
+  const nonFinite = thresholdRecord("non-finite", {
+    phases: [phase({
+      intensityId: "threshold",
+      comparison: thresholdComparison({ observedInBandMedianWatts: Number.NaN }),
+    })],
+  });
+  const reversed = thresholdRecord("reversed", {
+    phases: [phase({
+      intensityId: "threshold",
+      candidatePower: { minWatts: 140, maxWatts: 120 },
+    })],
+  });
+  const records = [positiveWidth, futureAssessment, reversed, zeroWidth, nonFinite];
+  const contexts = Object.fromEntries(records.map((value) => [value.workoutSessionId,
+    thresholdAssessmentContext(value.workoutSessionId === "future-assessment"
+      ? { observedAt: "2026-09-21T12:30:00.000Z" } : {})]));
+  const workouts = Object.fromEntries(records.map((value) => [value.workoutSessionId,
+    thresholdWorkoutContext(value.workoutSessionId === "future-assessment" ? { machineId: "bike-b" } : {})]));
+  const analysis = buildThresholdLongitudinalAnalysis(records, contexts, workouts);
+  assert.equal(analysis.sessionCount, 3);
+  assert.equal(analysis.cohorts.length, 2);
+  const paired = analysis.cohorts.find((cohort) => cohort.sessionCount === 2);
+  assert.equal(paired.sessions[0].widthNormalizedAbsoluteError, null);
+  assert.equal(paired.sessions[1].widthNormalizedAbsoluteError, 0.25);
+  assert.equal(paired.medianWidthNormalizedAbsoluteError, 0.25);
+  assert.equal(paired.observedSettledWattsCv, 5 / 130);
+  assert.equal(paired.saturationIncidence, 0.5);
+  const single = analysis.cohorts.find((cohort) => cohort.sessionCount === 1);
+  assert.equal(single.observedSettledWattsCv, undefined);
+  assert.equal(single.sessions[0].assessmentAgeDays, null);
+  assert.deepEqual(analysis.exclusions.map((value) => value.reason),
+    ["invalid_longitudinal_metrics", "invalid_longitudinal_metrics"]);
+});
+
+test("threshold transfer requires exactly one characterized threshold phase per workout", () => {
   const later = phase({
     phaseId: "later",
     intensityId: "threshold",
@@ -661,7 +847,7 @@ test("threshold transfer series keeps one phase per workout and omits uncharacte
     }),
   });
   const dual = thresholdRecord("dual", { phases: [later, earlier] });
-  const excluded = thresholdRecord("excluded", {
+  const zero = thresholdRecord("zero", {
     phases: [phase({
       intensityId: "threshold",
       characterizationOutcome: "insufficient_evidence",
@@ -670,10 +856,29 @@ test("threshold transfer series keeps one phase per workout and omits uncharacte
       stableInBandWorkload: undefined,
     })],
   });
-  const analysis = buildThresholdLongitudinalAnalysis([dual, excluded]);
+  const single = thresholdRecord("single");
+  const analysis = buildThresholdLongitudinalAnalysis(
+    [dual, zero, single],
+    {
+      dual: thresholdAssessmentContext(),
+      zero: thresholdAssessmentContext(),
+      single: thresholdAssessmentContext(),
+    },
+    {
+      dual: thresholdWorkoutContext(),
+      zero: thresholdWorkoutContext(),
+      single: thresholdWorkoutContext(),
+    }
+  );
   assert.equal(analysis.sessionCount, 1);
-  assert.equal(analysis.cohorts[0].sessions[0].signedDifferenceWatts, 2);
-  assert.equal(analysis.cohorts[0].sessions[0].observedSettledWatts, 127);
+  assert.equal(analysis.cohorts[0].sessions[0].workoutSessionId, "single");
+  assert.deepEqual(analysis.exclusions, [{
+    workoutSessionId: "dual",
+    createdAt: dual.createdAt,
+    reason: "multiple_threshold_phases",
+  }]);
+  assert.equal(dual.phases.length, 2);
+  assert.equal(zero.phases.length, 1);
 });
 
 test("threshold transfer HTML reports error under HR control and does not score inside-candidate", () => {
@@ -686,7 +891,12 @@ test("threshold transfer HTML reports error under HR control and does not score 
       }),
     })],
   });
-  const model = buildPersonalizationDiagnosticsModel([characterization]);
+  const model = buildPersonalizationDiagnosticsModel(
+    [characterization],
+    EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
+    { "thu-html": thresholdAssessmentContext() },
+    { "thu-html": thresholdWorkoutContext() }
+  );
   const html = personalizationDiagnosticsHtml(model);
   const start = html.indexOf("id=\"personalizationThresholdLongitudinal\"");
   const end = html.indexOf("class=\"personalization-filter-grid\"");
@@ -698,8 +908,9 @@ test("threshold transfer HTML reports error under HR control and does not score 
   assert.match(series, /Median signed error/);
   assert.match(series, /Width-norm error/);
   assert.doesNotMatch(series, /Inside candidate|Observed median inside candidate/);
-  assert.equal(createPersonalizationDiagnosticsExport(model).thresholdLongitudinal.sessionCount, 1);
-  assert.equal(createPersonalizationDiagnosticsExport(model).schemaVersion, 2);
+  const exported = createPersonalizationDiagnosticsExport(model);
+  assert.equal(exported.schemaVersion, 2);
+  assert.equal("thresholdLongitudinal" in exported, false);
 });
 
 test("E3 longitudinal analysis does not bump E2 or enable activation", async () => {

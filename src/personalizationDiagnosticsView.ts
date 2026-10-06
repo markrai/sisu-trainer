@@ -5,6 +5,7 @@ import {
   type PersonalizedPrescriptionCharacterizationAggregateV2,
 } from "./personalizedPrescriptionCharacterization.js";
 import { buildPhasePerformedLoadViews, type PhasePerformedLoadView } from "./performedLoad.js";
+import { canonicalMedian } from "./stats.js";
 import {
   LEGACY_HR_TARGET_RESOLVER_ID,
   LEGACY_HR_TARGET_RESOLVER_VERSION,
@@ -12,7 +13,9 @@ import {
   type PersonalizedPrescriptionCharacterization,
   type PersonalizedPrescriptionCharacterizationV1,
   type PersonalizedPrescriptionEvaluationV1,
+  type PersonalizedPrescriptionFormalAssessmentProvenanceV2,
   type PersonalizedPrescriptionPhaseCharacterizationV1,
+  type PersonalizedPrescriptionWorkloadProvenanceV1,
   type WorkoutSummary,
 } from "./types.js";
 
@@ -122,7 +125,7 @@ export interface TrustedWorkoutHistoryRow {
 export interface FrozenAssessmentDiagnosticContext {
   observedAt: string;
   quality: string;
-  calibrationProvenance: string;
+  calibrationProvenance: PersonalizedPrescriptionWorkloadProvenanceV1;
   observedMinHeartRateBpm: number;
   observedMaxHeartRateBpm: number;
   observedMinWatts: number;
@@ -142,14 +145,50 @@ export interface FrozenWorkoutDiagnosticContext {
   characterizationSchemaVersion: number;
 }
 
+/**
+ * Frozen formal-assessment identity used by the read-time E3 projection.
+ * Regression coefficients plus FitnessState container schema/timestamps are
+ * deliberately excluded: the evidence set plus versioned estimator/protocol
+ * contract defines the deterministic calibration, while workload provenance
+ * distinguishes its units.
+ */
+export interface ThresholdCalibrationIdentity {
+  evidenceSessionIds: string[];
+  estimator: PersonalizedPrescriptionFormalAssessmentProvenanceV2["algorithm"];
+  protocol: PersonalizedPrescriptionFormalAssessmentProvenanceV2["protocol"];
+  workloadProvenance: PersonalizedPrescriptionWorkloadProvenanceV1;
+  observedAt: string;
+}
+
+export interface ThresholdLongitudinalCohortKey {
+  athleteId: string;
+  calibration: ThresholdCalibrationIdentity;
+  observedPowerProvenance: PersonalizedPrescriptionPhaseCharacterizationV1["observedPowerProvenance"];
+  machineId: string;
+  machineProfileVersion: number;
+}
+
+export type ThresholdLongitudinalExclusionReason =
+  | "multiple_threshold_phases"
+  | "incomplete_calibration_identity"
+  | "missing_machine_identity"
+  | "missing_machine_profile_identity"
+  | "invalid_longitudinal_metrics";
+
+export interface ThresholdLongitudinalExclusion {
+  workoutSessionId: string;
+  createdAt: string;
+  reason: ThresholdLongitudinalExclusionReason;
+}
+
 export interface ThresholdLongitudinalSession {
   workoutSessionId: string;
   createdAt: string;
-  calibrationInstanceId: string;
-  calibrationProvenance: string;
-  observedPowerProvenance: string;
-  machineId: string | null;
-  machineProfileVersion: number | null;
+  athleteId: string;
+  calibrationIdentity: ThresholdCalibrationIdentity;
+  observedPowerProvenance: PersonalizedPrescriptionPhaseCharacterizationV1["observedPowerProvenance"];
+  machineId: string;
+  machineProfileVersion: number;
   domainBucket: string;
   candidateMinWatts: number;
   candidateMaxWatts: number;
@@ -165,9 +204,7 @@ export interface ThresholdLongitudinalSession {
 }
 
 export interface ThresholdLongitudinalCohort {
-  calibrationInstanceId: string;
-  calibrationProvenance: string;
-  observedPowerProvenance: string;
+  key: ThresholdLongitudinalCohortKey;
   sessionCount: number;
   sessions: ThresholdLongitudinalSession[];
   medianSignedDifferenceWatts?: number;
@@ -182,18 +219,10 @@ export interface ThresholdLongitudinalCohort {
 export interface ThresholdLongitudinalAnalysis {
   sessionCount: number;
   cohorts: ThresholdLongitudinalCohort[];
+  exclusions: ThresholdLongitudinalExclusion[];
 }
 
-function finiteMedian(values: readonly number[]): number | undefined {
-  const finite = values.filter((value) => typeof value === "number" && Number.isFinite(value));
-  if (finite.length === 0) return undefined;
-  const sorted = [...finite].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? (sorted[middle - 1] + sorted[middle]) / 2
-    : sorted[middle];
-}
-
+/** Population CV for the complete descriptive cohort, not a reliability score. */
 function coefficientOfVariation(values: readonly number[]): number | undefined {
   const finite = values.filter((value) => typeof value === "number" && Number.isFinite(value));
   if (finite.length < 2) return undefined;
@@ -203,18 +232,135 @@ function coefficientOfVariation(values: readonly number[]): number | undefined {
   return Math.sqrt(variance) / Math.abs(mean);
 }
 
-function calibrationInstanceId(context: FrozenAssessmentDiagnosticContext | null | undefined): string {
-  const ids = context?.evidenceSessionIds?.filter((value) => typeof value === "string" && value.trim() !== "");
-  if (!ids || ids.length === 0) return "unavailable";
-  return [...new Set(ids)].sort((a, b) => a.localeCompare(b)).join(",");
+function lexicalCompare(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function calibrationIdentity(
+  context: FrozenAssessmentDiagnosticContext | null | undefined
+): ThresholdCalibrationIdentity | null {
+  const ids = context?.evidenceSessionIds;
+  if (!context || !Array.isArray(ids) || ids.length === 0 ||
+      ids.some((value) => typeof value !== "string" || value.trim() === "") ||
+      !context.algorithm || typeof context.algorithm.id !== "string" || context.algorithm.id.trim() === "" ||
+      !positiveInteger(context.algorithm.version) ||
+      !context.protocol || typeof context.protocol.id !== "string" || context.protocol.id.trim() === "" ||
+      !positiveInteger(context.protocol.version) ||
+      (context.calibrationProvenance !== "measured_watts" &&
+       context.calibrationProvenance !== "calibrated_at_verified_cadence" &&
+       context.calibrationProvenance !== "mixed") ||
+      typeof context.observedAt !== "string" || !Number.isFinite(Date.parse(context.observedAt))) return null;
+  return {
+    evidenceSessionIds: [...new Set(ids)].sort(lexicalCompare),
+    estimator: { ...context.algorithm },
+    protocol: { ...context.protocol },
+    workloadProvenance: context.calibrationProvenance,
+    observedAt: context.observedAt,
+  };
+}
+
+/** E2 createdAt is frozen from WorkoutSummary.endedAt during finalization. */
 function assessmentAgeDays(createdAt: string, observedAt: string | undefined): number | null {
   if (!observedAt) return null;
   const created = Date.parse(createdAt);
   const assessed = Date.parse(observedAt);
-  if (!Number.isFinite(created) || !Number.isFinite(assessed)) return null;
+  if (!Number.isFinite(created) || !Number.isFinite(assessed) || created < assessed) return null;
   return Math.round((created - assessed) / (24 * 60 * 60 * 1000));
+}
+
+function canonicalCohortKey(key: ThresholdLongitudinalCohortKey): string {
+  return JSON.stringify({
+    athleteId: key.athleteId,
+    calibration: {
+      evidenceSessionIds: key.calibration.evidenceSessionIds,
+      estimator: key.calibration.estimator,
+      protocol: key.calibration.protocol,
+      workloadProvenance: key.calibration.workloadProvenance,
+      observedAt: key.calibration.observedAt,
+    },
+    observedPowerProvenance: key.observedPowerProvenance,
+    machineId: key.machineId,
+    machineProfileVersion: key.machineProfileVersion,
+  });
+}
+
+type ThresholdLongitudinalDerivation =
+  | { kind: "eligible"; session: ThresholdLongitudinalSession }
+  | { kind: "ineligible"; exclusion: ThresholdLongitudinalExclusion }
+  | { kind: "not_applicable" };
+
+function deriveThresholdLongitudinalSession(
+  record: PersonalizedPrescriptionCharacterization,
+  assessment: FrozenAssessmentDiagnosticContext | null,
+  workout: FrozenWorkoutDiagnosticContext | null
+): ThresholdLongitudinalDerivation {
+  if (record.activity !== "bike") return { kind: "not_applicable" };
+  const phases = record.phases.filter((phase) =>
+    phase.kind === "work" && phase.intensityId === "threshold" &&
+    phase.characterizationOutcome === "characterized" && phase.candidatePower && phase.comparison
+  );
+  if (phases.length === 0) return { kind: "not_applicable" };
+  const excluded = (reason: ThresholdLongitudinalExclusionReason): ThresholdLongitudinalDerivation => ({
+    kind: "ineligible",
+    exclusion: { workoutSessionId: record.workoutSessionId, createdAt: record.createdAt, reason },
+  });
+  // A multi-interval workout needs an explicit within-session aggregation policy;
+  // E3 must not invent one by selecting a convenient phase.
+  if (phases.length > 1) return excluded("multiple_threshold_phases");
+  const identity = calibrationIdentity(assessment);
+  if (!identity || record.calibrationWorkloadProvenance !== identity.workloadProvenance) {
+    return excluded("incomplete_calibration_identity");
+  }
+  if (!workout || typeof workout.machineId !== "string" || workout.machineId.trim() === "") {
+    return excluded("missing_machine_identity");
+  }
+  if (!positiveInteger(workout.machineProfileVersion)) return excluded("missing_machine_profile_identity");
+  const phase = phases[0];
+  const values = [
+    phase.candidatePower!.minWatts,
+    phase.candidatePower!.maxWatts,
+    phase.comparison!.candidateMidpointWatts,
+    phase.comparison!.observedInBandMedianWatts,
+    phase.comparison!.signedDifferenceWatts,
+    phase.comparison!.absoluteDifferenceWatts,
+    phase.comparison!.signedDifferencePercent,
+    phase.controllerContext.saturationRatio,
+  ];
+  if (!values.every((value) => Number.isFinite(value)) ||
+      phase.candidatePower!.maxWatts < phase.candidatePower!.minWatts ||
+      phase.comparison!.absoluteDifferenceWatts < 0 ||
+      phase.controllerContext.saturationRatio < 0 || phase.controllerContext.saturationRatio > 1) {
+    return excluded("invalid_longitudinal_metrics");
+  }
+  const width = phase.candidatePower!.maxWatts - phase.candidatePower!.minWatts;
+  return {
+    kind: "eligible",
+    session: {
+      workoutSessionId: record.workoutSessionId,
+      createdAt: record.createdAt,
+      athleteId: record.athleteId,
+      calibrationIdentity: identity,
+      observedPowerProvenance: phase.observedPowerProvenance,
+      machineId: workout.machineId,
+      machineProfileVersion: workout.machineProfileVersion,
+      domainBucket: phase.candidateDomainMargins?.bucket ?? "not_applicable",
+      candidateMinWatts: phase.candidatePower!.minWatts,
+      candidateMaxWatts: phase.candidatePower!.maxWatts,
+      candidateWidthWatts: width,
+      candidateMidpointWatts: phase.comparison!.candidateMidpointWatts,
+      observedSettledWatts: phase.comparison!.observedInBandMedianWatts,
+      signedDifferenceWatts: phase.comparison!.signedDifferenceWatts,
+      absoluteDifferenceWatts: phase.comparison!.absoluteDifferenceWatts,
+      signedDifferencePercent: phase.comparison!.signedDifferencePercent,
+      widthNormalizedAbsoluteError: width > 0 ? phase.comparison!.absoluteDifferenceWatts / width : null,
+      saturationRatio: phase.controllerContext.saturationRatio,
+      assessmentAgeDays: assessmentAgeDays(record.createdAt, identity.observedAt),
+    },
+  };
 }
 
 /**
@@ -226,59 +372,35 @@ export function buildThresholdLongitudinalAnalysis(
   assessmentContexts: Readonly<Record<string, FrozenAssessmentDiagnosticContext>> = {},
   workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>> = {}
 ): ThresholdLongitudinalAnalysis {
-  const chosen = new Map<string, { start: number; session: ThresholdLongitudinalSession }>();
+  const sessions: ThresholdLongitudinalSession[] = [];
+  const exclusions: ThresholdLongitudinalExclusion[] = [];
   for (const record of records) {
-    if (record.activity !== "bike") continue;
-    const assessment = assessmentContexts[record.workoutSessionId] ?? null;
-    const workout = workoutContexts[record.workoutSessionId] ?? null;
-    for (const phase of record.phases) {
-      if (phase.kind !== "work" || phase.intensityId !== "threshold") continue;
-      if (phase.characterizationOutcome !== "characterized" || !phase.candidatePower || !phase.comparison) continue;
-      const start = phase.activeStartSec ?? Number.POSITIVE_INFINITY;
-      const existing = chosen.get(record.workoutSessionId);
-      if (existing && start >= existing.start) continue;
-      const width = phase.candidatePower.maxWatts - phase.candidatePower.minWatts;
-      chosen.set(record.workoutSessionId, {
-        start,
-        session: {
-          workoutSessionId: record.workoutSessionId,
-          createdAt: record.createdAt,
-          calibrationInstanceId: calibrationInstanceId(assessment),
-          calibrationProvenance: record.calibrationWorkloadProvenance ?? "unavailable",
-          observedPowerProvenance: phase.observedPowerProvenance,
-          machineId: workout?.machineId ?? null,
-          machineProfileVersion: workout?.machineProfileVersion ?? null,
-          domainBucket: phase.candidateDomainMargins?.bucket ?? "not_applicable",
-          candidateMinWatts: phase.candidatePower.minWatts,
-          candidateMaxWatts: phase.candidatePower.maxWatts,
-          candidateWidthWatts: width,
-          candidateMidpointWatts: phase.comparison.candidateMidpointWatts,
-          observedSettledWatts: phase.comparison.observedInBandMedianWatts,
-          signedDifferenceWatts: phase.comparison.signedDifferenceWatts,
-          absoluteDifferenceWatts: phase.comparison.absoluteDifferenceWatts,
-          signedDifferencePercent: phase.comparison.signedDifferencePercent,
-          widthNormalizedAbsoluteError: width > 0 ? phase.comparison.absoluteDifferenceWatts / width : null,
-          saturationRatio: phase.controllerContext.saturationRatio,
-          assessmentAgeDays: assessmentAgeDays(record.createdAt, assessment?.observedAt),
-        },
-      });
-    }
+    const result = deriveThresholdLongitudinalSession(
+      record,
+      assessmentContexts[record.workoutSessionId] ?? null,
+      workoutContexts[record.workoutSessionId] ?? null
+    );
+    if (result.kind === "eligible") sessions.push(result.session);
+    if (result.kind === "ineligible") exclusions.push(result.exclusion);
   }
-  const sessions = [...chosen.values()]
-    .map((entry) => entry.session)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.workoutSessionId.localeCompare(b.workoutSessionId));
+  sessions.sort((a, b) => lexicalCompare(a.createdAt, b.createdAt) ||
+    lexicalCompare(a.workoutSessionId, b.workoutSessionId));
+  exclusions.sort((a, b) => lexicalCompare(a.createdAt, b.createdAt) ||
+    lexicalCompare(a.workoutSessionId, b.workoutSessionId) || lexicalCompare(a.reason, b.reason));
   const groups = new Map<string, ThresholdLongitudinalSession[]>();
   for (const session of sessions) {
-    const key = JSON.stringify([
-      session.calibrationInstanceId,
-      session.calibrationProvenance,
-      session.observedPowerProvenance,
-    ]);
+    const key = canonicalCohortKey({
+      athleteId: session.athleteId,
+      calibration: session.calibrationIdentity,
+      observedPowerProvenance: session.observedPowerProvenance,
+      machineId: session.machineId,
+      machineProfileVersion: session.machineProfileVersion,
+    });
     const list = groups.get(key) ?? [];
     list.push(session);
     groups.set(key, list);
   }
-  const cohorts = [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, list]) => {
+  const cohorts = [...groups.entries()].sort(([a], [b]) => lexicalCompare(a, b)).map(([, list]) => {
     const signed = list.map((session) => session.signedDifferenceWatts);
     const absolute = list.map((session) => session.absoluteDifferenceWatts);
     const widths = list.map((session) => session.candidateWidthWatts);
@@ -288,18 +410,22 @@ export function buildThresholdLongitudinalAnalysis(
     const ages = list.flatMap((session) => session.assessmentAgeDays === null ? [] : [session.assessmentAgeDays]);
     const saturated = list.filter((session) => session.saturationRatio > 0).length;
     const cohort: ThresholdLongitudinalCohort = {
-      calibrationInstanceId: list[0].calibrationInstanceId,
-      calibrationProvenance: list[0].calibrationProvenance,
-      observedPowerProvenance: list[0].observedPowerProvenance,
+      key: {
+        athleteId: list[0].athleteId,
+        calibration: list[0].calibrationIdentity,
+        observedPowerProvenance: list[0].observedPowerProvenance,
+        machineId: list[0].machineId,
+        machineProfileVersion: list[0].machineProfileVersion,
+      },
       sessionCount: list.length,
       sessions: list,
     };
-    const medianSigned = finiteMedian(signed);
-    const medianAbsolute = finiteMedian(absolute);
-    const medianWidth = finiteMedian(widths);
-    const medianNormalized = finiteMedian(normalized);
+    const medianSigned = canonicalMedian(signed);
+    const medianAbsolute = canonicalMedian(absolute);
+    const medianWidth = canonicalMedian(widths);
+    const medianNormalized = canonicalMedian(normalized);
     const cv = coefficientOfVariation(observed);
-    const medianAge = finiteMedian(ages);
+    const medianAge = canonicalMedian(ages);
     if (medianSigned !== undefined) cohort.medianSignedDifferenceWatts = medianSigned;
     if (medianAbsolute !== undefined) cohort.medianAbsoluteDifferenceWatts = medianAbsolute;
     if (medianWidth !== undefined) cohort.medianCandidateWidthWatts = medianWidth;
@@ -309,7 +435,7 @@ export function buildThresholdLongitudinalAnalysis(
     if (medianAge !== undefined) cohort.medianAssessmentAgeDays = medianAge;
     return cohort;
   });
-  return { sessionCount: sessions.length, cohorts };
+  return { sessionCount: sessions.length, cohorts, exclusions };
 }
 
 function phaseDimensions(record: PersonalizedPrescriptionCharacterization, phase: PersonalizedPrescriptionPhaseCharacterizationV1) {
@@ -590,7 +716,6 @@ export interface PersonalizationDiagnosticsExportV2 {
   aggregate: PersonalizedPrescriptionCharacterizationAggregateV2;
   diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord" | "performedLoadPhase">>;
   characterizationRecords: PersonalizedPrescriptionCharacterization[];
-  thresholdLongitudinal: ThresholdLongitudinalAnalysis;
 }
 
 export type PersonalizationDiagnosticsExport =
@@ -615,13 +740,6 @@ export function createPersonalizationDiagnosticsExport(
     characterizationRecords: [...model.records]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.workoutSessionId.localeCompare(b.workoutSessionId))
       .map((record) => ({ ...record, phases: [...record.phases] })),
-    thresholdLongitudinal: {
-      sessionCount: model.thresholdLongitudinal.sessionCount,
-      cohorts: model.thresholdLongitudinal.cohorts.map((cohort) => ({
-        ...cohort,
-        sessions: cohort.sessions.map((session) => ({ ...session })),
-      })),
-    },
   };
 }
 
@@ -637,6 +755,11 @@ const LABELS: Record<string, string> = {
   unavailable: "Unavailable",
   unspecified: "Unspecified",
   not_applicable: "Not applicable",
+  multiple_threshold_phases: "Multiple characterized threshold phases",
+  incomplete_calibration_identity: "Incomplete formal calibration identity",
+  missing_machine_identity: "Missing historical machine identity",
+  missing_machine_profile_identity: "Missing historical machine-profile identity",
+  invalid_longitudinal_metrics: "Invalid longitudinal metrics",
   aerobic_base: "Aerobic base",
   aerobic_volume: "Aerobic volume",
   inside_candidate: "Inside candidate",
@@ -701,17 +824,17 @@ function formatRatio(value: number | undefined | null): string {
 
 function thresholdLongitudinalHtml(analysis: ThresholdLongitudinalAnalysis): string {
   const note = `<p class="developer-diagnostics-note">Signed error is transfer error under legacy heart-rate control. The live controller searches for the prescribed HR band, so settled watts near the candidate can reflect that search rather than independent prescription quality. This series does not use inside-candidate rate as a success score, and it does not authorize control.</p>`;
+  const exclusions = analysis.exclusions.length === 0 ? "" : `<div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Excluded session</th><th>Date</th><th>Longitudinal reason</th></tr></thead><tbody>${analysis.exclusions.map((exclusion) => `<tr><td>${escapeHtml(exclusion.workoutSessionId)}</td><td>${escapeHtml(new Date(exclusion.createdAt).toLocaleDateString())}</td><td>${escapeHtml(personalizationDiagnosticLabel(exclusion.reason))}</td></tr>`).join("")}</tbody></table></div><p class="developer-diagnostics-note">Excluded sessions remain available in phase-level E2 diagnostics; incomplete identities are never pooled.</p>`;
   if (analysis.sessionCount === 0) {
-    return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-diagnostics-empty"><strong>No characterized bike threshold work sessions yet.</strong><span>Complete a qualifying bike threshold workout after a formal VO₂ assessment to collect session-level transfer error.</span></div></section>`;
+    return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-diagnostics-empty"><strong>No comparable bike threshold work sessions yet.</strong><span>A session requires exactly one characterized threshold phase plus complete frozen calibration and machine identity.</span></div>${exclusions}</section>`;
   }
   const cohorts = analysis.cohorts.map((cohort) => {
-    const machineIds = [...new Set(cohort.sessions.map((session) => session.machineId ?? "unavailable"))];
     const domains = [...new Set(cohort.sessions.map((session) => session.domainBucket))];
     const rows = cohort.sessions.map((session) => `<tr>
       <td>${escapeHtml(new Date(session.createdAt).toLocaleDateString())}</td>
       <td>${escapeHtml(session.workoutSessionId)}</td>
       <td>${session.assessmentAgeDays === null ? "n/a" : `${session.assessmentAgeDays} d`}</td>
-      <td>${escapeHtml(session.machineId ?? "unavailable")}</td>
+      <td>${escapeHtml(`${session.machineId} @ profile ${session.machineProfileVersion}`)}</td>
       <td>${escapeHtml(personalizationDiagnosticLabel(session.domainBucket))}</td>
       <td>${formatOptionalNumber(session.candidateWidthWatts)} W</td>
       <td>${formatOptionalNumber(session.candidateMidpointWatts)} W</td>
@@ -722,22 +845,22 @@ function thresholdLongitudinalHtml(analysis: ThresholdLongitudinalAnalysis): str
       <td>${percent(session.saturationRatio)}</td>
     </tr>`).join("");
     return `<article class="personalization-cohort">
-      <h4>Calibration ${escapeHtml(cohort.calibrationInstanceId)}</h4>
-      <div class="personalization-cohort-tags"><span>${escapeHtml(personalizationDiagnosticLabel(cohort.calibrationProvenance))} calibration</span><span>${escapeHtml(personalizationDiagnosticLabel(cohort.observedPowerProvenance))} observed</span><span>${escapeHtml(machineIds.join(", "))}</span>${domains.map((bucket) => `<span>${escapeHtml(personalizationDiagnosticLabel(bucket))} domain</span>`).join("")}</div>
+      <h4>Calibration ${escapeHtml(cohort.key.calibration.evidenceSessionIds.join(", "))}</h4>
+      <div class="personalization-cohort-tags"><span>${escapeHtml(`${cohort.key.calibration.estimator.id}@${cohort.key.calibration.estimator.version}`)} estimator</span><span>${escapeHtml(`${cohort.key.calibration.protocol.id}@${cohort.key.calibration.protocol.version}`)} protocol</span><span>${escapeHtml(personalizationDiagnosticLabel(cohort.key.calibration.workloadProvenance))} calibration</span><span>${escapeHtml(personalizationDiagnosticLabel(cohort.key.observedPowerProvenance))} observed</span><span>${escapeHtml(`${cohort.key.machineId} @ profile ${cohort.key.machineProfileVersion}`)}</span>${domains.map((bucket) => `<span>${escapeHtml(personalizationDiagnosticLabel(bucket))} domain</span>`).join("")}</div>
       <div class="personalization-metric-grid">
         <div><label>Sessions</label><strong>${cohort.sessionCount}</strong><span>unique bike threshold workouts</span></div>
         <div><label>Median signed error</label><strong>${formatSigned(cohort.medianSignedDifferenceWatts, " W")}</strong><span>candidate midpoint vs settled watts</span></div>
         <div><label>Median absolute error</label><strong>${cohort.medianAbsoluteDifferenceWatts === undefined ? "n/a" : `${formatOptionalNumber(cohort.medianAbsoluteDifferenceWatts)} W`}</strong><span>n = ${cohort.sessionCount} sessions</span></div>
         <div><label>Median candidate width</label><strong>${cohort.medianCandidateWidthWatts === undefined ? "n/a" : `${formatOptionalNumber(cohort.medianCandidateWidthWatts)} W`}</strong><span>max − min candidate watts</span></div>
         <div><label>Median width-normalized error</label><strong>${formatRatio(cohort.medianWidthNormalizedAbsoluteError)}</strong><span>absolute error / candidate width</span></div>
-        <div><label>Observed settled watts CV</label><strong>${cohort.observedSettledWattsCv === undefined ? "n/a" : percent(cohort.observedSettledWattsCv)}</strong><span>session-to-session variability</span></div>
-        <div><label>Saturation incidence</label><strong>${cohort.saturationIncidence === undefined ? "n/a" : percent(cohort.saturationIncidence)}</strong><span>sessions with any R1/R15 saturation</span></div>
+        <div><label>Observed settled watts CV</label><strong>${cohort.observedSettledWattsCv === undefined ? "n/a" : percent(cohort.observedSettledWattsCv)}</strong><span>descriptive population variability</span></div>
+        <div><label>Sessions with any boundary saturation</label><strong>${cohort.saturationIncidence === undefined ? "n/a" : percent(cohort.saturationIncidence)}</strong><span>saturationRatio &gt; 0</span></div>
         <div><label>Median assessment age</label><strong>${cohort.medianAssessmentAgeDays === undefined ? "n/a" : `${Math.round(cohort.medianAssessmentAgeDays)} d`}</strong><span>workout createdAt − frozen E1 observedAt</span></div>
       </div>
       <div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Date</th><th>Session</th><th>Assessment age</th><th>Machine</th><th>Domain</th><th>Candidate width</th><th>Candidate midpoint</th><th>Settled watts</th><th>Signed error</th><th>Abs error</th><th>Width-norm error</th><th>Saturation</th></tr></thead><tbody>${rows}</tbody></table></div>
     </article>`;
   }).join("");
-  return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-count-grid"><div><strong>${analysis.sessionCount}</strong><span>Characterized bike threshold sessions</span></div><div><strong>${analysis.cohorts.length}</strong><span>Calibration-instance × provenance cohorts</span></div></div><div class="personalization-cohorts">${cohorts}</div></section>`;
+  return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-count-grid"><div><strong>${analysis.sessionCount}</strong><span>Comparable bike threshold sessions</span></div><div><strong>${analysis.cohorts.length}</strong><span>Calibration × provenance × machine cohorts</span></div></div><div class="personalization-cohorts">${cohorts}</div>${exclusions}</section>`;
 }
 
 /** Responsive developer presentation only; every number comes from E2 helpers or frozen fields. */
