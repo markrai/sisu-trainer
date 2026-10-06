@@ -127,6 +127,7 @@ function controllerContext(samples, audit, observedDurationSec) {
         upperBoundaryDecisionCount: audit.filter((entry) => entry.kind === "evaluation" && entry.constraint === "r15_cap").length,
     };
 }
+/** Settling timestamps only. Count, stable-R duration, and auto/manual mode are not persisted until E3 shows they are needed. */
 function resistanceChangeSeconds(samples) {
     var _a;
     const changes = new Set();

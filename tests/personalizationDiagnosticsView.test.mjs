@@ -5,6 +5,7 @@ import { readFile } from "node:fs/promises";
 import {
   EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
   buildPersonalizationDiagnosticsModel,
+  buildThresholdLongitudinalAnalysis,
   createPersonalizationDiagnosticsExport,
   extractTrustedPersonalizationAssessmentContexts,
   extractTrustedPersonalizationCharacterizations,
@@ -338,6 +339,9 @@ test("presentation makes candidate non-control semantics, domain, saturation, an
   assert.match(html, /Observed in-band/);
   assert.match(html, /Active prescription is the legacy heart-rate band/);
   assert.match(html, /Bike work \+ threshold is the primary validated scope/);
+  assert.match(html, /Threshold transfer series/);
+  assert.match(html, /does not use inside-candidate rate as a success score/);
+  assert.match(html, /No characterized bike threshold work sessions yet/);
   assert.match(detail, /Assessment domain/);
   assert.match(detail, /Edge/);
   assert.match(detail, /Late vs early HR/);
@@ -448,6 +452,8 @@ test("empty history renders an explanatory no-data state and clean zero aggregat
   const model = buildPersonalizationDiagnosticsModel([]);
   assert.equal(model.aggregate.workoutCount, 0);
   assert.equal(model.rows.length, 0);
+  assert.equal(model.thresholdLongitudinal.sessionCount, 0);
+  assert.equal(model.thresholdLongitudinal.cohorts.length, 0);
   assert.match(personalizationDiagnosticsHtml(model), /No personalization characterization data yet/);
 });
 
@@ -460,6 +466,7 @@ test("diagnostic export is deterministic, provenance-preserving, and excludes pr
   const exported = createPersonalizationDiagnosticsExport(model);
   assert.equal(exported.schemaVersion, 2);
   assert.equal(exported.aggregate.schemaVersion, 2);
+  assert.equal(exported.thresholdLongitudinal.sessionCount, 0);
   assert.equal(exported.characterizationRecords[0].calibrationWorkloadProvenance, "measured_watts");
   assert.equal(exported.characterizationRecords[0].phases[0].candidatePower.minWatts, 110);
   assert.equal(exported.characterizationRecords[0].phases[0].evidenceCoverage.jointCoverageRatio, 1);
@@ -492,6 +499,215 @@ test("UI markup identifies diagnostics as developer-only and keeps normal histor
   assert.match(html, /Candidate watts are experimental predictions[^<]+They did not control the workout/);
   assert.match(html, /Active prescription remains the legacy heart-rate band/);
   assert.match(html, /Observed in-band watts represent settled workload while heart rate was within the legacy target range/);
+  assert.match(html, /it is not an authorization score/);
   assert.match(uiSource, /Personalization evaluation recorded/);
   assert.doesNotMatch(uiSource, /Your personalized target was/);
+});
+
+function thresholdComparison(overrides = {}) {
+  return {
+    candidateMidpointWatts: 125, observedInBandMedianWatts: 125,
+    signedDifferenceWatts: 0, absoluteDifferenceWatts: 0, signedDifferencePercent: 0,
+    candidateContainsObservedMedian: true, candidateObservedOverlapWatts: 10,
+    candidateObservedOverlapRatio: 1, agreement: "inside_candidate",
+    ...overrides,
+  };
+}
+
+function thresholdRecord(id, overrides = {}) {
+  const { phases, ...rest } = overrides;
+  return record(id, {
+    workoutIntent: "threshold",
+    workoutSelector: "Thursday",
+    phases: phases ?? [phase({ intensityId: "threshold", detailName: "Threshold" })],
+    ...rest,
+  });
+}
+
+function frozenEvaluation(evidenceSessionIds, observedAt = "2026-09-18T14:30:00.000Z") {
+  return evaluation({
+    workoutSelector: "Thursday",
+    fitnessEvidenceSnapshot: {
+      metricObservedAt: observedAt,
+      quality: "high",
+      evidenceSessionIds,
+      calibration: {
+        workloadProvenance: "measured_watts",
+        observedMinWatts: 90,
+        observedMaxWatts: 180,
+        points: [{ heartRateBpm: 150 }, { heartRateBpm: 165 }],
+      },
+    },
+  });
+}
+
+test("threshold transfer series is session-level, grouped by calibration instance, and never pools provenance", () => {
+  const sameInstance = ["formal-a"];
+  const first = thresholdRecord("thu-1", {
+    createdAt: "2026-09-25T14:30:00.000Z",
+    phases: [phase({
+      intensityId: "threshold",
+      candidateDomainMargins: { ...phase().candidateDomainMargins, bucket: "interior" },
+      comparison: thresholdComparison(),
+    })],
+  });
+  const second = thresholdRecord("thu-2", {
+    createdAt: "2026-10-02T14:30:00.000Z",
+    phases: [phase({
+      intensityId: "threshold",
+      candidateDomainMargins: { ...phase().candidateDomainMargins, bucket: "interior" },
+      comparison: thresholdComparison({
+        observedInBandMedianWatts: 131, signedDifferenceWatts: 6, absoluteDifferenceWatts: 6,
+        signedDifferencePercent: 6 / 125,
+      }),
+      controllerContext: { ...phase().controllerContext, saturationRatio: 0.2, anyBoundarySaturationSeconds: 36 },
+    })],
+  });
+  const calibrated = thresholdRecord("thu-calibrated", {
+    createdAt: "2026-10-02T14:30:00.000Z",
+    calibrationWorkloadProvenance: "calibrated_at_verified_cadence",
+    phases: [phase({
+      intensityId: "threshold",
+      observedPowerProvenance: "calibrated_watts",
+      observedPower: { ...phase().observedPower, provenance: "calibrated_watts" },
+      comparison: thresholdComparison({
+        observedInBandMedianWatts: 140, signedDifferenceWatts: 15, absoluteDifferenceWatts: 15,
+        signedDifferencePercent: 15 / 125, candidateContainsObservedMedian: true, agreement: "inside_candidate",
+      }),
+    })],
+  });
+  const otherCalibration = thresholdRecord("thu-other", {
+    createdAt: "2026-10-09T14:30:00.000Z",
+    phases: [phase({
+      intensityId: "threshold",
+      comparison: thresholdComparison({
+        observedInBandMedianWatts: 118, signedDifferenceWatts: -7, absoluteDifferenceWatts: 7,
+        signedDifferencePercent: -7 / 125,
+      }),
+    })],
+  });
+  const aerobic = record("monday");
+  const history = [
+    historyRow(first, {
+      day: "Thursday",
+      machine_id: "proform-smart-power-10",
+      machine_profile_version: 1,
+      shadow_prescription_evaluation: frozenEvaluation(sameInstance),
+    }),
+    historyRow(second, {
+      day: "Thursday",
+      machine_id: "proform-smart-power-10",
+      machine_profile_version: 1,
+      shadow_prescription_evaluation: frozenEvaluation(sameInstance),
+    }),
+    historyRow(calibrated, {
+      day: "Thursday",
+      shadow_prescription_evaluation: frozenEvaluation(sameInstance),
+    }),
+    historyRow(otherCalibration, {
+      day: "Thursday",
+      shadow_prescription_evaluation: frozenEvaluation(["formal-b"]),
+    }),
+    historyRow(aerobic),
+  ];
+  const analysis = buildThresholdLongitudinalAnalysis(
+    [first, second, calibrated, otherCalibration, aerobic],
+    extractTrustedPersonalizationAssessmentContexts(history, "athlete-a"),
+    extractTrustedPersonalizationWorkoutContexts(history, "athlete-a")
+  );
+  assert.equal(analysis.sessionCount, 4);
+  assert.equal(analysis.cohorts.length, 3);
+  const measuredSame = analysis.cohorts.find((cohort) =>
+    cohort.calibrationInstanceId === "formal-a" && cohort.observedPowerProvenance === "measured_watts");
+  const calibratedSame = analysis.cohorts.find((cohort) =>
+    cohort.calibrationInstanceId === "formal-a" && cohort.observedPowerProvenance === "calibrated_watts");
+  const other = analysis.cohorts.find((cohort) => cohort.calibrationInstanceId === "formal-b");
+  assert.equal(measuredSame.sessionCount, 2);
+  assert.equal(calibratedSame.sessionCount, 1);
+  assert.equal(other.sessionCount, 1);
+  assert.equal(measuredSame.medianSignedDifferenceWatts, 3);
+  assert.equal(measuredSame.medianAbsoluteDifferenceWatts, 3);
+  assert.equal(measuredSame.medianCandidateWidthWatts, 30);
+  assert.equal(measuredSame.medianWidthNormalizedAbsoluteError, 0.1);
+  assert.equal(measuredSame.saturationIncidence, 0.5);
+  assert.equal(measuredSame.medianAssessmentAgeDays, 10.5);
+  assert.equal(measuredSame.observedSettledWattsCv, 3 / 128);
+  assert.deepEqual(measuredSame.sessions.map((session) => session.workoutSessionId), ["thu-1", "thu-2"]);
+  assert.equal(measuredSame.sessions[0].assessmentAgeDays, 7);
+  assert.equal(measuredSame.sessions[1].assessmentAgeDays, 14);
+  assert.equal(measuredSame.sessions[0].machineId, "proform-smart-power-10");
+  assert.equal(measuredSame.sessions[0].domainBucket, "interior");
+  assert.equal(measuredSame.sessions[1].widthNormalizedAbsoluteError, 6 / 30);
+  assert.equal(calibratedSame.calibrationProvenance, "calibrated_at_verified_cadence");
+});
+
+test("threshold transfer series keeps one phase per workout and omits uncharacterized rows", () => {
+  const later = phase({
+    phaseId: "later",
+    intensityId: "threshold",
+    activeStartSec: 600,
+    comparison: thresholdComparison({
+      observedInBandMedianWatts: 145, signedDifferenceWatts: 20, absoluteDifferenceWatts: 20,
+      signedDifferencePercent: 20 / 125,
+    }),
+  });
+  const earlier = phase({
+    phaseId: "earlier",
+    intensityId: "threshold",
+    activeStartSec: 180,
+    comparison: thresholdComparison({
+      observedInBandMedianWatts: 127, signedDifferenceWatts: 2, absoluteDifferenceWatts: 2,
+      signedDifferencePercent: 2 / 125,
+    }),
+  });
+  const dual = thresholdRecord("dual", { phases: [later, earlier] });
+  const excluded = thresholdRecord("excluded", {
+    phases: [phase({
+      intensityId: "threshold",
+      characterizationOutcome: "insufficient_evidence",
+      exclusionReason: "insufficient_settled_in_band_evidence",
+      comparison: undefined,
+      stableInBandWorkload: undefined,
+    })],
+  });
+  const analysis = buildThresholdLongitudinalAnalysis([dual, excluded]);
+  assert.equal(analysis.sessionCount, 1);
+  assert.equal(analysis.cohorts[0].sessions[0].signedDifferenceWatts, 2);
+  assert.equal(analysis.cohorts[0].sessions[0].observedSettledWatts, 127);
+});
+
+test("threshold transfer HTML reports error under HR control and does not score inside-candidate", () => {
+  const characterization = thresholdRecord("thu-html", {
+    phases: [phase({
+      intensityId: "threshold",
+      comparison: thresholdComparison({
+        observedInBandMedianWatts: 131, signedDifferenceWatts: 6, absoluteDifferenceWatts: 6,
+        signedDifferencePercent: 6 / 125, agreement: "inside_candidate",
+      }),
+    })],
+  });
+  const model = buildPersonalizationDiagnosticsModel([characterization]);
+  const html = personalizationDiagnosticsHtml(model);
+  const start = html.indexOf("id=\"personalizationThresholdLongitudinal\"");
+  const end = html.indexOf("class=\"personalization-filter-grid\"");
+  const series = html.slice(start, end);
+  assert.match(series, /Threshold transfer series/);
+  assert.match(series, /transfer error under legacy heart-rate control/);
+  assert.match(series, /does not use inside-candidate rate as a success score/);
+  assert.match(series, /does not authorize control/);
+  assert.match(series, /Median signed error/);
+  assert.match(series, /Width-norm error/);
+  assert.doesNotMatch(series, /Inside candidate|Observed median inside candidate/);
+  assert.equal(createPersonalizationDiagnosticsExport(model).thresholdLongitudinal.sessionCount, 1);
+  assert.equal(createPersonalizationDiagnosticsExport(model).schemaVersion, 2);
+});
+
+test("E3 longitudinal analysis does not bump E2 or enable activation", async () => {
+  const characterizationSource = await readFile(new URL("../src/personalizedPrescriptionCharacterization.ts", import.meta.url), "utf8");
+  const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
+  assert.match(characterizationSource, /Settling timestamps only/);
+  assert.doesNotMatch(characterizationSource, /resistanceChangeCount|settledStableResistanceSeconds|actuationMode|automaticControlEnabled/);
+  assert.doesNotMatch(typesSource, /resistanceChangeCount|settledStableResistanceSeconds|actuationMode/);
+  assert.match(typesSource, /activationEligible: false/);
+  assert.doesNotMatch(typesSource, /activationEligible: true/);
 });

@@ -275,6 +275,7 @@ function controllerContext(
   };
 }
 
+/** Settling timestamps only. Count, stable-R duration, and auto/manual mode are not persisted until E3 shows they are needed. */
 function resistanceChangeSeconds(samples: readonly OrdinaryBikeTelemetrySample[]): number[] {
   const changes = new Set<number>();
   let previousObserved: number | undefined;
