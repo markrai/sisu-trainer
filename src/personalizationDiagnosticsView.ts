@@ -21,8 +21,10 @@ import {
   type PersonalizedPrescriptionCharacterizationExclusionReasonV1,
   type PersonalizedPrescriptionCharacterization,
   type PersonalizedPrescriptionCharacterizationV1,
+  type PersonalizedPrescriptionCharacterizationV2,
   type PersonalizedPrescriptionEvaluationV1,
   type PersonalizedPrescriptionFormalAssessmentProvenanceV2,
+  type PersonalizedPrescriptionHeldWorkloadForwardResponseV1,
   type PersonalizedPrescriptionPhaseCharacterizationV1,
   type PersonalizedPrescriptionWorkloadProvenanceV1,
   type WorkoutSummary,
@@ -59,8 +61,9 @@ export const EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS: PersonalizationDiagnosti
 
 export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V1 = 1 as const;
 export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2 = 2 as const;
+export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V3 = 3 as const;
 export const PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION =
-  PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2;
+  PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V3;
 
 export interface PersonalizationDiagnosticsFilterOptions {
   workoutIntent: string[];
@@ -115,6 +118,24 @@ export interface PersonalizationEvidenceCollectionSummary {
   exclusionCounts: Record<PersonalizedPrescriptionCharacterizationExclusionReasonV1, number>;
 }
 
+/**
+ * All-record E2 v3 held-workload forward-response counts. Phase medians are
+ * summarized across phases; filters never affect this summary. Descriptive only.
+ */
+export interface PersonalizationHeldWorkloadForwardSummary {
+  recordsWithHeldWorkloadEvidence: number;
+  phasesWithHeldWorkloadSummary: number;
+  characterizedPhases: number;
+  measuredWattsCharacterizedPhases: number;
+  calibratedWattsCharacterizedPhases: number;
+  stableWindowCount: number;
+  qualifyingWindowCount: number;
+  qualifyingDurationSec: number;
+  outsideCalibrationDomainSeconds: number;
+  medianPhaseSignedErrorBpm?: number;
+  medianPhaseAbsoluteErrorBpm?: number;
+}
+
 export interface PersonalizationDiagnosticsModel {
   filters: PersonalizationDiagnosticsFilters;
   filterOptions: PersonalizationDiagnosticsFilterOptions;
@@ -125,6 +146,8 @@ export interface PersonalizationDiagnosticsModel {
   exclusionCounts: Record<PersonalizedPrescriptionCharacterizationExclusionReasonV1, number>;
   evidenceCollectionSummary: PersonalizationEvidenceCollectionSummary;
   thresholdLongitudinal: ThresholdLongitudinalAnalysis;
+  /** Runtime-only; never exported. */
+  heldWorkloadForward: PersonalizationHeldWorkloadForwardSummary;
   /**
    * Runtime-only E4A scientific assessments under the frozen production
    * policy. Developer diagnostics only: never exported, never persisted,
@@ -663,13 +686,63 @@ export function summarizePersonalizationEvidenceCollection(
   };
 }
 
+/** Shallow record copy with a subset of its own phases; the record's schema version is preserved. */
+function withPhases(
+  record: PersonalizedPrescriptionCharacterization,
+  phases: readonly PersonalizedPrescriptionPhaseCharacterizationV1[]
+): PersonalizedPrescriptionCharacterization {
+  return { ...record, phases: [...phases] } as PersonalizedPrescriptionCharacterization;
+}
+
+function heldWorkloadResponseOf(
+  phase: PersonalizedPrescriptionPhaseCharacterizationV1
+): PersonalizedPrescriptionHeldWorkloadForwardResponseV1 | undefined {
+  return "heldWorkloadForwardResponse" in phase
+    ? (phase as { heldWorkloadForwardResponse: PersonalizedPrescriptionHeldWorkloadForwardResponseV1 })
+      .heldWorkloadForwardResponse
+    : undefined;
+}
+
+/** All-record held-workload forward-response summary. Filters never affect it. */
+export function summarizeHeldWorkloadForwardEvidence(
+  records: readonly PersonalizedPrescriptionCharacterization[]
+): PersonalizationHeldWorkloadForwardSummary {
+  const held = records.flatMap((record) => record.phases.flatMap((phase) => {
+    const response = heldWorkloadResponseOf(phase);
+    return response ? [{ record, response }] : [];
+  }));
+  const characterized = held.filter(({ response }) =>
+    response.outcome === "characterized" && response.forwardHeartRate !== undefined);
+  const sum = (select: (response: PersonalizedPrescriptionHeldWorkloadForwardResponseV1) => number) =>
+    held.reduce((total, { response }) => total + select(response), 0);
+  const signed = canonicalMedian(characterized.map(({ response }) => response.forwardHeartRate!.signedErrorBpm.median));
+  const absolute = canonicalMedian(characterized.map(({ response }) =>
+    response.forwardHeartRate!.absoluteErrorBpm.median));
+  return {
+    recordsWithHeldWorkloadEvidence: new Set(held.map(({ record }) => record.workoutSessionId)).size,
+    phasesWithHeldWorkloadSummary: held.length,
+    characterizedPhases: characterized.length,
+    measuredWattsCharacterizedPhases: characterized.filter(({ response }) =>
+      response.observedPowerProvenance === "measured_watts").length,
+    calibratedWattsCharacterizedPhases: characterized.filter(({ response }) =>
+      response.observedPowerProvenance === "calibrated_watts").length,
+    stableWindowCount: sum((response) => response.stableResistance?.stableWindowCount ?? 0),
+    qualifyingWindowCount: sum((response) => response.stableResistance?.qualifyingWindowCount ?? 0),
+    qualifyingDurationSec: sum((response) => response.stableResistance?.qualifyingDurationSec ?? 0),
+    outsideCalibrationDomainSeconds: sum((response) =>
+      response.stableResistance?.excludedPostSettlingSeconds.outsideCalibrationDomain ?? 0),
+    ...(signed !== undefined ? { medianPhaseSignedErrorBpm: signed } : {}),
+    ...(absolute !== undefined ? { medianPhaseAbsoluteErrorBpm: absolute } : {}),
+  };
+}
+
 export function filterPersonalizationCharacterizations(
   records: readonly PersonalizedPrescriptionCharacterization[],
   filters: PersonalizationDiagnosticsFilters
 ): PersonalizedPrescriptionCharacterization[] {
   return records.flatMap((record) => {
     const phases = record.phases.filter((phase) => phaseMatchesFilters(record, phase, filters));
-    return phases.length > 0 ? [{ ...record, phases: [...phases] }] : [];
+    return phases.length > 0 ? [withPhases(record, phases)] : [];
   });
 }
 
@@ -714,6 +787,7 @@ export function buildPersonalizationDiagnosticsModel(
     exclusionCounts,
     evidenceCollectionSummary: summarizePersonalizationEvidenceCollection(records),
     thresholdLongitudinal: buildThresholdLongitudinalAnalysis(records, assessmentContexts, workoutContexts),
+    heldWorkloadForward: summarizeHeldWorkloadForwardEvidence(records),
     scientificAssessments: scientificAssessmentEvaluatedAt === null
       ? []
       : buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts,
@@ -752,29 +826,42 @@ export interface PersonalizationDiagnosticsExportV1 {
   characterizationRecords: PersonalizedPrescriptionCharacterizationV1[];
 }
 
+type ExportedDiagnosticRow = Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord" | "performedLoadPhase">;
+
+/**
+ * Permanent historical export contract. Its record contract is exactly the E2
+ * versions that existed when it was current (v1 and v2); it can never carry an
+ * E2 v3 record.
+ */
 export interface PersonalizationDiagnosticsExportV2 {
   schemaVersion: typeof PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2;
   filters: PersonalizationDiagnosticsFilters;
   aggregate: PersonalizedPrescriptionCharacterizationAggregateV2;
-  diagnosticRows: Array<Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord" | "performedLoadPhase">>;
+  diagnosticRows: ExportedDiagnosticRow[];
+  characterizationRecords: Array<PersonalizedPrescriptionCharacterizationV1 | PersonalizedPrescriptionCharacterizationV2>;
+}
+
+/**
+ * Current export. Same durable fields as v2; the bump only admits E2 v3
+ * records. Runtime projections (E3 series, held-workload summary, E4A) stay
+ * unexported.
+ */
+export interface PersonalizationDiagnosticsExportV3 {
+  schemaVersion: typeof PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V3;
+  filters: PersonalizationDiagnosticsFilters;
+  aggregate: PersonalizedPrescriptionCharacterizationAggregateV2;
+  diagnosticRows: ExportedDiagnosticRow[];
   characterizationRecords: PersonalizedPrescriptionCharacterization[];
 }
 
 export type PersonalizationDiagnosticsExport =
   | PersonalizationDiagnosticsExportV1
-  | PersonalizationDiagnosticsExportV2;
-export type CurrentPersonalizationDiagnosticsExport = PersonalizationDiagnosticsExportV2;
+  | PersonalizationDiagnosticsExportV2
+  | PersonalizationDiagnosticsExportV3;
+export type CurrentPersonalizationDiagnosticsExport = PersonalizationDiagnosticsExportV3;
 
-/**
- * Stable local export. It includes immutable E2 records, never profile data or raw HR traces.
- * The v2 contract is exactly schemaVersion, filters, aggregate, diagnosticRows,
- * characterizationRecords; runtime-only analyses (E3 series, E4A) are never exported.
- */
-export function createPersonalizationDiagnosticsExport(
-  model: PersonalizationDiagnosticsModel
-): PersonalizationDiagnosticsExportV2 {
+function exportBody(model: PersonalizationDiagnosticsModel) {
   return {
-    schemaVersion: PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION,
     filters: { ...model.filters },
     aggregate: model.aggregate,
     diagnosticRows: model.rows.map(({
@@ -785,8 +872,35 @@ export function createPersonalizationDiagnosticsExport(
     }) => row),
     characterizationRecords: [...model.records]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.workoutSessionId.localeCompare(b.workoutSessionId))
-      .map((record) => ({ ...record, phases: [...record.phases] })),
+      .map((record) => withPhases(record, record.phases)),
   };
+}
+
+/**
+ * Stable local export. It includes immutable E2 records, never profile data or raw HR traces.
+ * The contract is exactly schemaVersion, filters, aggregate, diagnosticRows,
+ * characterizationRecords; runtime-only analyses (E3 series, held-workload
+ * summary, E4A) are never exported.
+ */
+export function createPersonalizationDiagnosticsExport(
+  model: PersonalizationDiagnosticsModel
+): PersonalizationDiagnosticsExportV3 {
+  return { schemaVersion: PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V3, ...exportBody(model) };
+}
+
+/**
+ * Historical export-v2 writer. Fails closed (null) when the model holds any
+ * record outside the v2 record contract, rather than widening or relabeling it.
+ */
+export function createHistoricalPersonalizationDiagnosticsExportV2(
+  model: PersonalizationDiagnosticsModel
+): PersonalizationDiagnosticsExportV2 | null {
+  const body = exportBody(model);
+  const records = body.characterizationRecords.filter(
+    (record): record is PersonalizedPrescriptionCharacterizationV1 | PersonalizedPrescriptionCharacterizationV2 =>
+      record.schemaVersion === 1 || record.schemaVersion === 2);
+  if (records.length !== body.characterizationRecords.length) return null;
+  return { schemaVersion: PERSONALIZATION_DIAGNOSTICS_EXPORT_SCHEMA_VERSION_V2, ...body, characterizationRecords: records };
 }
 
 export function personalizationDiagnosticsExportJson(model: PersonalizationDiagnosticsModel): string {
@@ -825,6 +939,9 @@ const LABELS: Record<string, string> = {
   insufficient_settled_in_band_evidence: "Insufficient settled in-target evidence",
   unsupported_power_provenance: "Unsupported or mixed power source",
   phase_evidence_unavailable: "Phase evidence unavailable",
+  calibration_unavailable: "Frozen calibration unavailable",
+  no_stable_observed_resistance: "No stable observed resistance",
+  insufficient_post_settling_evidence: "Insufficient post-settling evidence",
   edge: "Edge",
   interior: "Interior",
   high: "High",
@@ -909,6 +1026,35 @@ function thresholdLongitudinalHtml(analysis: ThresholdLongitudinalAnalysis): str
   return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-count-grid"><div><strong>${analysis.sessionCount}</strong><span>Comparable bike threshold sessions</span></div><div><strong>${analysis.cohorts.length}</strong><span>Calibration × provenance × machine cohorts</span></div></div><div class="personalization-cohorts">${cohorts}</div>${exclusions}</section>`;
 }
 
+const HELD_WORKLOAD_NOTE = `<p class="developer-diagnostics-note">Held-workload forward-response evidence: observed watts while observed resistance stays unchanged, after a settling interval, are mapped through the frozen formal calibration to a predicted heart rate (signed error = observed HR − predicted HR). It is not filtered by legacy heart-rate target occupancy. The live controller may have chosen the held resistance, so this is not independent open-loop evidence, and it does not authorize control.</p>`;
+
+function heldWorkloadForwardHtml(summary: PersonalizationHeldWorkloadForwardSummary): string {
+  if (summary.phasesWithHeldWorkloadSummary === 0) {
+    return `<section class="personalization-longitudinal" id="personalizationHeldWorkloadForward"><h4>Held-workload forward-response evidence</h4>${HELD_WORKLOAD_NOTE}<div class="personalization-diagnostics-empty"><strong>No E2 v3 held-workload evidence yet.</strong><span>Workouts characterized before E2 v3 carry closed-loop transfer evidence only.</span></div></section>`;
+  }
+  return `<section class="personalization-longitudinal" id="personalizationHeldWorkloadForward"><h4>Held-workload forward-response evidence</h4>${HELD_WORKLOAD_NOTE}<div class="personalization-count-grid">
+      <div><strong>${summary.recordsWithHeldWorkloadEvidence}</strong><span>Workouts with E2 v3 held-workload summaries</span></div>
+      <div><strong>${summary.characterizedPhases} / ${summary.phasesWithHeldWorkloadSummary}</strong><span>Characterized / summarized phases</span></div>
+      <div><strong>${summary.qualifyingWindowCount} / ${summary.stableWindowCount}</strong><span>Qualifying / stable observed-resistance windows</span></div>
+      <div><strong>${summary.qualifyingDurationSec} s</strong><span>Post-settling qualifying duration</span></div>
+      <div><strong>${formatSigned(summary.medianPhaseSignedErrorBpm, " bpm")}</strong><span>Median phase forward HR signed error</span></div>
+      <div><strong>${summary.medianPhaseAbsoluteErrorBpm === undefined ? "n/a" : `${formatOptionalNumber(summary.medianPhaseAbsoluteErrorBpm)} bpm`}</strong><span>Median phase forward HR absolute error</span></div>
+      <div><strong>${summary.measuredWattsCharacterizedPhases} / ${summary.calibratedWattsCharacterizedPhases}</strong><span>Measured / calibrated watts characterized phases</span></div>
+      <div><strong>${summary.outsideCalibrationDomainSeconds} s</strong><span>Excluded outside calibration watt domain</span></div>
+    </div></section>`;
+}
+
+function heldWorkloadDetailHtml(response: PersonalizedPrescriptionHeldWorkloadForwardResponseV1 | undefined): string {
+  if (!response) {
+    return `<section><h5>Held-workload forward-response evidence</h5><dl>${detailRow("Availability", "not recorded (pre-E2 v3 record)")}</dl></section>`;
+  }
+  const stable = response.stableResistance;
+  const forward = response.forwardHeartRate;
+  const excluded = stable?.excludedPostSettlingSeconds;
+  const signed = (value: number) => `${value > 0 ? "+" : ""}${formatOptionalNumber(value)}`;
+  return `<section><h5>Held-workload forward-response evidence</h5><dl>${detailRow("Outcome", personalizationDiagnosticLabel(response.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel(response.exclusionReason ?? "none"))}${detailRow("Observed power", personalizationDiagnosticLabel(response.observedPowerProvenance))}${detailRow("Stable / qualifying windows", stable ? `${stable.stableWindowCount} / ${stable.qualifyingWindowCount}` : "n/a")}${detailRow("Stable / post-settling / qualifying duration", stable ? `${stable.stableDurationSec} / ${stable.postSettlingDurationSec} / ${stable.qualifyingDurationSec} sec` : "n/a")}${detailRow("Observed resistance changes", stable?.observedResistanceChangeCount)}${detailRow("Excluded: gap / no watts / outside domain / no HR", excluded ? `${excluded.observationGap} / ${excluded.wattsUnavailable} / ${excluded.outsideCalibrationDomain} / ${excluded.heartRateUnavailable} sec` : "n/a")}${detailRow("Observed / predicted HR median", forward ? `${formatOptionalNumber(forward.observedHeartRateMedianBpm)} / ${formatOptionalNumber(forward.predictedHeartRateMedianBpm)} bpm` : "n/a")}${detailRow("Forward HR signed error median / IQR", forward ? `${signed(forward.signedErrorBpm.median)} bpm / ${signed(forward.signedErrorBpm.q1)}–${signed(forward.signedErrorBpm.q3)} bpm` : "n/a")}${detailRow("Forward HR absolute error median / max", forward ? `${formatOptionalNumber(forward.absoluteErrorBpm.median)} / ${formatOptionalNumber(forward.absoluteErrorBpm.max)} bpm` : "n/a")}${detailRow("Cadence median / IQR", response.cadenceRpm ? `${formatOptionalNumber(response.cadenceRpm.median)} rpm / ${formatOptionalNumber(response.cadenceRpm.q1)}–${formatOptionalNumber(response.cadenceRpm.q3)} rpm` : "n/a")}</dl></section>`;
+}
+
 function scientificAssessmentsHtml(assessments: readonly ScientificAssessment[]): string {
   const note = `<p class="developer-diagnostics-note">E4A scientific assessment over comparable frozen E1/E2 evidence. Scientific state is not product authorization and has no runtime authority. Under the production policy, open-loop and actuation-mode evidence are required but unavailable, so eligible is unreachable.</p>`;
   if (assessments.length === 0) {
@@ -920,7 +1066,7 @@ function scientificAssessmentsHtml(assessments: readonly ScientificAssessment[])
     const gates = assessment.gates.map((gate) => `<tr><td>${escapeHtml(gate.id)}</td><td>${escapeHtml(gate.status)}</td><td>${escapeHtml(gate.reasonCode ?? "")}</td></tr>`).join("");
     return `<article class="personalization-cohort">
       <h4>${escapeHtml(scientificSubjectKey(subject))} · ${escapeHtml(personalizationDiagnosticLabel(assessment.state))}</h4>
-      <dl>${detailRow("Scientific state", assessment.state)}${detailRow("Runtime authority", assessment.runtimeAuthority ? "yes" : "no")}${detailRow("Subject", `${subject.athleteId} · ${subject.activity} ${subject.phaseKind} · ${subject.intensityId} · ${subject.modality} · ${subject.legacyHrBand.minBpm}–${subject.legacyHrBand.maxBpm} bpm`)}${detailRow("Calibration", `${digest.calibrationInstanceId} · ${subject.calibration.estimatorId}@${subject.calibration.estimatorVersion} · ${subject.calibration.protocolId}@${subject.calibration.protocolVersion}`)}${detailRow("Assessor", `${assessment.assessor.id}@${assessment.assessor.version}`)}${detailRow("Policy", `${assessment.policy.id}@${assessment.policy.version}`)}${detailRow("Reason codes", assessment.reasonCodes.length === 0 ? "none" : assessment.reasonCodes.join(", "))}${detailRow("Sessions / distinct dates", `${digest.sessionCount} / ${digest.distinctDateCount}`)}${detailRow("Excluded (identity / multi-phase / invalid)", `${digest.excludedIncompleteIdentitySessions} / ${digest.excludedMultiPhaseSessions} / ${digest.ignoredInvalidSessions}`)}${detailRow("Machine / profile", `${subject.machineId} / v${subject.machineProfileVersion}`)}${detailRow("Power provenance (calibration / observed)", `${personalizationDiagnosticLabel(subject.calibration.workloadProvenance)} / ${personalizationDiagnosticLabel(subject.observedPowerProvenance)}`)}</dl>
+      <dl>${detailRow("Scientific state", assessment.state)}${detailRow("Runtime authority", assessment.runtimeAuthority ? "yes" : "no")}${detailRow("Subject", `${subject.athleteId} · ${subject.activity} ${subject.phaseKind} · ${subject.intensityId} · ${subject.modality} · ${subject.legacyHrBand.minBpm}–${subject.legacyHrBand.maxBpm} bpm`)}${detailRow("Calibration", `${digest.calibrationInstanceId} · ${subject.calibration.estimatorId}@${subject.calibration.estimatorVersion} · ${subject.calibration.protocolId}@${subject.calibration.protocolVersion}`)}${detailRow("Assessor", `${assessment.assessor.id}@${assessment.assessor.version}`)}${detailRow("Policy", `${assessment.policy.id}@${assessment.policy.version}`)}${detailRow("Reason codes", assessment.reasonCodes.length === 0 ? "none" : assessment.reasonCodes.join(", "))}${detailRow("Sessions / distinct dates", `${digest.sessionCount} / ${digest.distinctDateCount}`)}${detailRow("Excluded (identity / multi-phase / invalid)", `${digest.excludedIncompleteIdentitySessions} / ${digest.excludedMultiPhaseSessions} / ${digest.ignoredInvalidSessions}`)}${detailRow("Machine / profile", `${subject.machineId} / v${subject.machineProfileVersion}`)}${detailRow("Power provenance (calibration / observed)", `${personalizationDiagnosticLabel(subject.calibration.workloadProvenance)} / ${personalizationDiagnosticLabel(subject.observedPowerProvenance)}`)}${detailRow("Held-workload forward sessions (descriptive, not open-loop)", `${digest.heldWorkloadForwardSessionCount} · signed ${digest.medianHeldWorkloadForwardSignedErrorBpm === null ? "n/a" : formatSigned(digest.medianHeldWorkloadForwardSignedErrorBpm, " bpm")} · absolute ${digest.medianHeldWorkloadForwardAbsoluteErrorBpm === null ? "n/a" : `${digest.medianHeldWorkloadForwardAbsoluteErrorBpm} bpm`}`)}</dl>
       <div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Gate</th><th>Status</th><th>Reason</th></tr></thead><tbody>${gates}</tbody></table></div>
     </article>`;
   }).join("");
@@ -983,6 +1129,7 @@ export function personalizationDiagnosticsHtml(model: PersonalizationDiagnostics
     <div class="personalization-exclusions"><h4>Exclusions in all persisted evidence</h4>${allEvidenceExclusions}</div>
   </section>
     ${thresholdLongitudinalHtml(model.thresholdLongitudinal)}
+    ${heldWorkloadForwardHtml(model.heldWorkloadForward)}
     ${scientificAssessmentsHtml(model.scientificAssessments)}
     <div class="personalization-filter-grid">${filtersHtml}</div>
     <div class="personalization-count-grid"><div><strong>${aggregate.workoutCount}</strong><span>Completed workouts with E2 data</span></div><div><strong>${aggregate.candidatePhases}</strong><span>Candidate phases</span></div><div><strong>${aggregate.evaluableCandidatePhases}</strong><span>Evaluable candidate phases</span></div><div><strong>${aggregate.fallbackPhases}</strong><span>Fallback phases</span></div></div>
@@ -1047,5 +1194,6 @@ export function personalizationDiagnosticDetailHtml(row: PersonalizationDiagnost
     <section><h5>Observed response</h5><dl>${detailRow("Planned / observed duration", `${coverage.plannedDurationSec} / ${coverage.observedDurationSec} sec`)}${detailRow("HR / power / joint coverage", `${percent(coverage.hrCoverageRatio)} / ${percent(coverage.powerCoverageRatio)} / ${percent(coverage.jointCoverageRatio)}`)}${detailRow("HR median / min / max", heartRate ? `${heartRate.medianBpm} / ${heartRate.minBpm} / ${heartRate.maxBpm} bpm` : "n/a")}${detailRow("HR seconds below / inside / above", heartRate ? `${heartRate.belowBandSeconds} / ${heartRate.insideBandSeconds} / ${heartRate.aboveBandSeconds}` : "n/a")}${detailRow("Power median / IQR / min / max", power ? `${power.medianWatts} / ${power.q1Watts}–${power.q3Watts} / ${power.minWatts}–${power.maxWatts} W` : "n/a")}${detailRow("Power seconds below / inside / above candidate", power ? `${power.belowCandidateSeconds} / ${power.insideCandidateSeconds} / ${power.aboveCandidateSeconds}` : "n/a")}${detailRow("Settled in-band samples", stable?.sampleCount)}${detailRow("Settled median / IQR", stable ? `${stable.medianWatts} W / ${stable.q1Watts}–${stable.q3Watts} W` : "n/a")}${detailRow("Late vs early HR", signed(heartRate?.heartRateChangeLateVsEarlyBpm, " bpm"))}${detailRow("Controller saturation", `${percent(controller.saturationRatio)} · lower ${controller.lowerBoundaryDecisionCount}, upper ${controller.upperBoundaryDecisionCount} decisions`)}${detailRow("Observed watts (response)", formatOptionalWatts(performed?.wattsMedian))}${detailRow("Observed resistance (response)", performed?.observedResistanceMedian === undefined ? "unavailable" : String(performed.observedResistanceMedian))}${detailRow("Cadence (response)", formatOptionalRpm(performed?.cadenceMedianRpm))}${detailRow("Bike-row coverage (response)", formatOptionalPercent(performed?.observedResistanceCoverageRatio ?? performed?.freshBikeRowCoverageRatio))}</dl></section>
     <section><h5>Frozen evidence provenance</h5><dl>${detailRow("App version", workout?.appVersion ?? "unavailable")}${detailRow("Machine", workout?.machineId ?? "unavailable")}${detailRow("Machine profile version", workout?.machineProfileVersion ?? "unavailable")}${detailRow("Active / E1 / E2 schema", workout ? `${workout.activePrescriptionSchemaVersion ?? "n/a"} / ${workout.shadowSchemaVersion ?? "n/a"} / ${workout.characterizationSchemaVersion}` : "n/a")}${detailRow("Assessment evidence sessions", assessment?.evidenceSessionIds?.join(", ") ?? "n/a")}${detailRow("Assessment algorithm", assessment?.algorithm ? `${assessment.algorithm.id}@${assessment.algorithm.version}` : "n/a")}${detailRow("Assessment protocol", assessment?.protocol ? `${assessment.protocol.id}@${assessment.protocol.version}` : "n/a")}</dl></section>
     <section><h5>Frozen assessment context</h5><dl>${detailRow("Assessment date", assessment ? new Date(assessment.observedAt).toLocaleDateString() : "n/a")}${detailRow("Assessment quality", personalizationDiagnosticLabel(assessment?.quality ?? record.formalAssessmentQuality ?? "unavailable"))}${detailRow("Calibration provenance", personalizationDiagnosticLabel(assessment?.calibrationProvenance ?? record.calibrationWorkloadProvenance ?? "unavailable"))}${detailRow("Calibration HR range", assessment ? `${assessment.observedMinHeartRateBpm}–${assessment.observedMaxHeartRateBpm} bpm` : "n/a")}${detailRow("Calibration watt range", assessment ? `${assessment.observedMinWatts}–${assessment.observedMaxWatts} W` : "n/a")}${detailRow("Candidate watts", row.candidateWatts)}${detailRow("Assessment domain", personalizationDiagnosticLabel(row.assessmentDomain))}${detailRow("Domain HR margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.heartRateToLowerBoundaryBpm} / ${phase.candidateDomainMargins.heartRateToUpperBoundaryBpm} bpm` : "n/a")}${detailRow("Domain watt margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.wattsToLowerBoundary} / ${phase.candidateDomainMargins.wattsToUpperBoundary} W` : "n/a")}</dl></section>
-    <section><h5>Comparison</h5><dl>${detailRow("Candidate midpoint", comparison ? `${comparison.candidateMidpointWatts} W` : "n/a")}${detailRow("Observed settled median", comparison ? `${comparison.observedInBandMedianWatts} W` : "n/a")}${detailRow("Signed / absolute difference", comparison ? `${signed(comparison.signedDifferenceWatts, " W")} / ${comparison.absoluteDifferenceWatts} W` : "n/a")}${detailRow("Percentage difference", comparison ? signed(comparison.signedDifferencePercent, "%") : "n/a")}${detailRow("Candidate contains observed median", comparison ? (comparison.candidateContainsObservedMedian ? "Yes" : "No") : "n/a")}${detailRow("Observed IQR overlap", comparison ? `${comparison.candidateObservedOverlapWatts} W · ${percent(comparison.candidateObservedOverlapRatio)}` : "n/a")}${detailRow("Descriptive agreement", personalizationDiagnosticLabel(row.agreement))}${detailRow("Outcome", personalizationDiagnosticLabel(row.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel(row.exclusion))}</dl></section>`;
+    <section><h5>Closed-loop transfer evidence</h5><dl>${detailRow("Candidate midpoint", comparison ? `${comparison.candidateMidpointWatts} W` : "n/a")}${detailRow("Observed settled median", comparison ? `${comparison.observedInBandMedianWatts} W` : "n/a")}${detailRow("Signed / absolute difference", comparison ? `${signed(comparison.signedDifferenceWatts, " W")} / ${comparison.absoluteDifferenceWatts} W` : "n/a")}${detailRow("Percentage difference", comparison ? signed(comparison.signedDifferencePercent, "%") : "n/a")}${detailRow("Candidate contains observed median", comparison ? (comparison.candidateContainsObservedMedian ? "Yes" : "No") : "n/a")}${detailRow("Observed IQR overlap", comparison ? `${comparison.candidateObservedOverlapWatts} W · ${percent(comparison.candidateObservedOverlapRatio)}` : "n/a")}${detailRow("Descriptive agreement", personalizationDiagnosticLabel(row.agreement))}${detailRow("Outcome", personalizationDiagnosticLabel(row.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel(row.exclusion))}</dl></section>
+    ${heldWorkloadDetailHtml(heldWorkloadResponseOf(phase))}`;
 }

@@ -466,7 +466,7 @@ test("diagnostic export is deterministic, provenance-preserving, and excludes pr
   assert.equal(first, personalizationDiagnosticsExportJson(model));
   assert.deepEqual(model.records, before);
   const exported = createPersonalizationDiagnosticsExport(model);
-  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.schemaVersion, 3);
   assert.equal(exported.aggregate.schemaVersion, 2);
   assert.deepEqual(Object.keys(exported), [
     "schemaVersion", "filters", "aggregate", "diagnosticRows", "characterizationRecords",
@@ -912,17 +912,18 @@ test("threshold transfer HTML reports error under HR control and does not score 
   assert.equal(model.thresholdLongitudinal.sessionCount, 1);
   assert.deepEqual(model.scientificAssessments, []);
   const exported = createPersonalizationDiagnosticsExport(model);
-  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.schemaVersion, 3);
   assert.equal("thresholdLongitudinal" in exported, false);
   assert.equal("scientificAssessments" in exported, false);
 });
 
-test("E3 longitudinal analysis does not bump E2 or enable activation", async () => {
+test("E3 longitudinal analysis and E2 v3 capture no actuation mode and never enable activation", async () => {
   const characterizationSource = await readFile(new URL("../src/personalizedPrescriptionCharacterization.ts", import.meta.url), "utf8");
   const typesSource = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
-  assert.match(characterizationSource, /Settling timestamps only/);
-  assert.doesNotMatch(characterizationSource, /resistanceChangeCount|settledStableResistanceSeconds|actuationMode|automaticControlEnabled/);
-  assert.doesNotMatch(typesSource, /resistanceChangeCount|settledStableResistanceSeconds|actuationMode/);
+  // E2 v3 is the explicit held-workload bump; actuation-mode capture remains out of scope.
+  assert.match(characterizationSource, /Closed-loop settling timestamps only/);
+  assert.doesNotMatch(characterizationSource, /actuationMode|automaticControlEnabled/);
+  assert.doesNotMatch(typesSource, /actuationMode/);
   assert.match(typesSource, /activationEligible: false/);
   assert.doesNotMatch(typesSource, /activationEligible: true/);
 });

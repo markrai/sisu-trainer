@@ -999,7 +999,7 @@ test("diagnostics export v2 keeps its exact historical key contract", () => {
   assert.equal(model.scientificAssessments.length, 1);
   assert.equal(model.thresholdLongitudinal.sessionCount, 2);
   const exported = createPersonalizationDiagnosticsExport(model);
-  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.schemaVersion, 3);
   assert.deepEqual(Object.keys(exported), [
     "schemaVersion",
     "filters",

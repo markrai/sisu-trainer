@@ -37,10 +37,12 @@
  * Current candidate-vs-observed agreement is therefore transfer evidence,
  * not independent proof of prescription quality. In particular the assessor
  * never treats HR-in-band occupancy, inside-candidate agreement, or perfect
- * closed-loop error as success: without open-loop evidence (stable-resistance
- * windows, forward HR prediction error at held workload — an E2 v3 seam that
- * does not exist yet) and trustworthy actuation-mode evidence, `eligible` is
- * unreachable under the production policy.
+ * closed-loop error as success: without truly independent open-loop evidence
+ * and trustworthy actuation-mode evidence, `eligible` is unreachable under the
+ * production policy. E2 v3 held-workload forward-response evidence (forward HR
+ * prediction error at held observed resistance) removes HR-band conditioning
+ * but not controller selection of the held resistance, so it is surfaced
+ * descriptively in the digest and never satisfies the open-loop gate.
  *
  * Modality semantics: the current E1 threshold candidate is athlete-relative
  * workload associated with the prescribed legacy threshold HR region. It is
@@ -262,6 +264,33 @@ function sessionEvidenceValid(session) {
         session.openLoop.stableResistanceWindowCount < 0))
         return false;
     return session.domainBucket === "interior" || session.domainBucket === "edge";
+}
+function heldWorkloadForwardSessionValid(value) {
+    return isRecord(value) && isNonEmptyString(value.workoutSessionId) &&
+        Number.isInteger(value.qualifyingWindowCount) && value.qualifyingWindowCount >= 1 &&
+        Number.isInteger(value.qualifyingDurationSec) && value.qualifyingDurationSec >= 1 &&
+        isFiniteNumber(value.medianSignedErrorBpm) &&
+        isFiniteNumber(value.medianAbsoluteErrorBpm) && value.medianAbsoluteErrorBpm >= 0;
+}
+/** One entry per workout; malformed or duplicated entries are dropped (fail closed). */
+function heldWorkloadForwardDigest(entries, comparable) {
+    var _a;
+    if (!comparable || !Array.isArray(entries))
+        return { count: 0, signed: null, absolute: null };
+    const ids = new Map();
+    for (const entry of entries) {
+        if (isRecord(entry) && isNonEmptyString(entry.workoutSessionId)) {
+            ids.set(entry.workoutSessionId, ((_a = ids.get(entry.workoutSessionId)) !== null && _a !== void 0 ? _a : 0) + 1);
+        }
+    }
+    const valid = entries.filter((entry) => heldWorkloadForwardSessionValid(entry) && ids.get(entry.workoutSessionId) === 1);
+    const signed = sortedMedian(valid.map((entry) => entry.medianSignedErrorBpm));
+    const absolute = sortedMedian(valid.map((entry) => entry.medianAbsoluteErrorBpm));
+    return {
+        count: valid.length,
+        signed: signed === null ? null : Math.round(signed * 10) / 10,
+        absolute: absolute === null ? null : Math.round(absolute * 10) / 10,
+    };
 }
 function orderReasons(reasons) {
     const rank = new Map(REASON_ORDER.map((reason, index) => [reason, index]));
@@ -574,7 +603,7 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
     // instead of letting closed-loop agreement pass as validation. Under a
     // policy that declares the dimension `required_but_unavailable` (the
     // production policy) the gate fails whatever the sessions carry; otherwise
-    // it passes only when every session carries the future E2 v3 evidence.
+    // it passes only when every session carries future open-loop evidence.
     if (!evaluable || sessions.length === 0) {
         acc.push("open_loop_evidence", "not_applicable");
         acc.push("actuation_mode_evidence", "not_applicable");
@@ -689,6 +718,7 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
     else {
         state = "eligible";
     }
+    const heldForward = heldWorkloadForwardDigest(evidence.heldWorkloadForwardSessions, subjectComparable);
     return {
         schemaVersion: SCIENTIFIC_ASSESSMENT_SCHEMA_VERSION_V1,
         assessor: {
@@ -730,6 +760,9 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
             excludedMultiPhaseSessions: (_e = evidence.excludedMultiPhaseSessions) !== null && _e !== void 0 ? _e : 0,
             ignoredCrossCohortSessions,
             ignoredInvalidSessions,
+            heldWorkloadForwardSessionCount: heldForward.count,
+            medianHeldWorkloadForwardSignedErrorBpm: heldForward.signed,
+            medianHeldWorkloadForwardAbsoluteErrorBpm: heldForward.absolute,
         },
         evaluatedAt,
     };
@@ -792,11 +825,14 @@ function sessionIdentityFrom(record, assessment, workout) {
  * reduced. Incomplete-identity records cannot be attributed to a cohort, so
  * that count is athlete-wide; records from another calibration instance or
  * machine contribute nothing (not even fallback status). Open-loop and actuation-mode seams are `null` / `"unknown"`
- * because current E2 records carry neither.
+ * because no E2 record carries either: E2 v3 held-workload forward-response
+ * evidence is surfaced descriptively in `heldWorkloadForwardSessions`, never as
+ * open-loop evidence.
  */
 export function buildSubjectEvidence(input) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const sessions = [];
+    const heldWorkloadForwardSessions = [];
     let excludedIncompleteIdentitySessions = 0;
     let excludedMultiPhaseSessions = 0;
     let candidateSeen = false;
@@ -843,14 +879,40 @@ export function buildSubjectEvidence(input) {
             excludedMultiPhaseSessions += 1;
             continue;
         }
+        // Held-workload forward visibility is selected independently of
+        // closed-loop characterization and HR-band success, but never bypasses the
+        // structural ambiguity rules: a multi-phase-excluded workout contributes
+        // nothing, and a workout with more than one relevant subject phase (same
+        // band, frozen candidate, same observed provenance) contributes nothing.
+        // One workout is one observation, however many windows it held.
+        const relevantPhases = subjectPhases.filter((phase) => {
+            var _a, _b;
+            return ((_a = phase.legacyHeartRate) === null || _a === void 0 ? void 0 : _a.min) === subject.legacyHrBand.minBpm &&
+                ((_b = phase.legacyHeartRate) === null || _b === void 0 ? void 0 : _b.max) === subject.legacyHrBand.maxBpm &&
+                phaseHasFrozenCandidate(phase) &&
+                phase.observedPowerProvenance === subject.observedPowerProvenance;
+        });
+        if (relevantPhases.length === 1 &&
+            ((_c = relevantPhases[0].heldWorkloadForwardResponse) === null || _c === void 0 ? void 0 : _c.outcome) === "characterized") {
+            const held = relevantPhases[0].heldWorkloadForwardResponse;
+            if (held.stableResistance && held.forwardHeartRate) {
+                heldWorkloadForwardSessions.push({
+                    workoutSessionId: record.workoutSessionId,
+                    qualifyingWindowCount: held.stableResistance.qualifyingWindowCount,
+                    qualifyingDurationSec: held.stableResistance.qualifyingDurationSec,
+                    medianSignedErrorBpm: held.forwardHeartRate.signedErrorBpm.median,
+                    medianAbsoluteErrorBpm: held.forwardHeartRate.absoluteErrorBpm.median,
+                });
+            }
+        }
         // Uncharacterized phases (E1 fallback or insufficient E2 evidence) never
         // become evidence; they only grounded the candidate status above.
         if (characterized.length === 0)
             continue;
         if (characterized[0].candidatePower === undefined ||
             characterized[0].comparison === undefined ||
-            ((_c = characterized[0].legacyHeartRate) === null || _c === void 0 ? void 0 : _c.min) === undefined ||
-            ((_d = characterized[0].legacyHeartRate) === null || _d === void 0 ? void 0 : _d.max) === undefined) {
+            ((_d = characterized[0].legacyHeartRate) === null || _d === void 0 ? void 0 : _d.min) === undefined ||
+            ((_e = characterized[0].legacyHeartRate) === null || _e === void 0 ? void 0 : _e.max) === undefined) {
             excludedIncompleteIdentitySessions += 1;
             continue;
         }
@@ -881,7 +943,7 @@ export function buildSubjectEvidence(input) {
             absoluteDifferenceWatts: phase.comparison.absoluteDifferenceWatts,
             widthNormalizedAbsoluteError: normalized,
             saturationRatio: phase.controllerContext.saturationRatio,
-            domainBucket: ((_e = phase.candidateDomainMargins) === null || _e === void 0 ? void 0 : _e.bucket) === "interior" ? "interior" : "edge",
+            domainBucket: ((_f = phase.candidateDomainMargins) === null || _f === void 0 ? void 0 : _f.bucket) === "interior" ? "interior" : "edge",
             assessmentAgeDays: null,
             openLoop: null,
             actuationMode: "unknown",
@@ -906,6 +968,7 @@ export function buildSubjectEvidence(input) {
         currentCalibration: input.currentCalibration,
         excludedIncompleteIdentitySessions,
         excludedMultiPhaseSessions,
+        heldWorkloadForwardSessions,
     };
 }
 /**

@@ -206,6 +206,17 @@ function clone(value) {
   return structuredClone(value);
 }
 
+/** Exact historical E2 v2 shape: the current v3 record minus the held-workload delta. */
+function asHistoricalV2(record) {
+  const value = clone(record);
+  value.schemaVersion = 2;
+  value.characterizer.version = 2;
+  delete value.heldWorkloadPolicy;
+  delete value.heldWorkloadForwardModel;
+  for (const phase of value.phases) delete phase.heldWorkloadForwardResponse;
+  return value;
+}
+
 test("E2 deterministically characterizes strong measured evidence with interpretable components", () => {
   const first = fixture();
   const second = fixture();
@@ -243,7 +254,12 @@ test("E2 and E3 preserve v1 versus v2 formal provenance and never pool their coh
     parsePersonalizedPrescriptionCharacterization(historical.characterization, historical.e1),
     historical.characterization
   );
-  const historicalE2V1 = clone(historical.characterization);
+  const historicalE2V2 = asHistoricalV2(historical.characterization);
+  assert.deepEqual(
+    parsePersonalizedPrescriptionCharacterization(historicalE2V2, historical.e1),
+    historicalE2V2
+  );
+  const historicalE2V1 = clone(historicalE2V2);
   historicalE2V1.schemaVersion = 1;
   historicalE2V1.characterizer.version = 1;
   delete historicalE2V1.formalAssessmentProvenance;
@@ -279,7 +295,7 @@ test("E2 and E3 preserve v1 versus v2 formal provenance and never pool their coh
     historical.characterization,
     current.characterization,
   ]));
-  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.schemaVersion, 3);
   assert.equal(exported.aggregate.schemaVersion, 2);
   assert.deepEqual(
     exported.aggregate.groups.map((group) =>
@@ -439,7 +455,8 @@ test("strict E2 reader validates E1 linkage, ownership, phase identity, candidat
   };
   assert.deepEqual(parsePersonalizedPrescriptionCharacterization(characterization, e1, expected), characterization);
   for (const mutate of [
-    (value) => { value.schemaVersion = 3; },
+    (value) => { value.schemaVersion = 4; },
+    (value) => { value.characterizer.version = 2; },
     (value) => { value.formalAssessmentProvenance.protocol.version = 2; },
     (value) => { value.athleteId = "wrong-athlete"; },
     (value) => { value.workoutSessionId = "wrong-session"; },
@@ -670,7 +687,7 @@ test("ordinary workout finalization creates the E2 summary record deterministica
     extractTrustedPersonalizationWorkoutContexts(reloadedHistory, ATHLETE)
   );
   const exported = createPersonalizationDiagnosticsExport(model);
-  assert.equal(exported.schemaVersion, 2);
+  assert.equal(exported.schemaVersion, 3);
   assert.equal(exported.aggregate.schemaVersion, 2);
   assert.equal(records.length, 1);
   assert.equal(model.evidenceCollectionSummary.completedWorkoutsWithE2, 1);

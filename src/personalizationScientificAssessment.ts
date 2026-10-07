@@ -37,10 +37,12 @@
  * Current candidate-vs-observed agreement is therefore transfer evidence,
  * not independent proof of prescription quality. In particular the assessor
  * never treats HR-in-band occupancy, inside-candidate agreement, or perfect
- * closed-loop error as success: without open-loop evidence (stable-resistance
- * windows, forward HR prediction error at held workload — an E2 v3 seam that
- * does not exist yet) and trustworthy actuation-mode evidence, `eligible` is
- * unreachable under the production policy.
+ * closed-loop error as success: without truly independent open-loop evidence
+ * and trustworthy actuation-mode evidence, `eligible` is unreachable under the
+ * production policy. E2 v3 held-workload forward-response evidence (forward HR
+ * prediction error at held observed resistance) removes HR-band conditioning
+ * but not controller selection of the held resistance, so it is surfaced
+ * descriptively in the digest and never satisfies the open-loop gate.
  *
  * Modality semantics: the current E1 threshold candidate is athlete-relative
  * workload associated with the prescribed legacy threshold HR region. It is
@@ -229,10 +231,10 @@ export interface ScientificAssessmentSubject {
  * One hardened per-session evidence row for the assessed subject cohort.
  * All fields are frozen E2/E3 values; E4A never recomputes candidates.
  *
- * `openLoop` and `actuationMode` are seams for the E2 v3 dependency
- * (stable-resistance windows, forward HR prediction error at held workload,
- * resistance-change characterization, trustworthy actuation mode). Current
- * E2 records carry neither: the production builder always supplies
+ * `openLoop` and `actuationMode` are seams for a future slice that can
+ * distinguish manual/fixed-workload evidence from controller-selected workload
+ * and capture trustworthy actuation mode. No E2 record (including v3
+ * held-workload forward-response evidence) carries either: the production builder always supplies
  * `openLoop: null` and `actuationMode: "unknown"`, which the production
  * policy treats as required-but-unavailable so `eligible` stays unreachable.
  * Synthetic future-complete evidence may populate them to exercise the pure
@@ -261,6 +263,23 @@ export interface ScientificAssessmentSessionEvidence {
   assessmentAgeDays: number | null;
   openLoop: { stableResistanceWindowCount: number } | null;
   actuationMode: "unknown" | "automatic" | "manual";
+}
+
+/**
+ * Descriptive E2 v3 held-workload forward-response summary for one cohort
+ * session (one workout = one longitudinal observation, however many held-load
+ * windows it contained). Held-load forward evidence is NOT proof of truly
+ * independent open-loop evidence: the live controller may have selected the
+ * held resistance. It therefore never populates `openLoop`, and no gate reads it.
+ * Selection never depends on legacy HR-band occupancy or closed-loop success.
+ */
+export interface ScientificAssessmentHeldWorkloadForwardSession {
+  workoutSessionId: string;
+  qualifyingWindowCount: number;
+  qualifyingDurationSec: number;
+  /** Observed HR − frozen-calibration predicted HR, session median. */
+  medianSignedErrorBpm: number;
+  medianAbsoluteErrorBpm: number;
 }
 
 export type ScientificAssessmentCandidateStatus =
@@ -295,6 +314,8 @@ export interface ScientificAssessmentEvidence {
   currentCalibration: ScientificAssessmentCalibrationIdentity | null;
   excludedIncompleteIdentitySessions: number;
   excludedMultiPhaseSessions: number;
+  /** Descriptive only (see type docs); absent means not supplied. */
+  heldWorkloadForwardSessions?: readonly ScientificAssessmentHeldWorkloadForwardSession[];
 }
 
 /**
@@ -430,6 +451,13 @@ export interface ScientificAssessment {
     ignoredCrossCohortSessions: number;
     /** Malformed or duplicated in-cohort sessions, excluded (fail closed). */
     ignoredInvalidSessions: number;
+    /**
+     * Descriptive held-workload forward-response visibility. Never a gate
+     * input and never open-loop evidence; medians are across sessions.
+     */
+    heldWorkloadForwardSessionCount: number;
+    medianHeldWorkloadForwardSignedErrorBpm: number | null;
+    medianHeldWorkloadForwardAbsoluteErrorBpm: number | null;
   };
   evaluatedAt: string;
 }
@@ -558,6 +586,37 @@ function sessionEvidenceValid(session: ScientificAssessmentSessionEvidence): boo
     !Number.isInteger(session.openLoop.stableResistanceWindowCount) ||
     session.openLoop.stableResistanceWindowCount < 0)) return false;
   return session.domainBucket === "interior" || session.domainBucket === "edge";
+}
+
+function heldWorkloadForwardSessionValid(value: unknown): value is ScientificAssessmentHeldWorkloadForwardSession {
+  return isRecord(value) && isNonEmptyString(value.workoutSessionId) &&
+    Number.isInteger(value.qualifyingWindowCount) && (value.qualifyingWindowCount as number) >= 1 &&
+    Number.isInteger(value.qualifyingDurationSec) && (value.qualifyingDurationSec as number) >= 1 &&
+    isFiniteNumber(value.medianSignedErrorBpm) &&
+    isFiniteNumber(value.medianAbsoluteErrorBpm) && value.medianAbsoluteErrorBpm >= 0;
+}
+
+/** One entry per workout; malformed or duplicated entries are dropped (fail closed). */
+function heldWorkloadForwardDigest(
+  entries: readonly ScientificAssessmentHeldWorkloadForwardSession[] | undefined,
+  comparable: boolean
+): { count: number; signed: number | null; absolute: number | null } {
+  if (!comparable || !Array.isArray(entries)) return { count: 0, signed: null, absolute: null };
+  const ids = new Map<string, number>();
+  for (const entry of entries) {
+    if (isRecord(entry) && isNonEmptyString(entry.workoutSessionId)) {
+      ids.set(entry.workoutSessionId, (ids.get(entry.workoutSessionId) ?? 0) + 1);
+    }
+  }
+  const valid = entries.filter((entry) =>
+    heldWorkloadForwardSessionValid(entry) && ids.get(entry.workoutSessionId) === 1);
+  const signed = sortedMedian(valid.map((entry) => entry.medianSignedErrorBpm));
+  const absolute = sortedMedian(valid.map((entry) => entry.medianAbsoluteErrorBpm));
+  return {
+    count: valid.length,
+    signed: signed === null ? null : Math.round(signed * 10) / 10,
+    absolute: absolute === null ? null : Math.round(absolute * 10) / 10,
+  };
 }
 
 function orderReasons(reasons: Iterable<ScientificAssessmentReasonCode>): ScientificAssessmentReasonCode[] {
@@ -876,7 +935,7 @@ export function assessPersonalizedWorkloadEvidence(
   // instead of letting closed-loop agreement pass as validation. Under a
   // policy that declares the dimension `required_but_unavailable` (the
   // production policy) the gate fails whatever the sessions carry; otherwise
-  // it passes only when every session carries the future E2 v3 evidence.
+  // it passes only when every session carries future open-loop evidence.
   if (!evaluable || sessions.length === 0) {
     acc.push("open_loop_evidence", "not_applicable");
     acc.push("actuation_mode_evidence", "not_applicable");
@@ -982,6 +1041,8 @@ export function assessPersonalizedWorkloadEvidence(
     state = "eligible";
   }
 
+  const heldForward = heldWorkloadForwardDigest(evidence.heldWorkloadForwardSessions, subjectComparable);
+
   return {
     schemaVersion: SCIENTIFIC_ASSESSMENT_SCHEMA_VERSION_V1,
     assessor: {
@@ -1023,6 +1084,9 @@ export function assessPersonalizedWorkloadEvidence(
       excludedMultiPhaseSessions: evidence.excludedMultiPhaseSessions ?? 0,
       ignoredCrossCohortSessions,
       ignoredInvalidSessions,
+      heldWorkloadForwardSessionCount: heldForward.count,
+      medianHeldWorkloadForwardSignedErrorBpm: heldForward.signed,
+      medianHeldWorkloadForwardAbsoluteErrorBpm: heldForward.absolute,
     },
     evaluatedAt,
   };
@@ -1087,6 +1151,12 @@ export interface BuildSubjectEvidenceInput {
         agreement?: string;
       };
       stableInBandWorkload?: { medianWatts: number };
+      /** Durable E2 v3 held-workload forward-response summary; absent on v1/v2 records. */
+      heldWorkloadForwardResponse?: {
+        outcome: string;
+        stableResistance?: { qualifyingWindowCount: number; qualifyingDurationSec: number };
+        forwardHeartRate?: { signedErrorBpm: { median: number }; absoluteErrorBpm: { median: number } };
+      };
     }[];
   }[];
   assessmentContexts: Readonly<Record<string, ScientificAssessmentFrozenCalibrationContext>>;
@@ -1147,10 +1217,13 @@ function sessionIdentityFrom(
  * reduced. Incomplete-identity records cannot be attributed to a cohort, so
  * that count is athlete-wide; records from another calibration instance or
  * machine contribute nothing (not even fallback status). Open-loop and actuation-mode seams are `null` / `"unknown"`
- * because current E2 records carry neither.
+ * because no E2 record carries either: E2 v3 held-workload forward-response
+ * evidence is surfaced descriptively in `heldWorkloadForwardSessions`, never as
+ * open-loop evidence.
  */
 export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): ScientificAssessmentEvidence {
   const sessions: ScientificAssessmentSessionEvidence[] = [];
+  const heldWorkloadForwardSessions: ScientificAssessmentHeldWorkloadForwardSession[] = [];
   let excludedIncompleteIdentitySessions = 0;
   let excludedMultiPhaseSessions = 0;
   let candidateSeen = false;
@@ -1193,6 +1266,30 @@ export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): Scientif
     if (characterized.length > 1) {
       excludedMultiPhaseSessions += 1;
       continue;
+    }
+    // Held-workload forward visibility is selected independently of
+    // closed-loop characterization and HR-band success, but never bypasses the
+    // structural ambiguity rules: a multi-phase-excluded workout contributes
+    // nothing, and a workout with more than one relevant subject phase (same
+    // band, frozen candidate, same observed provenance) contributes nothing.
+    // One workout is one observation, however many windows it held.
+    const relevantPhases = subjectPhases.filter((phase) =>
+      phase.legacyHeartRate?.min === subject.legacyHrBand.minBpm &&
+      phase.legacyHeartRate?.max === subject.legacyHrBand.maxBpm &&
+      phaseHasFrozenCandidate(phase) &&
+      phase.observedPowerProvenance === subject.observedPowerProvenance);
+    if (relevantPhases.length === 1 &&
+      relevantPhases[0].heldWorkloadForwardResponse?.outcome === "characterized") {
+      const held = relevantPhases[0].heldWorkloadForwardResponse!;
+      if (held.stableResistance && held.forwardHeartRate) {
+        heldWorkloadForwardSessions.push({
+          workoutSessionId: record.workoutSessionId,
+          qualifyingWindowCount: held.stableResistance.qualifyingWindowCount,
+          qualifyingDurationSec: held.stableResistance.qualifyingDurationSec,
+          medianSignedErrorBpm: held.forwardHeartRate.signedErrorBpm.median,
+          medianAbsoluteErrorBpm: held.forwardHeartRate.absoluteErrorBpm.median,
+        });
+      }
     }
     // Uncharacterized phases (E1 fallback or insufficient E2 evidence) never
     // become evidence; they only grounded the candidate status above.
@@ -1258,6 +1355,7 @@ export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): Scientif
     currentCalibration: input.currentCalibration,
     excludedIncompleteIdentitySessions,
     excludedMultiPhaseSessions,
+    heldWorkloadForwardSessions,
   };
 }
 

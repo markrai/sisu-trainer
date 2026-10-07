@@ -1,9 +1,11 @@
 import {
   PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2,
+  PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V3,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2,
+  PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V3,
   PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1,
   PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1,
   PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1,
@@ -17,8 +19,14 @@ import {
   type PersonalizedPrescriptionCharacterizationV1,
   type CurrentPersonalizedPrescriptionCharacterization,
   type PersonalizedPrescriptionControllerContextV1,
+  type PersonalizedPrescriptionDistributionV1,
   type PersonalizedPrescriptionEvaluationV1,
+  type PersonalizedPrescriptionHeldWorkloadForwardModelV1,
+  type PersonalizedPrescriptionHeldWorkloadForwardResponseV1,
+  type PersonalizedPrescriptionHeldWorkloadPolicyV1,
   type PersonalizedPrescriptionPhaseCharacterizationV1,
+  type PersonalizedPrescriptionPhaseCharacterizationV3,
+  type PersonalizedPrescriptionStableResistanceSummaryV1,
   type PersonalizedPrescriptionPhaseEvaluationV1,
   type PersonalizedPrescriptionResistanceCoverageV1,
   type WorkoutPhaseResponse,
@@ -29,6 +37,7 @@ import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js"
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
 import { VO2_FORMAL_ASSESSMENT_CONTRACT_V1 } from "./vo2Estimator.js";
+import { cadenceInBand } from "./vo2Workload.js";
 
 /** Provisional evidence-quality policy only. These values never authorize control. */
 export const PHASE_E2_CHARACTERIZATION_POLICY_V1: PersonalizedPrescriptionCharacterizationPolicyV1 = {
@@ -43,6 +52,26 @@ export const PHASE_E2_CHARACTERIZATION_POLICY_V1: PersonalizedPrescriptionCharac
   heartRateChangeWindowSeconds: 60,
   minHeartRateChangeWindowSamples: 30,
   domainEdgeFraction: 0.1,
+};
+
+/**
+ * E2 v3 held-workload forward-response characterization policy. These are
+ * versioned characterization policy values, not validated universal
+ * physiological constants and not activation, safety, or E4 pass/fail thresholds.
+ *
+ * settlingSeconds = 120: the frozen formal calibration's HR points are
+ * steady-state minute-3 responses of >= 180 s protocol stages, so HR is only
+ * compared with the forward prediction after a comparable time under held load.
+ * Gap and wall-clock tolerances absorb 1 Hz sampling jitter on the active clock;
+ * the active clock stops while paused, so larger wall-clock excess is a pause.
+ */
+export const PHASE_E2_HELD_WORKLOAD_POLICY_V1: PersonalizedPrescriptionHeldWorkloadPolicyV1 = {
+  id: "e2-held-workload-forward-response-policy",
+  version: 1,
+  settlingSeconds: 120,
+  maxObservationGapSec: 2,
+  maxWallClockExcessSec: 2,
+  minQualifyingSeconds: 30,
 };
 
 const OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
@@ -64,6 +93,8 @@ export interface CharacterizePersonalizedPrescriptionInput {
   bikeSamples: readonly OrdinaryBikeTelemetrySample[];
   machineDecisionAudit?: readonly MachineDecisionAuditEntry[];
   policy: PersonalizedPrescriptionCharacterizationPolicyV1;
+  /** Defaults to PHASE_E2_HELD_WORKLOAD_POLICY_V1. */
+  heldWorkloadPolicy?: PersonalizedPrescriptionHeldWorkloadPolicyV1;
   createdAt: string;
 }
 
@@ -275,7 +306,10 @@ function controllerContext(
   };
 }
 
-/** Settling timestamps only. Count, stable-R duration, and auto/manual mode are not persisted until E3 shows they are needed. */
+/**
+ * Closed-loop settling timestamps only (any observed, desired, or commanded change restarts settling).
+ * Held-workload segmentation uses fresh observed resistance alone; auto/manual mode is not captured.
+ */
 function resistanceChangeSeconds(samples: readonly OrdinaryBikeTelemetrySample[]): number[] {
   const changes = new Set<number>();
   let previousObserved: number | undefined;
@@ -358,7 +392,274 @@ function compareCandidate(
   };
 }
 
+function distribution(values: readonly number[]): PersonalizedPrescriptionDistributionV1 {
+  return {
+    median: median(values),
+    q1: quantile(values, 0.25),
+    q3: quantile(values, 0.75),
+    min: Math.min(...values),
+    max: Math.max(...values),
+  };
+}
+
+function heldWorkloadPolicyValid(value: unknown): value is PersonalizedPrescriptionHeldWorkloadPolicyV1 {
+  if (!isObject(value) || value.id !== "e2-held-workload-forward-response-policy" || value.version !== 1) return false;
+  return Number.isInteger(value.settlingSeconds) && (value.settlingSeconds as number) >= 0 &&
+    Number.isInteger(value.maxObservationGapSec) && (value.maxObservationGapSec as number) >= 1 &&
+    nonNegative(value.maxWallClockExcessSec) &&
+    Number.isInteger(value.minQualifyingSeconds) && (value.minQualifyingSeconds as number) > 0;
+}
+
+function forwardModelFrom(evaluation: PersonalizedPrescriptionEvaluationV1):
+  PersonalizedPrescriptionHeldWorkloadForwardModelV1 | undefined {
+  const calibration = evaluation.fitnessEvidenceSnapshot?.calibration;
+  if (!calibration) return undefined;
+  return {
+    interceptBpm: calibration.interceptBpm,
+    slopeBpmPerWatt: calibration.slopeBpmPerWatt,
+    observedMinWatts: calibration.observedMinWatts,
+    observedMaxWatts: calibration.observedMaxWatts,
+  };
+}
+
+/** Fresh physical observation of resistance. Desired and commanded resistance never qualify. */
+function hasFreshObservedResistance(sample: OrdinaryBikeTelemetrySample): boolean {
+  return sample.availability === "fresh" && sample.observedResistance !== undefined;
+}
+
+type PhasePowerProvenance = PersonalizedPrescriptionHeldWorkloadForwardResponseV1["observedPowerProvenance"];
+
+/**
+ * Whether a sample may preserve held-load continuity for a phase of the given
+ * observed power provenance.
+ *
+ * measured_watts: fresh observed resistance alone establishes mechanical
+ * continuity; a missing watt sample stays inside the hold as unavailable
+ * evidence and cadence is descriptive.
+ *
+ * calibrated_watts (and mixed, which never yields forward evidence): calibrated
+ * watts are the resistance-table workload at the formal protocol cadence, so
+ * cadence is part of the workload model. Every sample, including one with no
+ * watt estimate, must carry fresh measured cadence inside the existing
+ * verified-cadence contract; missing or off-band cadence breaks the window, so
+ * it can never advance calibrated-workload settling time. A sample with
+ * unchanged fresh observed resistance and verified cadence but no watt estimate
+ * keeps the same contract workload, so it remains inside the hold and is
+ * counted as watts-unavailable evidence (never imputed).
+ */
+function heldObservationTrustworthy(sample: OrdinaryBikeTelemetrySample, phaseProvenance: PhasePowerProvenance): boolean {
+  if (!hasFreshObservedResistance(sample)) return false;
+  const cadenceIsWorkloadModel = phaseProvenance === "calibrated_watts" || phaseProvenance === "mixed" ||
+    sample.watts?.source === "calibrated_watts";
+  if (!cadenceIsWorkloadModel) return true;
+  return sample.cadenceRpm !== undefined && cadenceInBand(sample.cadenceRpm.value);
+}
+
+/**
+ * Active-clock continuity. The active clock stops while paused, so wall-clock
+ * excess reveals a pause. Wall-clock chronology must also move forward: a zero
+ * or negative wall step for advancing active time breaks continuity.
+ */
+function continuousObservations(
+  previous: OrdinaryBikeTelemetrySample,
+  next: OrdinaryBikeTelemetrySample,
+  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+): boolean {
+  const activeStep = next.activeSec - previous.activeSec;
+  if (activeStep < 1 || activeStep > policy.maxObservationGapSec) return false;
+  const wallStep = (Date.parse(next.observedAt) - Date.parse(previous.observedAt)) / 1000;
+  return Number.isFinite(wallStep) && wallStep > 0 &&
+    Math.abs(wallStep - activeStep) <= policy.maxWallClockExcessSec;
+}
+
+interface HeldWindow {
+  resistance: number;
+  provenance?: BikeWattsProvenance;
+  samples: OrdinaryBikeTelemetrySample[];
+}
+
+/** Maximal runs of unchanged fresh observed resistance inside one phase; never bridges pauses or gaps. */
+function stableObservedResistanceWindows(
+  samples: readonly OrdinaryBikeTelemetrySample[],
+  phaseProvenance: PhasePowerProvenance,
+  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+): HeldWindow[] {
+  const windows: HeldWindow[] = [];
+  let current: HeldWindow | undefined;
+  for (const sample of samples) {
+    if (!heldObservationTrustworthy(sample, phaseProvenance)) {
+      current = undefined;
+      continue;
+    }
+    const resistance = sample.observedResistance!.value;
+    const source = sample.watts?.source;
+    const previous = current?.samples[current.samples.length - 1];
+    const continues = current !== undefined && previous !== undefined &&
+      continuousObservations(previous, sample, policy) && current.resistance === resistance &&
+      (source === undefined || current.provenance === undefined || current.provenance === source);
+    if (!continues) {
+      current = { resistance, samples: [] };
+      windows.push(current);
+    }
+    current!.samples.push(sample);
+    if (source !== undefined && current!.provenance === undefined) current!.provenance = source;
+  }
+  return windows;
+}
+
+/** Counted only between continuous fresh observations; a change across a pause or gap is not observable as one change. */
+function observedResistanceChangeCount(
+  samples: readonly OrdinaryBikeTelemetrySample[],
+  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+): number {
+  let count = 0;
+  let previous: OrdinaryBikeTelemetrySample | undefined;
+  for (const sample of samples) {
+    if (!hasFreshObservedResistance(sample)) {
+      previous = undefined;
+      continue;
+    }
+    if (previous && continuousObservations(previous, sample, policy) &&
+        previous.observedResistance!.value !== sample.observedResistance!.value) count += 1;
+    previous = sample;
+  }
+  return count;
+}
+
+const HELD_WORKLOAD_EMPTY_EXCLUSIONS = () => ({
+  observationGap: 0,
+  wattsUnavailable: 0,
+  outsideCalibrationDomain: 0,
+  heartRateUnavailable: 0,
+});
+
+/**
+ * Held-workload forward-response characterization. Observed watts under held
+ * observed resistance are mapped through the frozen E1 calibration
+ * (predicted HR = intercept + slope × watts) and compared with observed HR.
+ * Deliberately no HR-band, candidate-agreement, or controller-success filter.
+ */
+function characterizeHeldWorkload(
+  shadow: PersonalizedPrescriptionPhaseEvaluationV1,
+  hasResponse: boolean,
+  bike: readonly OrdinaryBikeTelemetrySample[],
+  hrBySecond: ReadonlyMap<number, number>,
+  model: PersonalizedPrescriptionHeldWorkloadForwardModelV1 | undefined,
+  observedPowerProvenance: PersonalizedPrescriptionHeldWorkloadForwardResponseV1["observedPowerProvenance"],
+  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+): PersonalizedPrescriptionHeldWorkloadForwardResponseV1 {
+  if (shadow.outcome !== "candidate") return { outcome: "not_candidate", observedPowerProvenance };
+  if (!model) return { outcome: "calibration_unavailable", observedPowerProvenance };
+  if (!hasResponse) {
+    return { outcome: "insufficient_evidence", exclusionReason: "phase_evidence_unavailable", observedPowerProvenance };
+  }
+  const windows = stableObservedResistanceWindows(bike, observedPowerProvenance, policy);
+  const excluded = HELD_WORKLOAD_EMPTY_EXCLUSIONS();
+  const signed: number[] = [];
+  const observed: number[] = [];
+  const predicted: number[] = [];
+  const cadence: number[] = [];
+  let stableDurationSec = 0;
+  let postSettlingDurationSec = 0;
+  let qualifyingWindowCount = 0;
+  for (const window of windows) {
+    const first = window.samples[0].activeSec;
+    const last = window.samples[window.samples.length - 1].activeSec;
+    stableDurationSec += last - first + 1;
+    const bySecond = new Map(window.samples.map((sample) => [sample.activeSec, sample]));
+    let qualifying = 0;
+    for (let second = first + policy.settlingSeconds; second <= last; second += 1) {
+      postSettlingDurationSec += 1;
+      const sample = bySecond.get(second);
+      if (!sample) { excluded.observationGap += 1; continue; }
+      if (!sample.watts) { excluded.wattsUnavailable += 1; continue; }
+      const watts = sample.watts.value;
+      if (watts < model.observedMinWatts || watts > model.observedMaxWatts) {
+        excluded.outsideCalibrationDomain += 1;
+        continue;
+      }
+      const heartRate = hrBySecond.get(second);
+      if (heartRate === undefined) { excluded.heartRateUnavailable += 1; continue; }
+      const prediction = model.interceptBpm + model.slopeBpmPerWatt * watts;
+      signed.push(heartRate - prediction);
+      observed.push(heartRate);
+      predicted.push(prediction);
+      if (sample.cadenceRpm) cadence.push(sample.cadenceRpm.value);
+      qualifying += 1;
+    }
+    if (qualifying > 0) qualifyingWindowCount += 1;
+  }
+  const stableResistance: PersonalizedPrescriptionStableResistanceSummaryV1 = {
+    observedResistanceChangeCount: observedResistanceChangeCount(bike, policy),
+    stableWindowCount: windows.length,
+    qualifyingWindowCount,
+    stableDurationSec,
+    postSettlingDurationSec,
+    qualifyingDurationSec: signed.length,
+    excludedPostSettlingSeconds: excluded,
+  };
+  const base = { observedPowerProvenance, stableResistance };
+  if (observedPowerProvenance === "mixed") {
+    return { outcome: "unsupported_observed_provenance", exclusionReason: "unsupported_power_provenance", ...base };
+  }
+  if (windows.length === 0) {
+    return { outcome: "insufficient_evidence", exclusionReason: "no_stable_observed_resistance", ...base };
+  }
+  if (signed.length < policy.minQualifyingSeconds) {
+    return { outcome: "insufficient_evidence", exclusionReason: "insufficient_post_settling_evidence", ...base };
+  }
+  return {
+    outcome: "characterized",
+    ...base,
+    forwardHeartRate: {
+      observedHeartRateMedianBpm: median(observed),
+      predictedHeartRateMedianBpm: median(predicted),
+      signedErrorBpm: distribution(signed),
+      absoluteErrorBpm: distribution(signed.map(Math.abs)),
+    },
+    ...(cadence.length > 0 ? {
+      cadenceRpm: {
+        observationCount: cadence.length,
+        median: median(cadence),
+        q1: quantile(cadence, 0.25),
+        q3: quantile(cadence, 0.75),
+      },
+    } : {}),
+  };
+}
+
 function characterizePhase(
+  shadow: PersonalizedPrescriptionPhaseEvaluationV1,
+  response: WorkoutPhaseResponse | undefined,
+  evaluation: PersonalizedPrescriptionEvaluationV1,
+  hrBySecond: ReadonlyMap<number, number>,
+  bikeBySecond: ReadonlyMap<number, OrdinaryBikeTelemetrySample>,
+  audit: readonly MachineDecisionAuditEntry[],
+  policy: PersonalizedPrescriptionCharacterizationPolicyV1,
+  heldWorkloadPolicy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+): PersonalizedPrescriptionPhaseCharacterizationV3 {
+  const closedLoop = characterizeClosedLoopPhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy);
+  const start = response?.activeStartSec ?? shadow.activeStartSec;
+  const completedEnd = start === undefined ? undefined : start + (response?.completedDurationSec ?? 0);
+  const bike = start === undefined || completedEnd === undefined ? [] : [...bikeBySecond.values()]
+    .filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
+    .sort((a, b) => a.activeSec - b.activeSec);
+  return {
+    ...closedLoop,
+    heldWorkloadForwardResponse: characterizeHeldWorkload(
+      shadow,
+      response !== undefined && start !== undefined,
+      bike,
+      hrBySecond,
+      forwardModelFrom(evaluation),
+      closedLoop.observedPowerProvenance,
+      heldWorkloadPolicy
+    ),
+  };
+}
+
+/** Closed-loop transfer characterization, unchanged since E2 v2. */
+function characterizeClosedLoopPhase(
   shadow: PersonalizedPrescriptionPhaseEvaluationV1,
   response: WorkoutPhaseResponse | undefined,
   evaluation: PersonalizedPrescriptionEvaluationV1,
@@ -544,7 +845,9 @@ export function characterizePersonalizedPrescription(
 ): CurrentPersonalizedPrescriptionCharacterization | null {
   const shadow = parsePersonalizedPrescriptionEvaluation(input.shadowEvaluation);
   const response = parseWorkoutResponse(input.workoutResponse);
-  if (!shadow || !response || !policyValid(input.policy) || !iso(input.createdAt)) return null;
+  const heldWorkloadPolicy = input.heldWorkloadPolicy ?? PHASE_E2_HELD_WORKLOAD_POLICY_V1;
+  if (!shadow || !response || !policyValid(input.policy) || !heldWorkloadPolicyValid(heldWorkloadPolicy) ||
+      !iso(input.createdAt)) return null;
   if (!OWNER_ID_PATTERN.test(input.summary.external_session_id) || !input.summary.athlete_id ||
       shadow.athleteId !== input.summary.athlete_id || response.athleteId !== input.summary.athlete_id ||
       response.sessionId !== input.summary.external_session_id || shadow.workoutSelector !== input.summary.day ||
@@ -574,13 +877,15 @@ export function characterizePersonalizedPrescription(
     hrBySecond,
     bikeBySecond,
     audit,
-    input.policy
+    input.policy,
+    heldWorkloadPolicy
   ));
+  const forwardModel = forwardModelFrom(shadow);
   return {
-    schemaVersion: PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2,
+    schemaVersion: PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V3,
     characterizer: {
       id: PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1,
-      version: PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2,
+      version: PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V3,
     },
     mode: "diagnostic",
     activationEligible: false,
@@ -604,6 +909,8 @@ export function characterizePersonalizedPrescription(
       },
     } : {}),
     policy: { ...input.policy },
+    heldWorkloadPolicy: { ...heldWorkloadPolicy },
+    ...(forwardModel ? { heldWorkloadForwardModel: forwardModel } : {}),
     phases,
     createdAt: input.createdAt,
   };
@@ -674,7 +981,145 @@ function parsedPhase(value: unknown, shadow: PersonalizedPrescriptionPhaseEvalua
   return value as unknown as PersonalizedPrescriptionPhaseCharacterizationV1;
 }
 
-/** Strict historical E2 reader with an immutable structural link to the trusted E1 record. */
+const HELD_OUTCOMES = new Set(["characterized", "insufficient_evidence", "not_candidate",
+  "calibration_unavailable", "unsupported_observed_provenance"]);
+const HELD_RESPONSE_KEYS = new Set(["outcome", "exclusionReason", "observedPowerProvenance",
+  "stableResistance", "forwardHeartRate", "cadenceRpm"]);
+const STABLE_RESISTANCE_COUNT_KEYS = ["observedResistanceChangeCount", "stableWindowCount", "qualifyingWindowCount",
+  "stableDurationSec", "postSettlingDurationSec", "qualifyingDurationSec"];
+const STABLE_RESISTANCE_KEYS = [...STABLE_RESISTANCE_COUNT_KEYS, "excludedPostSettlingSeconds"];
+const HELD_EXCLUSION_KEYS = ["observationGap", "wattsUnavailable", "outsideCalibrationDomain", "heartRateUnavailable"];
+const DISTRIBUTION_KEYS = ["median", "q1", "q3", "min", "max"];
+const FORWARD_HEART_RATE_KEYS = ["observedHeartRateMedianBpm", "predictedHeartRateMedianBpm",
+  "signedErrorBpm", "absoluteErrorBpm"];
+const CADENCE_KEYS = ["observationCount", "median", "q1", "q3"];
+const FORWARD_MODEL_KEYS = ["interceptBpm", "slopeBpmPerWatt", "observedMinWatts", "observedMaxWatts"] as const;
+
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => key in value);
+}
+
+function count(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 0;
+}
+
+function distributionValid(value: unknown): value is PersonalizedPrescriptionDistributionV1 {
+  if (!isObject(value) || !exactKeys(value, DISTRIBUTION_KEYS)) return false;
+  const { median: mid, q1, q3, min, max } = value;
+  return [mid, q1, q3, min, max].every(finite) &&
+    (min as number) <= (q1 as number) && (q1 as number) <= (mid as number) &&
+    (mid as number) <= (q3 as number) && (q3 as number) <= (max as number);
+}
+
+function stableResistanceValid(value: unknown, observedDurationSec: number):
+  value is PersonalizedPrescriptionStableResistanceSummaryV1 {
+  if (!isObject(value) || !exactKeys(value, STABLE_RESISTANCE_KEYS)) return false;
+  const excluded = value.excludedPostSettlingSeconds;
+  if (!isObject(excluded) || !exactKeys(excluded, HELD_EXCLUSION_KEYS) ||
+      !HELD_EXCLUSION_KEYS.every((key) => count(excluded[key]))) return false;
+  if (!STABLE_RESISTANCE_COUNT_KEYS.every((key) => count(value[key]))) return false;
+  const windows = value.stableWindowCount as number;
+  const qualifyingWindows = value.qualifyingWindowCount as number;
+  const stable = value.stableDurationSec as number;
+  const post = value.postSettlingDurationSec as number;
+  const qualifying = value.qualifyingDurationSec as number;
+  const excludedTotal = HELD_EXCLUSION_KEYS.reduce((sum, key) => sum + (excluded[key] as number), 0);
+  return qualifyingWindows <= windows && (qualifyingWindows === 0) === (qualifying === 0) &&
+    (windows === 0 ? stable === 0 : stable >= windows) && stable <= observedDurationSec &&
+    post <= stable && post === qualifying + excludedTotal &&
+    (value.observedResistanceChangeCount as number) <= observedDurationSec;
+}
+
+function forwardModelEquals(
+  value: unknown,
+  expected: PersonalizedPrescriptionHeldWorkloadForwardModelV1 | undefined
+): boolean {
+  if (!expected) return value === undefined;
+  return isObject(value) && exactKeys(value, FORWARD_MODEL_KEYS) &&
+    FORWARD_MODEL_KEYS.every((key) => value[key] === expected[key]);
+}
+
+/** Strict v3 held-workload forward-response reader; structural and derived invariants fail closed. */
+function heldWorkloadResponseValid(
+  value: unknown,
+  shadow: PersonalizedPrescriptionPhaseEvaluationV1,
+  phase: PersonalizedPrescriptionPhaseCharacterizationV1,
+  model: PersonalizedPrescriptionHeldWorkloadForwardModelV1 | undefined,
+  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+): value is PersonalizedPrescriptionHeldWorkloadForwardResponseV1 {
+  if (!isObject(value) || !Object.keys(value).every((key) => HELD_RESPONSE_KEYS.has(key)) ||
+      !HELD_OUTCOMES.has(value.outcome as string) ||
+      value.observedPowerProvenance !== phase.observedPowerProvenance) return false;
+  const outcome = value.outcome;
+  const reason = value.exclusionReason;
+  const hasStable = value.stableResistance !== undefined;
+  if (hasStable && !stableResistanceValid(value.stableResistance, phase.evidenceCoverage.observedDurationSec)) {
+    return false;
+  }
+  const stable = value.stableResistance as PersonalizedPrescriptionStableResistanceSummaryV1 | undefined;
+  if (outcome !== "characterized" && (value.forwardHeartRate !== undefined || value.cadenceRpm !== undefined)) {
+    return false;
+  }
+  if ((shadow.outcome === "candidate") === (outcome === "not_candidate")) return false;
+  if (outcome === "not_candidate" || outcome === "calibration_unavailable") {
+    if (outcome === "calibration_unavailable" && model) return false;
+    return reason === undefined && !hasStable;
+  }
+  if (!model) return false;
+  if (outcome === "unsupported_observed_provenance") {
+    return reason === "unsupported_power_provenance" && value.observedPowerProvenance === "mixed" && hasStable;
+  }
+  if (value.observedPowerProvenance === "mixed") return false;
+  if (outcome === "insufficient_evidence") {
+    if (reason === "phase_evidence_unavailable") return !hasStable;
+    if (!stable) return false;
+    if (reason === "no_stable_observed_resistance") return stable.stableWindowCount === 0;
+    return reason === "insufficient_post_settling_evidence" && stable.stableWindowCount > 0 &&
+      stable.qualifyingDurationSec < policy.minQualifyingSeconds;
+  }
+  if (reason !== undefined || !stable || stable.qualifyingDurationSec < policy.minQualifyingSeconds ||
+      (value.observedPowerProvenance !== "measured_watts" && value.observedPowerProvenance !== "calibrated_watts")) {
+    return false;
+  }
+  const forward = value.forwardHeartRate;
+  if (!isObject(forward) || !exactKeys(forward, FORWARD_HEART_RATE_KEYS) ||
+      !finite(forward.observedHeartRateMedianBpm) || !finite(forward.predictedHeartRateMedianBpm) ||
+      !distributionValid(forward.signedErrorBpm) || !distributionValid(forward.absoluteErrorBpm)) return false;
+  const signed = forward.signedErrorBpm;
+  const absolute = forward.absoluteErrorBpm;
+  const predictedAtMin = model.interceptBpm + model.slopeBpmPerWatt * model.observedMinWatts;
+  const predictedAtMax = model.interceptBpm + model.slopeBpmPerWatt * model.observedMaxWatts;
+  const predicted = forward.predictedHeartRateMedianBpm;
+  if (absolute.min < 0 || !nearlyEqual(absolute.max, Math.max(Math.abs(signed.min), Math.abs(signed.max))) ||
+      forward.observedHeartRateMedianBpm < 30 || forward.observedHeartRateMedianBpm > 250 ||
+      predicted < Math.min(predictedAtMin, predictedAtMax) - 1e-9 ||
+      predicted > Math.max(predictedAtMin, predictedAtMax) + 1e-9) return false;
+  if (value.cadenceRpm !== undefined) {
+    const cadence = value.cadenceRpm;
+    if (!isObject(cadence) || !exactKeys(cadence, CADENCE_KEYS) || !count(cadence.observationCount) ||
+        (cadence.observationCount as number) < 1 ||
+        (cadence.observationCount as number) > stable.qualifyingDurationSec ||
+        ![cadence.median, cadence.q1, cadence.q3].every((item) => finite(item) && item >= 0 && item <= 300) ||
+        (cadence.q1 as number) > (cadence.median as number) ||
+        (cadence.median as number) > (cadence.q3 as number)) return false;
+  }
+  // Every qualifying calibrated-watts second had verified measured cadence in the
+  // producer, so a calibrated characterization with cadence removed or weakened
+  // fails closed. Measured-watts cadence stays descriptive and optional.
+  if (value.observedPowerProvenance === "calibrated_watts") {
+    const cadence = value.cadenceRpm as { observationCount: number; median: number; q1: number; q3: number } | undefined;
+    if (!cadence || cadence.observationCount !== stable.qualifyingDurationSec ||
+        ![cadence.median, cadence.q1, cadence.q3].every((item) => cadenceInBand(item))) return false;
+  }
+  return true;
+}
+
+/**
+ * Strict E2 reader with an immutable structural link to the trusted E1 record.
+ * v1 and v2 stay readable exactly as written and can never carry v3 fields;
+ * v3 is current; any other schema/characterizer version fails closed.
+ */
 export function parsePersonalizedPrescriptionCharacterization(
   value: unknown,
   shadowValue: unknown,
@@ -695,7 +1140,11 @@ export function parsePersonalizedPrescriptionCharacterization(
     value.schemaVersion === PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2 &&
     isObject(value.characterizer) &&
     value.characterizer.version === PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2;
-  if (!shadow || !isObject(value) || (!isV1 && !isV2) ||
+  const isV3 = isObject(value) &&
+    value.schemaVersion === PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V3 &&
+    isObject(value.characterizer) &&
+    value.characterizer.version === PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V3;
+  if (!shadow || !isObject(value) || (!isV1 && !isV2 && !isV3) ||
       containsNonFiniteNumber(value) ||
       !isObject(value.characterizer) || value.characterizer.id !== PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1 ||
       value.mode !== "diagnostic" || value.activationEligible !== false || !isObject(value.sourceShadow) ||
@@ -717,7 +1166,7 @@ export function parsePersonalizedPrescriptionCharacterization(
     shadow.fitnessEvidenceSnapshot.calibration.protocol.id !== VO2_FORMAL_ASSESSMENT_CONTRACT_V1.protocolId ||
     shadow.fitnessEvidenceSnapshot.calibration.protocol.version !== VO2_FORMAL_ASSESSMENT_CONTRACT_V1.protocolVersion
   )) return null;
-  if (isV2) {
+  if (isV2 || isV3) {
     const expectedFormal = shadow.fitnessEvidenceSnapshot;
     if (expectedFormal) {
       if (!isObject(value.formalAssessmentProvenance) ||
@@ -729,6 +1178,12 @@ export function parsePersonalizedPrescriptionCharacterization(
           value.formalAssessmentProvenance.protocol.version !== expectedFormal.calibration.protocol.version) return null;
     } else if (value.formalAssessmentProvenance !== undefined) return null;
   }
+  // Historical records can never be relabeled to carry, hide, or smuggle v3 evidence.
+  if (!isV3 && ("heldWorkloadPolicy" in value || "heldWorkloadForwardModel" in value ||
+      value.phases.some((phase) => isObject(phase) && "heldWorkloadForwardResponse" in phase))) return null;
+  const forwardModel = forwardModelFrom(shadow);
+  if (isV3 && (!heldWorkloadPolicyValid(value.heldWorkloadPolicy) ||
+      !forwardModelEquals(value.heldWorkloadForwardModel, forwardModel))) return null;
   if (expected && (expected.athleteId !== undefined && value.athleteId !== expected.athleteId ||
       expected.sessionId !== undefined && value.workoutSessionId !== expected.sessionId ||
       expected.workoutSelector !== undefined && value.workoutSelector !== expected.workoutSelector ||
@@ -748,6 +1203,13 @@ export function parsePersonalizedPrescriptionCharacterization(
           phase.evidenceCoverage.plannedDurationSec !== responsePhase.plannedDurationSec ||
           phase.evidenceCoverage.observedDurationSec !== responsePhase.completedDurationSec) return null;
     }
+    if (isV3 && !heldWorkloadResponseValid(
+      (phase as PersonalizedPrescriptionPhaseCharacterizationV3).heldWorkloadForwardResponse,
+      shadow.phases[index],
+      phase,
+      forwardModel,
+      value.heldWorkloadPolicy as PersonalizedPrescriptionHeldWorkloadPolicyV1
+    )) return null;
     phases.push(phase);
   }
   const parsed = {
@@ -755,12 +1217,16 @@ export function parsePersonalizedPrescriptionCharacterization(
     sourceShadow: { ...(value.sourceShadow as PersonalizedPrescriptionCharacterizationV1["sourceShadow"]) },
     policy: { ...(value.policy as unknown as PersonalizedPrescriptionCharacterizationPolicyV1) },
     phases,
-  };
-  if (isV2 && "formalAssessmentProvenance" in parsed && parsed.formalAssessmentProvenance) {
+  } as PersonalizedPrescriptionCharacterization;
+  if ((isV2 || isV3) && "formalAssessmentProvenance" in parsed && parsed.formalAssessmentProvenance) {
     parsed.formalAssessmentProvenance = {
       algorithm: { ...parsed.formalAssessmentProvenance.algorithm },
       protocol: { ...parsed.formalAssessmentProvenance.protocol },
     };
+  }
+  if (parsed.schemaVersion === PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V3) {
+    parsed.heldWorkloadPolicy = { ...parsed.heldWorkloadPolicy };
+    if (parsed.heldWorkloadForwardModel) parsed.heldWorkloadForwardModel = { ...parsed.heldWorkloadForwardModel };
   }
   return parsed;
 }

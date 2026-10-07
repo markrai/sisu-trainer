@@ -29,6 +29,7 @@ import { deriveWorkoutResponse } from "./workoutResponse.js";
 import {
   characterizePersonalizedPrescription,
   PHASE_E2_CHARACTERIZATION_POLICY_V1,
+  PHASE_E2_HELD_WORKLOAD_POLICY_V1,
 } from "./personalizedPrescriptionCharacterization.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 import { APP_VERSION } from "./version.js";
@@ -268,6 +269,7 @@ async function generateWorkoutSummary(
             bikeSamples,
             machineDecisionAudit: summary.machine_decision_audit,
             policy: PHASE_E2_CHARACTERIZATION_POLICY_V1,
+            heldWorkloadPolicy: PHASE_E2_HELD_WORKLOAD_POLICY_V1,
             createdAt: summary.endedAt,
           });
           if (characterization) {
