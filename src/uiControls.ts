@@ -1285,7 +1285,8 @@ async function loadPersonalizationDiagnostics() {
       EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
       personalizationAssessmentContexts,
       personalizationWorkoutContexts,
-      personalizationPerformedLoadContexts
+      personalizationPerformedLoadContexts,
+      new Date().toISOString()
     ));
   } catch (error) {
     console.error("Error loading personalization diagnostics:", error);
@@ -1311,7 +1312,8 @@ function applyPersonalizationDiagnosticsFilters() {
     currentPersonalizationDiagnosticsFilters(),
     personalizationAssessmentContexts,
     personalizationWorkoutContexts,
-    personalizationPerformedLoadContexts
+    personalizationPerformedLoadContexts,
+    new Date().toISOString()
   ));
 }
 
@@ -1321,7 +1323,8 @@ function resetPersonalizationDiagnosticsFilters() {
     EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
     personalizationAssessmentContexts,
     personalizationWorkoutContexts,
-    personalizationPerformedLoadContexts
+    personalizationPerformedLoadContexts,
+    new Date().toISOString()
   ));
 }
 

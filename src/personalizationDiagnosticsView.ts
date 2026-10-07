@@ -5,6 +5,15 @@ import {
   type PersonalizedPrescriptionCharacterizationAggregateV2,
 } from "./personalizedPrescriptionCharacterization.js";
 import { buildPhasePerformedLoadViews, type PhasePerformedLoadView } from "./performedLoad.js";
+// One-way, read-only dependency: diagnostics consume E4A; E4A imports nothing.
+import {
+  E4A_SCIENTIFIC_ASSESSMENT_POLICY_V1,
+  assessPersonalizedWorkloadEvidence,
+  buildSubjectEvidence,
+  discoverDiagnosticSubjects,
+  scientificSubjectKey,
+  type ScientificAssessment,
+} from "./personalizationScientificAssessment.js";
 import { canonicalMedian } from "./stats.js";
 import {
   LEGACY_HR_TARGET_RESOLVER_ID,
@@ -116,6 +125,12 @@ export interface PersonalizationDiagnosticsModel {
   exclusionCounts: Record<PersonalizedPrescriptionCharacterizationExclusionReasonV1, number>;
   evidenceCollectionSummary: PersonalizationEvidenceCollectionSummary;
   thresholdLongitudinal: ThresholdLongitudinalAnalysis;
+  /**
+   * Runtime-only E4A scientific assessments under the frozen production
+   * policy. Developer diagnostics only: never exported, never persisted,
+   * `runtimeAuthority: false`. Empty when no `evaluatedAt` was supplied.
+   */
+  scientificAssessments: ScientificAssessment[];
 }
 
 export interface TrustedWorkoutHistoryRow {
@@ -663,7 +678,8 @@ export function buildPersonalizationDiagnosticsModel(
   filters: PersonalizationDiagnosticsFilters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
   assessmentContexts: Readonly<Record<string, FrozenAssessmentDiagnosticContext>> = {},
   workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>> = {},
-  performedLoadContexts: Readonly<Record<string, readonly PhasePerformedLoadView[]>> = {}
+  performedLoadContexts: Readonly<Record<string, readonly PhasePerformedLoadView[]>> = {},
+  scientificAssessmentEvaluatedAt: string | null = null
 ): PersonalizationDiagnosticsModel {
   const normalizedFilters = { ...EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, ...filters };
   const filtered = filterPersonalizationCharacterizations(records, normalizedFilters);
@@ -698,7 +714,33 @@ export function buildPersonalizationDiagnosticsModel(
     exclusionCounts,
     evidenceCollectionSummary: summarizePersonalizationEvidenceCollection(records),
     thresholdLongitudinal: buildThresholdLongitudinalAnalysis(records, assessmentContexts, workoutContexts),
+    scientificAssessments: scientificAssessmentEvaluatedAt === null
+      ? []
+      : buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts,
+        scientificAssessmentEvaluatedAt),
   };
+}
+
+/**
+ * Read-only E4A projection over all trusted records (filters never apply).
+ * The current calibration is not vouched for here (`null`): diagnostics do
+ * not read FitnessState, so supersession is reported `unavailable`.
+ */
+export function buildDiagnosticScientificAssessments(
+  records: readonly PersonalizedPrescriptionCharacterization[],
+  assessmentContexts: Readonly<Record<string, FrozenAssessmentDiagnosticContext>>,
+  workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>>,
+  evaluatedAt: string
+): ScientificAssessment[] {
+  const athleteIds = [...new Set(records.map((record) => record.athleteId))].sort((a, b) => a.localeCompare(b));
+  return athleteIds.flatMap((athleteId) =>
+    discoverDiagnosticSubjects(records, assessmentContexts, workoutContexts, athleteId).map((subject) =>
+      assessPersonalizedWorkloadEvidence(
+        buildSubjectEvidence({ subject, records, assessmentContexts, workoutContexts, currentCalibration: null }),
+        subject,
+        E4A_SCIENTIFIC_ASSESSMENT_POLICY_V1,
+        evaluatedAt
+      )));
 }
 
 export interface PersonalizationDiagnosticsExportV1 {
@@ -723,7 +765,11 @@ export type PersonalizationDiagnosticsExport =
   | PersonalizationDiagnosticsExportV2;
 export type CurrentPersonalizationDiagnosticsExport = PersonalizationDiagnosticsExportV2;
 
-/** Stable local export. It includes immutable E2 records, never profile data or raw HR traces. */
+/**
+ * Stable local export. It includes immutable E2 records, never profile data or raw HR traces.
+ * The v2 contract is exactly schemaVersion, filters, aggregate, diagnosticRows,
+ * characterizationRecords; runtime-only analyses (E3 series, E4A) are never exported.
+ */
 export function createPersonalizationDiagnosticsExport(
   model: PersonalizationDiagnosticsModel
 ): PersonalizationDiagnosticsExportV2 {
@@ -863,6 +909,24 @@ function thresholdLongitudinalHtml(analysis: ThresholdLongitudinalAnalysis): str
   return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-count-grid"><div><strong>${analysis.sessionCount}</strong><span>Comparable bike threshold sessions</span></div><div><strong>${analysis.cohorts.length}</strong><span>Calibration × provenance × machine cohorts</span></div></div><div class="personalization-cohorts">${cohorts}</div>${exclusions}</section>`;
 }
 
+function scientificAssessmentsHtml(assessments: readonly ScientificAssessment[]): string {
+  const note = `<p class="developer-diagnostics-note">E4A scientific assessment over comparable frozen E1/E2 evidence. Scientific state is not product authorization and has no runtime authority. Under the production policy, open-loop and actuation-mode evidence are required but unavailable, so eligible is unreachable.</p>`;
+  if (assessments.length === 0) {
+    return `<section class="personalization-longitudinal" id="personalizationScientificAssessments"><h4>Scientific assessment (E4A)</h4>${note}<div class="personalization-diagnostics-empty"><strong>No assessable subjects yet.</strong><span>A subject needs a frozen E1 candidate with complete calibration and machine identity.</span></div></section>`;
+  }
+  const cards = assessments.map((assessment) => {
+    const subject = assessment.subject;
+    const digest = assessment.evidenceDigest;
+    const gates = assessment.gates.map((gate) => `<tr><td>${escapeHtml(gate.id)}</td><td>${escapeHtml(gate.status)}</td><td>${escapeHtml(gate.reasonCode ?? "")}</td></tr>`).join("");
+    return `<article class="personalization-cohort">
+      <h4>${escapeHtml(scientificSubjectKey(subject))} · ${escapeHtml(personalizationDiagnosticLabel(assessment.state))}</h4>
+      <dl>${detailRow("Scientific state", assessment.state)}${detailRow("Runtime authority", assessment.runtimeAuthority ? "yes" : "no")}${detailRow("Subject", `${subject.athleteId} · ${subject.activity} ${subject.phaseKind} · ${subject.intensityId} · ${subject.modality} · ${subject.legacyHrBand.minBpm}–${subject.legacyHrBand.maxBpm} bpm`)}${detailRow("Calibration", `${digest.calibrationInstanceId} · ${subject.calibration.estimatorId}@${subject.calibration.estimatorVersion} · ${subject.calibration.protocolId}@${subject.calibration.protocolVersion}`)}${detailRow("Assessor", `${assessment.assessor.id}@${assessment.assessor.version}`)}${detailRow("Policy", `${assessment.policy.id}@${assessment.policy.version}`)}${detailRow("Reason codes", assessment.reasonCodes.length === 0 ? "none" : assessment.reasonCodes.join(", "))}${detailRow("Sessions / distinct dates", `${digest.sessionCount} / ${digest.distinctDateCount}`)}${detailRow("Excluded (identity / multi-phase / invalid)", `${digest.excludedIncompleteIdentitySessions} / ${digest.excludedMultiPhaseSessions} / ${digest.ignoredInvalidSessions}`)}${detailRow("Machine / profile", `${subject.machineId} / v${subject.machineProfileVersion}`)}${detailRow("Power provenance (calibration / observed)", `${personalizationDiagnosticLabel(subject.calibration.workloadProvenance)} / ${personalizationDiagnosticLabel(subject.observedPowerProvenance)}`)}</dl>
+      <div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Gate</th><th>Status</th><th>Reason</th></tr></thead><tbody>${gates}</tbody></table></div>
+    </article>`;
+  }).join("");
+  return `<section class="personalization-longitudinal" id="personalizationScientificAssessments"><h4>Scientific assessment (E4A)</h4>${note}<div class="personalization-cohorts">${cards}</div></section>`;
+}
+
 /** Responsive developer presentation only; every number comes from E2 helpers or frozen fields. */
 export function personalizationDiagnosticsHtml(model: PersonalizationDiagnosticsModel): string {
   if (model.sourceRecordCount === 0) {
@@ -919,6 +983,7 @@ export function personalizationDiagnosticsHtml(model: PersonalizationDiagnostics
     <div class="personalization-exclusions"><h4>Exclusions in all persisted evidence</h4>${allEvidenceExclusions}</div>
   </section>
     ${thresholdLongitudinalHtml(model.thresholdLongitudinal)}
+    ${scientificAssessmentsHtml(model.scientificAssessments)}
     <div class="personalization-filter-grid">${filtersHtml}</div>
     <div class="personalization-count-grid"><div><strong>${aggregate.workoutCount}</strong><span>Completed workouts with E2 data</span></div><div><strong>${aggregate.candidatePhases}</strong><span>Candidate phases</span></div><div><strong>${aggregate.evaluableCandidatePhases}</strong><span>Evaluable candidate phases</span></div><div><strong>${aggregate.fallbackPhases}</strong><span>Fallback phases</span></div></div>
     ${aggregate.groups.length > 0 ? `<div class="personalization-cohorts">${cohortHtml}</div>` : `<div class="personalization-diagnostics-empty"><strong>No phases match these filters.</strong><span>Change a filter to inspect another cohort.</span></div>`}

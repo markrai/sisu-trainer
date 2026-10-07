@@ -455,6 +455,7 @@ test("empty history renders an explanatory no-data state and clean zero aggregat
   assert.equal(model.thresholdLongitudinal.sessionCount, 0);
   assert.equal(model.thresholdLongitudinal.cohorts.length, 0);
   assert.equal(model.thresholdLongitudinal.exclusions.length, 0);
+  assert.deepEqual(model.scientificAssessments, []);
   assert.match(personalizationDiagnosticsHtml(model), /No personalization characterization data yet/);
 });
 
@@ -908,9 +909,12 @@ test("threshold transfer HTML reports error under HR control and does not score 
   assert.match(series, /Median signed error/);
   assert.match(series, /Width-norm error/);
   assert.doesNotMatch(series, /Inside candidate|Observed median inside candidate/);
+  assert.equal(model.thresholdLongitudinal.sessionCount, 1);
+  assert.deepEqual(model.scientificAssessments, []);
   const exported = createPersonalizationDiagnosticsExport(model);
   assert.equal(exported.schemaVersion, 2);
   assert.equal("thresholdLongitudinal" in exported, false);
+  assert.equal("scientificAssessments" in exported, false);
 });
 
 test("E3 longitudinal analysis does not bump E2 or enable activation", async () => {
