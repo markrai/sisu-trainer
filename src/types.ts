@@ -1579,6 +1579,10 @@ export interface WorkoutActuationProvenanceV1 {
   captureScope: "app_resistance_commands";
   consoleResistanceChanges: "not_observable";
   coverage: "complete" | "incomplete";
+  /**
+   * `persistence_failed`: additional evidence could not be persisted, including
+   * storage errors and v1 capacity exhaustion (the 5,000-event reader bound).
+   */
   incompleteReasons: Array<"active_clock_unavailable" | "persistence_failed">;
   events: ResistanceActuationEventV1[];
   /** Present only when frozen phase boundaries exist (ordinary workout response). */

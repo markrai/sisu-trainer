@@ -10,7 +10,9 @@ import { getSelectedMachineId } from "./machines/selection.js";
  */
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
 const DECISION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
-const MAX_EVENTS = 5000;
+/** Permanent v1 reader bound; the writer never persists more events than this. */
+export const MAX_EXECUTION_PROVENANCE_EVENTS = 5000;
+const MAX_EVENTS = MAX_EXECUTION_PROVENANCE_EVENTS;
 const MAX_PHASES = 100;
 export const ACTUATION_ORIGINS = [
     "automatic_hr_control",
@@ -145,6 +147,9 @@ function isAmbiguous(event) {
 }
 /** Deterministic phase derivation on the active clock: an event belongs to [activeStartSec, activeEndSec). */
 export function derivePhaseActuationSummaries(actuation, boundaries) {
+    return derivePhaseActuationSummariesWithRule(actuation, boundaries, "canonical");
+}
+function derivePhaseActuationSummariesWithRule(actuation, boundaries, rule) {
     return boundaries.map((boundary) => {
         const events = actuation.events.filter((event) => event.activeSec >= boundary.activeStartSec && event.activeSec < boundary.activeEndSec);
         const accepted = events.filter((event) => event.outcome === "accepted");
@@ -155,8 +160,9 @@ export function derivePhaseActuationSummaries(actuation, boundaries) {
         // `none` means zero app resistance-command events under complete capture.
         // A failed/unavailable command was still an app actuation attempt whose
         // physical effect is not established, so it makes the phase unknown.
+        const rejectedMakesUnknown = rule === "canonical" && rejectedCount > 0;
         let mode;
-        if (actuation.coverage !== "complete" || ambiguousCount > 0 || rejectedCount > 0)
+        if (actuation.coverage !== "complete" || ambiguousCount > 0 || rejectedMakesUnknown)
             mode = "unknown";
         else if (automaticAcceptedCount > 0)
             mode = "automatic";
@@ -262,9 +268,17 @@ export function parseWorkoutExecutionProvenance(value) {
                 return null;
             boundaries.push(boundary);
         }
+        const stored = JSON.stringify(actuation.phases);
         const derived = derivePhaseActuationSummaries(parsedActuation, boundaries);
-        if (JSON.stringify(derived) !== JSON.stringify(actuation.phases))
-            return null;
+        if (JSON.stringify(derived) !== stored) {
+            // Published WorkoutExecutionProvenance v1 writer compatibility: accept a
+            // record only if its stored summaries are exactly what the published
+            // b7fef00 writer derives from this record's own events and boundaries,
+            // then return the canonical summaries. Any other mismatch fails closed.
+            const published = derivePhaseActuationSummariesWithRule(parsedActuation, boundaries, "published_b7fef00");
+            if (JSON.stringify(published) !== stored)
+                return null;
+        }
         parsedActuation.phases = derived;
     }
     return {
@@ -287,6 +301,13 @@ export function activeSecondAt(session, nowMs) {
 /** Append one posted command. Without an active-clock second the event cannot be placed, so coverage becomes incomplete. */
 export function appendActuationEvent(record, request, activeSec) {
     const actuation = record.actuation;
+    // v1 capacity: never persist more events than the permanent reader accepts.
+    // The existing events are kept unchanged (no eviction, no ID wrap) and capture
+    // becomes incomplete via `persistence_failed`: the record could not persist
+    // additional evidence within its bounded durable representation.
+    if (actuation.events.length >= MAX_EVENTS) {
+        return { record: markIncomplete(record, "persistence_failed"), commandId: null };
+    }
     if (activeSec === null || !Number.isFinite(request.observedAtMs)) {
         return { record: markIncomplete(record, "active_clock_unavailable"), commandId: null };
     }

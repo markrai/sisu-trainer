@@ -22,8 +22,12 @@ import {
   derivePhaseActuationSummaries,
   executionProvenanceKey,
   finalizeExecutionProvenance,
+  MAX_EXECUTION_PROVENANCE_EVENTS,
+  appendActuationEvent,
   parseWorkoutExecutionProvenance,
   readInProgressExecutionProvenance,
+  recordActuationRequest,
+  writeInProgressExecutionProvenance,
 } from "../dist/executionProvenance.js";
 import {
   FORMAL_CALIBRATION_MACHINE_PROVENANCE_STORAGE_KEY,
@@ -847,4 +851,148 @@ test("the Bike Bridge carries the guidance session context onto each posted comm
   } finally {
     session.stop();
   }
+});
+
+// ---------------------------------------------------------------- v1 capacity
+
+function cappedRecord(count) {
+  const record = provenanceWith([]);
+  record.actuation.events = Array.from({ length: count }, (_, index) => ({
+    commandId: index + 1,
+    decisionId: `cap-${index + 1}`,
+    origin: "automatic_hr_control",
+    trigger: "decision",
+    requestedResistance: 8,
+    activeSec: index,
+    observedAt: new Date(START_MS + index * 1000).toISOString(),
+    outcome: "accepted",
+  }));
+  return record;
+}
+
+test("the writer never persists event 5,001; capacity exhaustion is persistence_failed within v1", () => {
+  assert.equal(MAX_EXECUTION_PROVENANCE_EVENTS, 5000);
+  const at4999 = cappedRecord(4999);
+  assert.ok(parseWorkoutExecutionProvenance(structuredClone(at4999)), "4,999 events are valid");
+  const fifth = appendActuationEvent(at4999, request("automatic_hr_control", START_MS + 5_000_000,
+    { decisionId: "cap-5000" }), 5000);
+  assert.equal(fifth.commandId, 5000);
+  assert.equal(fifth.record.actuation.events.length, 5000);
+  assert.equal(fifth.record.actuation.coverage, "complete");
+  assert.ok(parseWorkoutExecutionProvenance(structuredClone(fifth.record)), "5,000 events round-trip");
+  const eventsBefore = structuredClone(fifth.record.actuation.events);
+  const overflow = appendActuationEvent(fifth.record, request("automatic_hr_control", START_MS + 5_001_000,
+    { decisionId: "cap-5001" }), 5001);
+  assert.equal(overflow.commandId, null, "no provenance token for an unpersisted command");
+  assert.deepEqual(overflow.record.actuation.events, eventsBefore, "existing events unchanged; nothing evicted");
+  assert.equal(overflow.record.actuation.coverage, "incomplete");
+  assert.deepEqual(overflow.record.actuation.incompleteReasons, ["persistence_failed"]);
+  assert.ok(parseWorkoutExecutionProvenance(structuredClone(overflow.record)), "strict v1 parsing still succeeds");
+  let later = overflow.record;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    later = appendActuationEvent(later, request("automatic_hr_control", START_MS + 5_002_000 + attempt,
+      { decisionId: `later-${attempt}` }), 5002 + attempt).record;
+  }
+  assert.equal(later.actuation.events.length, 5000);
+  assert.deepEqual(later.actuation.incompleteReasons, ["persistence_failed"], "the reason appears exactly once");
+  assert.ok(parseWorkoutExecutionProvenance(structuredClone(later)));
+  const finalized = finalizeExecutionProvenance(later, { selectionChangedDuringWorkout: false,
+    phases: phases([["after", 6000, 7000]]) });
+  assert.ok(finalized);
+  assert.equal(finalized.actuation.phases[0].mode, "unknown", "a phase after the cap cannot claim none");
+});
+
+test("the persisted in-progress record stays bounded and readable after the cap", () => {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", MACHINE, storage);
+  start(storage);
+  writeInProgressExecutionProvenance("Tuesday", { ...cappedRecord(5000), sessionId: SESSION }, storage);
+  const session = getSession("Tuesday", storage);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.equal(recordActuationRequest("Tuesday", session, request("automatic_hr_control", START_MS + 5_100_000 + attempt,
+      { decisionId: `stored-${attempt}` }), storage), null);
+  }
+  const stored = readInProgressExecutionProvenance("Tuesday", storage);
+  assert.equal(stored.actuation.events.length, 5000);
+  assert.equal(stored.actuation.coverage, "incomplete");
+  assert.deepEqual(stored.actuation.incompleteReasons, ["persistence_failed"]);
+});
+
+// ---------------------------------------------------------------- published v1 writer compatibility
+
+/** Independent reproduction of the published b7fef00 phase-mode rule (failed/unavailable ignored). */
+function publishedB7fef00Summaries(record, boundaries) {
+  return derivePhaseActuationSummaries(record.actuation, boundaries).map((summary) => {
+    let mode;
+    if (record.actuation.coverage !== "complete" || summary.ambiguousCount > 0) mode = "unknown";
+    else if (summary.automaticAcceptedCount > 0) mode = "automatic";
+    else if (summary.programmaticAcceptedCount > 0) mode = "programmatic";
+    else mode = "none";
+    return { ...summary, mode };
+  });
+}
+
+function historicalRecord(events, boundaries) {
+  const record = provenanceWith(events);
+  record.actuation.phases = publishedB7fef00Summaries(record, boundaries);
+  return record;
+}
+
+test("genuine b7fef00 records are preserved and returned with canonical phase modes", () => {
+  const boundaries = phases([["a", 0, 120]]);
+  for (const [label, events, historicalMode] of [
+    ["failed-only", [[10, "automatic_hr_control", "failed"]], "none"],
+    ["unavailable-only", [[10, "scripted_phase_program", "unavailable"]], "none"],
+    ["automatic + failed", [[10, "automatic_hr_control"], [20, "automatic_hr_control", "failed"]], "automatic"],
+    ["programmatic + unavailable", [[10, "default_starting_resistance"], [20, "scripted_phase_program", "unavailable"]],
+      "programmatic"],
+  ]) {
+    const record = historicalRecord(events, boundaries);
+    assert.equal(record.actuation.phases[0].mode, historicalMode, `${label}: matches the published derivation`);
+    assert.notDeepEqual(record.actuation.phases, derivePhaseActuationSummaries(record.actuation, boundaries),
+      `${label}: differs from canonical`);
+    const parsed = parseWorkoutExecutionProvenance(structuredClone(record));
+    assert.ok(parsed, `${label}: accepted through published-writer compatibility`);
+    assert.equal(parsed.actuation.phases[0].mode, "unknown", `${label}: canonical mode returned`);
+    assert.deepEqual(parsed.actuation.events, record.actuation.events, `${label}: sparse events unchanged`);
+    const { mode: _historical, ...historicalCounts } = record.actuation.phases[0];
+    const { mode: _canonical, ...canonicalCounts } = parsed.actuation.phases[0];
+    assert.deepEqual(canonicalCounts, historicalCounts, `${label}: counts and boundaries unchanged`);
+  }
+});
+
+test("mismatches not explainable by the published writer still fail closed", () => {
+  const boundaries = phases([["a", 0, 120]]);
+  const forged = (events, mutate) => {
+    const record = historicalRecord(events, boundaries);
+    mutate(record.actuation.phases[0]);
+    return parseWorkoutExecutionProvenance(record);
+  };
+  assert.equal(forged([[10, "automatic_hr_control"]], (phase) => { phase.mode = "none"; }), null,
+    "forged none with an accepted automatic command and nothing rejected");
+  assert.equal(forged([[10, "automatic_hr_control"], [20, "automatic_hr_control", "failed"]],
+    (phase) => { phase.mode = "programmatic"; }), null, "arbitrary mode mismatch");
+  assert.equal(forged([[10, "automatic_hr_control", "failed"]], (phase) => { phase.rejectedCount = 0; }), null,
+    "forged rejected count");
+  assert.equal(forged([[10, "automatic_hr_control"], [20, "automatic_hr_control", "failed"]],
+    (phase) => { phase.automaticAcceptedCount = 2; }), null, "forged automatic count");
+  assert.equal(forged([[10, "default_starting_resistance"], [20, "scripted_phase_program", "unavailable"]],
+    (phase) => { phase.programmaticAcceptedCount = 0; }), null, "forged programmatic count");
+  assert.equal(forged([[10, "automatic_hr_control", "failed"]], (phase) => { phase.ambiguousCount = 1; }), null,
+    "forged ambiguous count");
+  assert.equal(forged([[10, "automatic_hr_control", "failed"]], (phase) => { phase.decisionCount = 2; }), null,
+    "forged decisionCount");
+  assert.equal(forged([[100, "automatic_hr_control", "failed"]], (phase) => { phase.activeEndSec = 90; }), null,
+    "forged phase boundary");
+  assert.equal(forged([[10, "automatic_hr_control", "failed"]], (phase) => { phase.kind = "bogus"; }), null,
+    "forged phase identity");
+});
+
+test("newly written records always use the canonical phase semantics", () => {
+  const finalized = finalizeExecutionProvenance(provenanceWith([[10, "automatic_hr_control"], [20, "automatic_hr_control", "failed"]]),
+    { selectionChangedDuringWorkout: false, phases: phases([["a", 0, 120]]) });
+  assert.equal(finalized.actuation.phases[0].mode, "unknown");
+  const source = readFileSync(new URL("../src/executionProvenance.ts", import.meta.url), "utf8");
+  assert.match(source, /Published WorkoutExecutionProvenance v1 writer compatibility/);
+  assert.equal((source.match(/"published_b7fef00"\)/g) ?? []).length, 1, "the published rule is used only by the reader");
 });

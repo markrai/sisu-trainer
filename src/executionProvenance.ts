@@ -26,7 +26,9 @@ import { getSelectedMachineId, type EquipmentStorage } from "./machines/selectio
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/;
 const DECISION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
-const MAX_EVENTS = 5000;
+/** Permanent v1 reader bound; the writer never persists more events than this. */
+export const MAX_EXECUTION_PROVENANCE_EVENTS = 5000;
+const MAX_EVENTS = MAX_EXECUTION_PROVENANCE_EVENTS;
 const MAX_PHASES = 100;
 
 export const ACTUATION_ORIGINS: readonly ResistanceActuationOriginV1[] = [
@@ -173,10 +175,26 @@ export interface PhaseBoundary {
   activeEndSec: number;
 }
 
+/**
+ * Phase-mode rule. `canonical` is the only current v1 semantics and the only rule
+ * any writer uses. `published_b7fef00` reproduces the published v1 writer
+ * (commit b7fef00) exactly, which ignored failed/unavailable commands; it exists
+ * solely for published WorkoutExecutionProvenance v1 writer compatibility.
+ */
+type PhaseModeRule = "canonical" | "published_b7fef00";
+
 /** Deterministic phase derivation on the active clock: an event belongs to [activeStartSec, activeEndSec). */
 export function derivePhaseActuationSummaries(
   actuation: Pick<WorkoutActuationProvenanceV1, "coverage" | "events">,
   boundaries: readonly PhaseBoundary[]
+): PhaseActuationSummaryV1[] {
+  return derivePhaseActuationSummariesWithRule(actuation, boundaries, "canonical");
+}
+
+function derivePhaseActuationSummariesWithRule(
+  actuation: Pick<WorkoutActuationProvenanceV1, "coverage" | "events">,
+  boundaries: readonly PhaseBoundary[],
+  rule: PhaseModeRule
 ): PhaseActuationSummaryV1[] {
   return boundaries.map((boundary) => {
     const events = actuation.events.filter((event) =>
@@ -189,8 +207,9 @@ export function derivePhaseActuationSummaries(
     // `none` means zero app resistance-command events under complete capture.
     // A failed/unavailable command was still an app actuation attempt whose
     // physical effect is not established, so it makes the phase unknown.
+    const rejectedMakesUnknown = rule === "canonical" && rejectedCount > 0;
     let mode: PhaseActuationModeV1;
-    if (actuation.coverage !== "complete" || ambiguousCount > 0 || rejectedCount > 0) mode = "unknown";
+    if (actuation.coverage !== "complete" || ambiguousCount > 0 || rejectedMakesUnknown) mode = "unknown";
     else if (automaticAcceptedCount > 0) mode = "automatic";
     else if (programmaticAcceptedCount > 0) mode = "programmatic";
     else mode = "none";
@@ -278,8 +297,16 @@ export function parseWorkoutExecutionProvenance(value: unknown): WorkoutExecutio
       if (previous && boundary.activeStartSec < previous.activeEndSec) return null;
       boundaries.push(boundary);
     }
+    const stored = JSON.stringify(actuation.phases);
     const derived = derivePhaseActuationSummaries(parsedActuation, boundaries);
-    if (JSON.stringify(derived) !== JSON.stringify(actuation.phases)) return null;
+    if (JSON.stringify(derived) !== stored) {
+      // Published WorkoutExecutionProvenance v1 writer compatibility: accept a
+      // record only if its stored summaries are exactly what the published
+      // b7fef00 writer derives from this record's own events and boundaries,
+      // then return the canonical summaries. Any other mismatch fails closed.
+      const published = derivePhaseActuationSummariesWithRule(parsedActuation, boundaries, "published_b7fef00");
+      if (JSON.stringify(published) !== stored) return null;
+    }
     parsedActuation.phases = derived;
   }
   return {
@@ -317,6 +344,13 @@ export function appendActuationEvent(
   activeSec: number | null
 ): { record: WorkoutExecutionProvenanceV1; commandId: number | null } {
   const actuation = record.actuation;
+  // v1 capacity: never persist more events than the permanent reader accepts.
+  // The existing events are kept unchanged (no eviction, no ID wrap) and capture
+  // becomes incomplete via `persistence_failed`: the record could not persist
+  // additional evidence within its bounded durable representation.
+  if (actuation.events.length >= MAX_EVENTS) {
+    return { record: markIncomplete(record, "persistence_failed"), commandId: null };
+  }
   if (activeSec === null || !Number.isFinite(request.observedAtMs)) {
     return { record: markIncomplete(record, "active_clock_unavailable"), commandId: null };
   }
