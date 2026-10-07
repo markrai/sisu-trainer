@@ -75,6 +75,7 @@ export const SCIENTIFIC_ASSESSMENT_ASSESSOR_ID_V1 = "personalization-scientific-
 export const SCIENTIFIC_ASSESSMENT_ASSESSOR_VERSION_V1 = 1;
 export const SCIENTIFIC_ASSESSMENT_POLICY_ID_V1 = "e4a-scientific-assessment-policy";
 export const SCIENTIFIC_ASSESSMENT_POLICY_VERSION_V1 = 1;
+export const SCIENTIFIC_ASSESSMENT_POLICY_VERSION_V2 = 2;
 export const SCIENTIFIC_ASSESSMENT_STATES = [
     "not_applicable",
     "collecting",
@@ -98,8 +99,18 @@ const REASON_ORDER = [
     "variance_exceeds_policy",
     "open_loop_evidence_unavailable",
     "actuation_mode_unknown",
+    "machine_comparability_unavailable",
+    "held_workload_evidence_unavailable",
+    "actuation_provenance_unavailable",
+    "timed_actuation_join_unavailable",
+    "actuation_capture_incomplete",
+    "actuation_context_unknown",
+    "controller_selected_evidence",
+    "programmatic_selected_evidence",
+    "no_app_selector_observed",
     "evidence_stale",
     "calibration_superseded",
+    "unsupported_policy",
 ];
 /**
  * Production policy `e4a-scientific-assessment-policy@1`. Its type pins the
@@ -121,6 +132,48 @@ export const E4A_SCIENTIFIC_ASSESSMENT_POLICY_V1 = Object.freeze({
     actuationModeEvidence: "required_but_unavailable",
     staleness: "not_configured",
 });
+export const E4A_SCIENTIFIC_ASSESSMENT_POLICY_V2 = Object.freeze({
+    id: SCIENTIFIC_ASSESSMENT_POLICY_ID_V1,
+    version: SCIENTIFIC_ASSESSMENT_POLICY_VERSION_V2,
+    minIndependentSessions: 4,
+    minDistinctDates: 4,
+    minCalendarSpanDays: 14,
+    characterizationMinInteriorSessions: 1,
+    characterizationMaxMedianAbsoluteBiasWatts: 10,
+    characterizationMaxSettledWattsCv: 0.15,
+    characterizationMaxSaturationIncidence: 0.5,
+    machineComparability: "required",
+    heldWorkloadEvidence: "required",
+    actuationContextEvidence: "required",
+    openLoopEvidence: "required_but_unavailable",
+    staleness: "not_configured",
+});
+/** The policy production diagnostics use. Switched from v1 to v2 deliberately. */
+export const E4A_CURRENT_SCIENTIFIC_ASSESSMENT_POLICY = E4A_SCIENTIFIC_ASSESSMENT_POLICY_V2;
+/**
+ * Policy dispatch. The production id is pinned: version 1 must be a v1-shaped
+ * policy, version 2 a v2-shaped policy, any other version fails closed.
+ * Synthetic (non-production) ids keep the generic v1 evaluator unless they
+ * declare the v2 dimensions.
+ */
+function policyGeneration(policy) {
+    if (!isRecord(policy) || !isNonEmptyString(policy.id) || !Number.isInteger(policy.version))
+        return null;
+    const v2Shaped = policy.machineComparability === "required" && policy.heldWorkloadEvidence === "required" &&
+        policy.actuationContextEvidence === "required" && policy.openLoopEvidence === "required_but_unavailable" &&
+        !("actuationModeEvidence" in policy);
+    const v1Shaped = (policy.openLoopEvidence === "required_but_unavailable" || policy.openLoopEvidence === "required") &&
+        (policy.actuationModeEvidence === "required_but_unavailable" || policy.actuationModeEvidence === "required") &&
+        !("machineComparability" in policy);
+    if (policy.id === SCIENTIFIC_ASSESSMENT_POLICY_ID_V1) {
+        if (policy.version === SCIENTIFIC_ASSESSMENT_POLICY_VERSION_V1)
+            return v1Shaped ? 1 : null;
+        if (policy.version === SCIENTIFIC_ASSESSMENT_POLICY_VERSION_V2)
+            return v2Shaped ? 2 : null;
+        return null;
+    }
+    return v2Shaped ? 2 : v1Shaped ? 1 : null;
+}
 function isRecord(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -263,6 +316,9 @@ function sessionEvidenceValid(session) {
         !Number.isInteger(session.openLoop.stableResistanceWindowCount) ||
         session.openLoop.stableResistanceWindowCount < 0))
         return false;
+    if (session.provenanceV2 !== undefined && session.provenanceV2 !== null &&
+        !provenanceV2Valid(session.provenanceV2))
+        return false;
     return session.domainBucket === "interior" || session.domainBucket === "edge";
 }
 function heldWorkloadForwardSessionValid(value) {
@@ -290,6 +346,91 @@ function heldWorkloadForwardDigest(entries, comparable) {
         count: valid.length,
         signed: signed === null ? null : Math.round(signed * 10) / 10,
         absolute: absolute === null ? null : Math.round(absolute * 10) / 10,
+    };
+}
+const HELD_CONTEXTS = [
+    "automatic_selected",
+    "programmatic_selected",
+    "no_app_selector_observed",
+    "unknown",
+];
+function countValid(value) {
+    return Number.isInteger(value) && value >= 0;
+}
+function provenanceV2Valid(value) {
+    if (!isRecord(value) || value.independentOpenLoopEvidence !== false)
+        return false;
+    if (!isRecord(value.machineComparison) || typeof value.machineComparison.comparable !== "boolean" ||
+        !isNonEmptyString(value.machineComparison.reason))
+        return false;
+    if (value.actuationCapture !== "complete" && value.actuationCapture !== "incomplete" &&
+        value.actuationCapture !== "unavailable")
+        return false;
+    const held = value.heldWorkload;
+    if (held === null)
+        return true;
+    if (!isRecord(held) || typeof held.available !== "boolean" || !isNonEmptyString(held.timedJoin) ||
+        !countValid(held.qualifyingWindowCount) || !countValid(held.qualifyingDurationSec))
+        return false;
+    if (held.contexts === null)
+        return true;
+    if (!isRecord(held.contexts))
+        return false;
+    let windows = 0;
+    let duration = 0;
+    for (const context of HELD_CONTEXTS) {
+        const totals = held.contexts[context];
+        if (!isRecord(totals) || !countValid(totals.windowCount) || !countValid(totals.durationSec))
+            return false;
+        windows += totals.windowCount;
+        duration += totals.durationSec;
+    }
+    // Window-level classification covers exactly the durable qualifying windows.
+    return windows === held.qualifyingWindowCount && duration === held.qualifyingDurationSec;
+}
+function emptyHeldContextDigest() {
+    return {
+        automatic_selected: { sessions: 0, windows: 0, durationSec: 0 },
+        programmatic_selected: { sessions: 0, windows: 0, durationSec: 0 },
+        no_app_selector_observed: { sessions: 0, windows: 0, durationSec: 0 },
+        unknown: { sessions: 0, windows: 0, durationSec: 0 },
+    };
+}
+function unsupportedPolicyAssessment(subject, policy, evaluatedAt) {
+    var _a;
+    const record = isRecord(policy) ? policy : {};
+    return {
+        schemaVersion: SCIENTIFIC_ASSESSMENT_SCHEMA_VERSION_V1,
+        assessor: { id: SCIENTIFIC_ASSESSMENT_ASSESSOR_ID_V1, version: SCIENTIFIC_ASSESSMENT_ASSESSOR_VERSION_V1 },
+        policy: { id: String((_a = record.id) !== null && _a !== void 0 ? _a : ""), version: Number.isInteger(record.version) ? record.version : -1 },
+        subject,
+        mode: "scientific_assessment",
+        runtimeAuthority: false,
+        state: "not_applicable",
+        reasonCodes: ["unsupported_policy"],
+        gates: [{ id: "policy", status: "fail", reasonCode: "unsupported_policy" }],
+        evidenceDigest: {
+            sessionCount: 0,
+            distinctDateCount: 0,
+            calendarSpanDays: null,
+            sessionIds: [],
+            interiorSessionCount: 0,
+            saturationIncidence: null,
+            medianSignedDifferenceWatts: null,
+            medianAbsoluteDifferenceWatts: null,
+            medianCandidateWidthWatts: null,
+            observedSettledWattsCv: null,
+            newestSessionAgeDays: null,
+            calibrationInstanceId: "",
+            excludedIncompleteIdentitySessions: 0,
+            excludedMultiPhaseSessions: 0,
+            ignoredCrossCohortSessions: 0,
+            ignoredInvalidSessions: 0,
+            heldWorkloadForwardSessionCount: 0,
+            medianHeldWorkloadForwardSignedErrorBpm: null,
+            medianHeldWorkloadForwardAbsoluteErrorBpm: null,
+        },
+        evaluatedAt,
     };
 }
 function orderReasons(reasons) {
@@ -339,7 +480,10 @@ function createAccumulator() {
  * and authorization path.
  */
 export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, evaluatedAt) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
+    const generation = policyGeneration(policy);
+    if (generation === null)
+        return unsupportedPolicyAssessment(subject, policy, evaluatedAt);
     const acc = createAccumulator();
     const subjectIdentityOk = isNonEmptyString(subject.athleteId) &&
         subject.activity === "bike" &&
@@ -426,7 +570,7 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
     // Malformed evidence (unparseable timestamp, non-finite measurement,
     // unknown domain bucket) and duplicated workout session IDs cannot count as
     // independent sessions; every copy is excluded rather than picking one.
-    const sessions = cohortSessions.filter((session) => {
+    const validSessions = cohortSessions.filter((session) => {
         if (sessionEvidenceValid(session) && idCounts.get(session.workoutSessionId) === 1)
             return true;
         ignoredInvalidSessions += 1;
@@ -442,6 +586,37 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
         });
     }
     const evaluable = identityPass && candidatePass;
+    // Policy v2: exact machine/profile/calibration comparability is an admission
+    // rule. Incomparable sessions are excluded (counted by reason); they never
+    // contribute to bias/variance, so a mismatch can never read as contradiction.
+    const excludedMachineIncomparableSessions = {};
+    const sessions = generation === 1 ? validSessions : validSessions.filter((session) => {
+        var _a, _b, _c, _d;
+        if (((_a = session.provenanceV2) === null || _a === void 0 ? void 0 : _a.machineComparison.comparable) === true)
+            return true;
+        const reason = (_c = (_b = session.provenanceV2) === null || _b === void 0 ? void 0 : _b.machineComparison.reason) !== null && _c !== void 0 ? _c : "execution_provenance_unavailable";
+        excludedMachineIncomparableSessions[reason] = ((_d = excludedMachineIncomparableSessions[reason]) !== null && _d !== void 0 ? _d : 0) + 1;
+        return false;
+    });
+    let machinePass = true;
+    if (generation === 2) {
+        if (!evaluable || validSessions.length === 0) {
+            acc.push("machine_comparability", "not_applicable");
+        }
+        else if (sessions.length === 0) {
+            acc.push("machine_comparability", "fail", "machine_comparability_unavailable", {
+                comparableSessions: 0,
+                excludedSessions: validSessions.length,
+            });
+        }
+        else {
+            acc.push("machine_comparability", "pass", undefined, {
+                comparableSessions: sessions.length,
+                excludedSessions: validSessions.length - sessions.length,
+            });
+        }
+        machinePass = acc.gates[acc.gates.length - 1].status !== "fail";
+    }
     const dateKeys = new Map();
     for (const session of sessions) {
         const key = utcDateKey(session.createdAt);
@@ -604,7 +779,20 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
     // policy that declares the dimension `required_but_unavailable` (the
     // production policy) the gate fails whatever the sessions carry; otherwise
     // it passes only when every session carries future open-loop evidence.
-    if (!evaluable || sessions.length === 0) {
+    let heldPass = true;
+    let actuationContextPass = true;
+    let provenanceDigest;
+    if (generation === 2) {
+        const v2 = assessProvenanceV2(acc, sessions, evaluable);
+        heldPass = v2.heldPass;
+        actuationContextPass = v2.actuationContextPass;
+        provenanceDigest = {
+            ...v2.digest,
+            comparableSessionCount: sessions.length,
+            excludedMachineIncomparableSessions: Object.fromEntries(Object.entries(excludedMachineIncomparableSessions).sort(([a], [b]) => a.localeCompare(b))),
+        };
+    }
+    else if (!evaluable || sessions.length === 0) {
         acc.push("open_loop_evidence", "not_applicable");
         acc.push("actuation_mode_evidence", "not_applicable");
     }
@@ -640,8 +828,12 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
             });
         }
     }
-    const openLoopPass = acc.gates[acc.gates.length - 2].status === "pass";
-    const actuationPass = acc.gates[acc.gates.length - 1].status === "pass";
+    const openLoopPass = generation === 2
+        ? ((_d = acc.gates.find((gate) => gate.id === "open_loop_evidence")) === null || _d === void 0 ? void 0 : _d.status) === "pass"
+        : acc.gates[acc.gates.length - 2].status === "pass";
+    const actuationPass = generation === 2
+        ? actuationContextPass
+        : acc.gates[acc.gates.length - 1].status === "pass";
     if (!evaluable || sessions.length === 0 || policy.staleness === "not_configured") {
         acc.push("recency", "unavailable", undefined, { newestSessionAgeDays: newestAgeDays });
     }
@@ -712,7 +904,8 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
     else if (biasFail || varianceFail) {
         state = "contradicted";
     }
-    else if (!openLoopPass || !actuationPass || recencyUndetermined || !supersessionPass) {
+    else if (!openLoopPass || !actuationPass || !machinePass || !heldPass || recencyUndetermined ||
+        !supersessionPass) {
         state = "collecting";
     }
     else {
@@ -756,20 +949,138 @@ export function assessPersonalizedWorkloadEvidence(evidence, subject, policy, ev
             observedSettledWattsCv: settledCv === null ? null : Math.round(settledCv * 10000) / 10000,
             newestSessionAgeDays: newestAgeDays === null ? null : Math.round(newestAgeDays * 10) / 10,
             calibrationInstanceId: normalizedSessionIds(subjectSessionIds).join(","),
-            excludedIncompleteIdentitySessions: (_d = evidence.excludedIncompleteIdentitySessions) !== null && _d !== void 0 ? _d : 0,
-            excludedMultiPhaseSessions: (_e = evidence.excludedMultiPhaseSessions) !== null && _e !== void 0 ? _e : 0,
+            excludedIncompleteIdentitySessions: (_e = evidence.excludedIncompleteIdentitySessions) !== null && _e !== void 0 ? _e : 0,
+            excludedMultiPhaseSessions: (_f = evidence.excludedMultiPhaseSessions) !== null && _f !== void 0 ? _f : 0,
             ignoredCrossCohortSessions,
             ignoredInvalidSessions,
             heldWorkloadForwardSessionCount: heldForward.count,
             medianHeldWorkloadForwardSignedErrorBpm: heldForward.signed,
             medianHeldWorkloadForwardAbsoluteErrorBpm: heldForward.absolute,
+            ...(provenanceDigest ? { provenanceV2: provenanceDigest } : {}),
         },
         evaluatedAt,
     };
 }
+/**
+ * Policy v2 provenance gates over machine-comparable sessions (one workout =
+ * one session, however many held windows it contains):
+ * held_workload_evidence → actuation_context (is window-level context known?)
+ * → per-category context gates (truthful, non-independent categories) →
+ * open_loop_evidence (never satisfied: no category is independent evidence).
+ */
+function assessProvenanceV2(acc, sessions, evaluable) {
+    const held = sessions.filter((session) => { var _a, _b; return ((_b = (_a = session.provenanceV2) === null || _a === void 0 ? void 0 : _a.heldWorkload) === null || _b === void 0 ? void 0 : _b.available) === true; });
+    const joined = held.filter((session) => session.provenanceV2.heldWorkload.timedJoin === "available" && session.provenanceV2.heldWorkload.contexts !== null);
+    const contexts = emptyHeldContextDigest();
+    for (const session of joined) {
+        const totals = session.provenanceV2.heldWorkload.contexts;
+        for (const context of HELD_CONTEXTS) {
+            if (totals[context].windowCount > 0)
+                contexts[context].sessions += 1;
+            contexts[context].windows += totals[context].windowCount;
+            contexts[context].durationSec += totals[context].durationSec;
+        }
+    }
+    const digest = {
+        sessionsWithHeldWorkloadEvidence: held.length,
+        sessionsWithTimedActuationJoin: joined.length,
+        heldContexts: contexts,
+        independentOpenLoopEvidence: "unavailable",
+    };
+    if (!evaluable || sessions.length === 0) {
+        for (const id of ["held_workload_evidence", "actuation_context", "controller_selected_context",
+            "programmatic_selected_context", "no_app_selector_context"]) {
+            acc.push(id, "not_applicable");
+        }
+        // For a valid subject, independent open-loop evidence is unavailable whatever the session count.
+        if (evaluable) {
+            acc.push("open_loop_evidence", "fail", "open_loop_evidence_unavailable", {
+                policy: "required_but_unavailable",
+                independentSessions: 0,
+                sessionCount: 0,
+            });
+        }
+        else {
+            acc.push("open_loop_evidence", "not_applicable");
+        }
+        return { heldPass: true, actuationContextPass: true, digest };
+    }
+    if (held.length === 0) {
+        acc.push("held_workload_evidence", "fail", "held_workload_evidence_unavailable", {
+            sessionsWithHeldEvidence: 0,
+            sessionCount: sessions.length,
+        });
+    }
+    else {
+        acc.push("held_workload_evidence", "pass", undefined, {
+            sessionsWithHeldEvidence: held.length,
+            sessionCount: sessions.length,
+        });
+    }
+    const heldPass = acc.gates[acc.gates.length - 1].status === "pass";
+    const measured = { sessionsWithHeldEvidence: held.length, sessionsWithTimedJoin: joined.length };
+    if (held.length === 0) {
+        acc.push("actuation_context", "not_applicable");
+    }
+    else if (held.some((session) => session.provenanceV2.heldWorkload.timedJoin === "execution_provenance_unavailable" ||
+        session.provenanceV2.actuationCapture === "unavailable")) {
+        acc.push("actuation_context", "fail", "actuation_provenance_unavailable", measured);
+    }
+    else if (joined.length !== held.length) {
+        acc.push("actuation_context", "fail", "timed_actuation_join_unavailable", measured);
+    }
+    else if (held.some((session) => session.provenanceV2.actuationCapture !== "complete")) {
+        acc.push("actuation_context", "fail", "actuation_capture_incomplete", measured);
+    }
+    else if (contexts.unknown.windows > 0) {
+        acc.push("actuation_context", "fail", "actuation_context_unknown", {
+            ...measured,
+            unknownWindows: contexts.unknown.windows,
+        });
+    }
+    else {
+        acc.push("actuation_context", "pass", undefined, measured);
+    }
+    const actuationContextPass = acc.gates[acc.gates.length - 1].status !== "fail";
+    const category = (id, context, reason) => {
+        const totals = contexts[context];
+        if (totals.windows === 0)
+            acc.push(id, "not_applicable");
+        else
+            acc.push(id, "fail", reason, { sessions: totals.sessions, windows: totals.windows, durationSec: totals.durationSec });
+    };
+    category("controller_selected_context", "automatic_selected", "controller_selected_evidence");
+    category("programmatic_selected_context", "programmatic_selected", "programmatic_selected_evidence");
+    category("no_app_selector_context", "no_app_selector_observed", "no_app_selector_observed");
+    acc.push("open_loop_evidence", "fail", "open_loop_evidence_unavailable", {
+        policy: "required_but_unavailable",
+        independentSessions: 0,
+        sessionCount: sessions.length,
+    });
+    return { heldPass, actuationContextPass, digest };
+}
 /** Subject key for display, e.g. `threshold.legacy_hr_region_workload`. */
 export function scientificSubjectKey(subject) {
     return `${subject.intensityId}.${subject.modality}`;
+}
+function sessionProvenanceV2(input, phase) {
+    if (!input)
+        return null;
+    const match = input.phases.find((candidate) => candidate.phaseId === phase.phaseId &&
+        candidate.intervalIndex === phase.intervalIndex &&
+        (phase.activeStartSec === undefined || candidate.activeStartSec === phase.activeStartSec));
+    return {
+        machineComparison: { ...input.machineComparison },
+        actuationCapture: input.actuationCapture,
+        heldWorkload: match ? {
+            available: match.heldWorkload.available,
+            timedJoin: match.heldWorkload.timedJoin,
+            qualifyingWindowCount: match.heldWorkload.qualifyingWindowCount,
+            qualifyingDurationSec: match.heldWorkload.qualifyingDurationSec,
+            contexts: match.heldWorkload.contexts === null ? null : Object.fromEntries(HELD_CONTEXTS.map((context) => [context, { ...match.heldWorkload.contexts[context] }])),
+        } : null,
+        independentOpenLoopEvidence: false,
+    };
 }
 /** Frozen E1 outcome as persisted on the E2 phase: a valid candidate band exists. */
 function phaseHasFrozenCandidate(phase) {
@@ -947,6 +1258,9 @@ export function buildSubjectEvidence(input) {
             assessmentAgeDays: null,
             openLoop: null,
             actuationMode: "unknown",
+            ...(input.sessionEvidenceV2
+                ? { provenanceV2: sessionProvenanceV2(input.sessionEvidenceV2[record.workoutSessionId], phase) }
+                : {}),
         });
     }
     // Sessions matching the subject cohort exactly. Assessment age is derived

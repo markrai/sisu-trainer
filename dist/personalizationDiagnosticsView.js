@@ -1,7 +1,7 @@
 import { aggregatePersonalizedPrescriptionCharacterizations, personalizedPrescriptionDiagnosticRows, } from "./personalizedPrescriptionCharacterization.js";
 import { buildPhasePerformedLoadViews } from "./performedLoad.js";
 // One-way, read-only dependency: diagnostics consume E4A; E4A imports nothing.
-import { E4A_SCIENTIFIC_ASSESSMENT_POLICY_V1, assessPersonalizedWorkloadEvidence, buildSubjectEvidence, discoverDiagnosticSubjects, scientificSubjectKey, } from "./personalizationScientificAssessment.js";
+import { E4A_CURRENT_SCIENTIFIC_ASSESSMENT_POLICY, assessPersonalizedWorkloadEvidence, buildSubjectEvidence, discoverDiagnosticSubjects, scientificSubjectKey, } from "./personalizationScientificAssessment.js";
 import { canonicalMedian } from "./stats.js";
 import { LEGACY_HR_TARGET_RESOLVER_ID, LEGACY_HR_TARGET_RESOLVER_VERSION, } from "./types.js";
 export const PERSONALIZATION_DIAGNOSTIC_EXCLUSIONS = [
@@ -388,6 +388,45 @@ export function summarizeExecutionProvenance(records, contexts) {
         incompleteActuationCapture: provenance.filter((item) => item.actuation.coverage === "incomplete").length,
     };
 }
+/** Workout-level rows: window totals are descriptive; one workout is one row/session. */
+export function summarizeHeldActuationContext(records, contexts) {
+    const seen = new Set();
+    return [...records].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.workoutSessionId.localeCompare(b.workoutSessionId))
+        .flatMap((record) => {
+        const evidence = contexts[record.workoutSessionId];
+        if (!evidence || seen.has(record.workoutSessionId))
+            return [];
+        seen.add(record.workoutSessionId);
+        const phases = evidence.phases.filter((phase) => phase.heldWorkload.available);
+        const joins = [...new Set(phases.map((phase) => phase.heldWorkload.timedJoin))];
+        const joined = phases.every((phase) => phase.heldWorkload.contexts !== null) && phases.length > 0;
+        const contextTotals = joined ? {
+            automatic_selected: { windowCount: 0, durationSec: 0 },
+            programmatic_selected: { windowCount: 0, durationSec: 0 },
+            no_app_selector_observed: { windowCount: 0, durationSec: 0 },
+            unknown: { windowCount: 0, durationSec: 0 },
+        } : null;
+        if (contextTotals) {
+            for (const phase of phases) {
+                for (const key of Object.keys(contextTotals)) {
+                    contextTotals[key].windowCount += phase.heldWorkload.contexts[key].windowCount;
+                    contextTotals[key].durationSec += phase.heldWorkload.contexts[key].durationSec;
+                }
+            }
+        }
+        return [{
+                workoutSessionId: record.workoutSessionId,
+                createdAt: record.createdAt,
+                machineComparison: { ...evidence.machineComparison },
+                actuationCapture: evidence.actuationCapture,
+                phaseCount: phases.length,
+                qualifyingWindowCount: phases.reduce((sum, phase) => sum + phase.heldWorkload.qualifyingWindowCount, 0),
+                qualifyingDurationSec: phases.reduce((sum, phase) => sum + phase.heldWorkload.qualifyingDurationSec, 0),
+                timedJoin: phases.length === 0 ? "not_applicable" : joins.length === 1 ? joins[0] : "mixed",
+                contexts: contextTotals,
+            }];
+    });
+}
 function matchPerformedLoadPhase(phase, views) {
     const matches = views.filter((view) => view.phaseId === phase.phaseId &&
         view.kind === phase.kind &&
@@ -493,7 +532,7 @@ export function filterPersonalizationCharacterizations(records, filters) {
         return phases.length > 0 ? [withPhases(record, phases)] : [];
     });
 }
-export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, assessmentContexts = {}, workoutContexts = {}, performedLoadContexts = {}, scientificAssessmentEvaluatedAt = null, executionProvenanceContexts = {}) {
+export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, assessmentContexts = {}, workoutContexts = {}, performedLoadContexts = {}, scientificAssessmentEvaluatedAt = null, executionProvenanceContexts = {}, scientificSessionEvidenceContexts = {}) {
     const normalizedFilters = { ...EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, ...filters };
     const filtered = filterPersonalizationCharacterizations(records, normalizedFilters);
     const baseRows = personalizedPrescriptionDiagnosticRows(filtered);
@@ -531,9 +570,10 @@ export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PE
         thresholdLongitudinal: buildThresholdLongitudinalAnalysis(records, assessmentContexts, workoutContexts),
         heldWorkloadForward: summarizeHeldWorkloadForwardEvidence(records),
         executionProvenance: summarizeExecutionProvenance(records, executionProvenanceContexts),
+        heldActuationContext: summarizeHeldActuationContext(records, scientificSessionEvidenceContexts),
         scientificAssessments: scientificAssessmentEvaluatedAt === null
             ? []
-            : buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts, scientificAssessmentEvaluatedAt),
+            : buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts, scientificAssessmentEvaluatedAt, scientificSessionEvidenceContexts),
     };
 }
 /**
@@ -541,9 +581,10 @@ export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PE
  * The current calibration is not vouched for here (`null`): diagnostics do
  * not read FitnessState, so supersession is reported `unavailable`.
  */
-export function buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts, evaluatedAt) {
+export function buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts, evaluatedAt, sessionEvidenceV2 = {}) {
     const athleteIds = [...new Set(records.map((record) => record.athleteId))].sort((a, b) => a.localeCompare(b));
-    return athleteIds.flatMap((athleteId) => discoverDiagnosticSubjects(records, assessmentContexts, workoutContexts, athleteId).map((subject) => assessPersonalizedWorkloadEvidence(buildSubjectEvidence({ subject, records, assessmentContexts, workoutContexts, currentCalibration: null }), subject, E4A_SCIENTIFIC_ASSESSMENT_POLICY_V1, evaluatedAt)));
+    return athleteIds.flatMap((athleteId) => discoverDiagnosticSubjects(records, assessmentContexts, workoutContexts, athleteId).map((subject) => assessPersonalizedWorkloadEvidence(buildSubjectEvidence({ subject, records, assessmentContexts, workoutContexts, currentCalibration: null,
+        sessionEvidenceV2 }), subject, E4A_CURRENT_SCIENTIFIC_ASSESSMENT_POLICY, evaluatedAt)));
 }
 function exportBody(model) {
     return {
@@ -626,6 +667,14 @@ const LABELS = {
     integrity_failure: "Conflicting provenance records",
     same_machine_and_profile: "Same machine and profile",
     different_machine: "Different machine",
+    execution_provenance_unavailable: "Execution provenance unavailable",
+    workout_machine_unavailable: "Workout machine unavailable",
+    workout_machine_selection_changed: "Workout machine selection changed",
+    calibration_machine_unavailable: "Calibration machine unavailable",
+    calibration_machine_integrity_failure: "Conflicting calibration machine records",
+    calibration_identity_mismatch: "Calibration identity mismatch",
+    raw_telemetry_unavailable: "Raw telemetry unavailable",
+    reconstruction_mismatch: "Raw telemetry does not reproduce E2",
     same_machine_different_profile: "Same machine, different profile",
     no_stable_observed_resistance: "No stable observed resistance",
     insufficient_post_settling_evidence: "Insufficient post-settling evidence",
@@ -745,6 +794,23 @@ function provenanceDetailHtml(provenance, phase) {
     return `<section><h5>Machine provenance</h5><dl>${detailRow("Frozen workout machine", machine.status === "selected" ? machineLabel(machine) : "none selected at start")}${detailRow("Selection changed mid-workout", machine.selectionChangedDuringWorkout ? "yes" : "no")}${detailRow("Calibration machine", calibration.status === "available" ? machineLabel(calibration) : personalizationDiagnosticLabel(calibration.status))}${detailRow("Calibration vs workout", personalizationDiagnosticLabel(calibrationWorkoutMachineComparison(provenance)))}</dl></section>
     <section><h5>Actuation provenance</h5><dl>${detailRow("Capture", `${personalizationDiagnosticLabel(provenance.actuation.coverage)} app resistance commands; console changes not observable`)}${detailRow("Phase actuation mode", phaseSummary ? ACTUATION_MODE_LABELS[phaseSummary.mode] : "unavailable")}${detailRow("Captured automatic / programmatic resistance events", phaseSummary ? `${phaseSummary.automaticAcceptedCount} / ${phaseSummary.programmaticAcceptedCount}` : "n/a")}${detailRow("Rejected / ambiguous commands", phaseSummary ? `${phaseSummary.rejectedCount} / ${phaseSummary.ambiguousCount}` : "n/a")}${detailRow("Distinct decisions", phaseSummary === null || phaseSummary === void 0 ? void 0 : phaseSummary.decisionCount)}</dl>${eventRows ? `<div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Active time</th><th>Origin</th><th>Trigger</th><th>Requested</th><th>Outcome</th></tr></thead><tbody>${eventRows}</tbody></table></div>` : ""}</section>`;
 }
+const HELD_CONTEXT_LABELS = {
+    automatic_selected: "Controller-context evidence (automatic-selected)",
+    programmatic_selected: "Programmatic-context evidence",
+    no_app_selector_observed: "No captured app selector",
+    unknown: "Unknown",
+};
+function heldActuationContextHtml(rows) {
+    const note = `<p class="developer-diagnostics-note">E4A v2 joins each qualifying held-workload window to the captured app resistance commands. "No app selector observed" does not establish manual or open-loop resistance because console changes are not observable. Independent open-loop evidence: unavailable.</p>`;
+    if (rows.length === 0) {
+        return `<section class="personalization-longitudinal" id="personalizationHeldActuationContext"><h4>Held-workload actuation context (E4A v2)</h4>${note}<div class="personalization-diagnostics-empty"><strong>No E4A v2 joins yet.</strong><span>Joins need E2 v3 held-workload evidence and execution provenance.</span></div></section>`;
+    }
+    const durations = (row) => row.contexts
+        ? Object.keys(HELD_CONTEXT_LABELS).map((key) => `${row.contexts[key].durationSec} s`).join(" / ")
+        : "unavailable";
+    const body = rows.map((row) => `<tr><td>${escapeHtml(new Date(row.createdAt).toLocaleDateString())}</td><td>${escapeHtml(row.workoutSessionId)}</td><td>${escapeHtml(personalizationDiagnosticLabel(row.machineComparison.reason))}</td><td>${escapeHtml(personalizationDiagnosticLabel(row.timedJoin))}</td><td>${row.qualifyingWindowCount} / ${row.qualifyingDurationSec} s</td><td>${escapeHtml(durations(row))}</td><td>unavailable</td></tr>`).join("");
+    return `<section class="personalization-longitudinal" id="personalizationHeldActuationContext"><h4>Held-workload actuation context (E4A v2)</h4>${note}<div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Date</th><th>Session</th><th>Machine comparability</th><th>Timed join</th><th>Qualifying windows / duration</th><th>Duration by context (controller / programmatic / no captured app selector / unknown)</th><th>Independent open-loop evidence</th></tr></thead><tbody>${body}</tbody></table></div><p class="developer-diagnostics-note">Each workout is one longitudinal session; window counts and durations are descriptive.</p></section>`;
+}
 function heldWorkloadForwardHtml(summary) {
     if (summary.phasesWithHeldWorkloadSummary === 0) {
         return `<section class="personalization-longitudinal" id="personalizationHeldWorkloadForward"><h4>Held-workload forward-response evidence</h4>${HELD_WORKLOAD_NOTE}<div class="personalization-diagnostics-empty"><strong>No E2 v3 held-workload evidence yet.</strong><span>Workouts characterized before E2 v3 carry closed-loop transfer evidence only.</span></div></section>`;
@@ -772,7 +838,7 @@ function heldWorkloadDetailHtml(response) {
     return `<section><h5>Held-workload forward-response evidence</h5><dl>${detailRow("Outcome", personalizationDiagnosticLabel(response.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel((_a = response.exclusionReason) !== null && _a !== void 0 ? _a : "none"))}${detailRow("Observed power", personalizationDiagnosticLabel(response.observedPowerProvenance))}${detailRow("Stable / qualifying windows", stable ? `${stable.stableWindowCount} / ${stable.qualifyingWindowCount}` : "n/a")}${detailRow("Stable / post-settling / qualifying duration", stable ? `${stable.stableDurationSec} / ${stable.postSettlingDurationSec} / ${stable.qualifyingDurationSec} sec` : "n/a")}${detailRow("Observed resistance changes", stable === null || stable === void 0 ? void 0 : stable.observedResistanceChangeCount)}${detailRow("Excluded: gap / no watts / outside domain / no HR", excluded ? `${excluded.observationGap} / ${excluded.wattsUnavailable} / ${excluded.outsideCalibrationDomain} / ${excluded.heartRateUnavailable} sec` : "n/a")}${detailRow("Observed / predicted HR median", forward ? `${formatOptionalNumber(forward.observedHeartRateMedianBpm)} / ${formatOptionalNumber(forward.predictedHeartRateMedianBpm)} bpm` : "n/a")}${detailRow("Forward HR signed error median / IQR", forward ? `${signed(forward.signedErrorBpm.median)} bpm / ${signed(forward.signedErrorBpm.q1)}–${signed(forward.signedErrorBpm.q3)} bpm` : "n/a")}${detailRow("Forward HR absolute error median / max", forward ? `${formatOptionalNumber(forward.absoluteErrorBpm.median)} / ${formatOptionalNumber(forward.absoluteErrorBpm.max)} bpm` : "n/a")}${detailRow("Cadence median / IQR", response.cadenceRpm ? `${formatOptionalNumber(response.cadenceRpm.median)} rpm / ${formatOptionalNumber(response.cadenceRpm.q1)}–${formatOptionalNumber(response.cadenceRpm.q3)} rpm` : "n/a")}</dl></section>`;
 }
 function scientificAssessmentsHtml(assessments) {
-    const note = `<p class="developer-diagnostics-note">E4A scientific assessment over comparable frozen E1/E2 evidence. Scientific state is not product authorization and has no runtime authority. Under the production policy, open-loop and actuation-mode evidence are required but unavailable, so eligible is unreachable.</p>`;
+    const note = `<p class="developer-diagnostics-note">E4A scientific assessment over comparable frozen E1/E2 evidence. Scientific state is not product authorization and has no runtime authority. Under the production policy (v2), only exactly machine-comparable sessions are evidence and held-workload actuation context is reported from captured provenance; independent open-loop evidence is required but unavailable, so eligible is unreachable.</p>`;
     if (assessments.length === 0) {
         return `<section class="personalization-longitudinal" id="personalizationScientificAssessments"><h4>Scientific assessment (E4A)</h4>${note}<div class="personalization-diagnostics-empty"><strong>No assessable subjects yet.</strong><span>A subject needs a frozen E1 candidate with complete calibration and machine identity.</span></div></section>`;
     }
@@ -782,7 +848,7 @@ function scientificAssessmentsHtml(assessments) {
         const gates = assessment.gates.map((gate) => { var _a; return `<tr><td>${escapeHtml(gate.id)}</td><td>${escapeHtml(gate.status)}</td><td>${escapeHtml((_a = gate.reasonCode) !== null && _a !== void 0 ? _a : "")}</td></tr>`; }).join("");
         return `<article class="personalization-cohort">
       <h4>${escapeHtml(scientificSubjectKey(subject))} · ${escapeHtml(personalizationDiagnosticLabel(assessment.state))}</h4>
-      <dl>${detailRow("Scientific state", assessment.state)}${detailRow("Runtime authority", assessment.runtimeAuthority ? "yes" : "no")}${detailRow("Subject", `${subject.athleteId} · ${subject.activity} ${subject.phaseKind} · ${subject.intensityId} · ${subject.modality} · ${subject.legacyHrBand.minBpm}–${subject.legacyHrBand.maxBpm} bpm`)}${detailRow("Calibration", `${digest.calibrationInstanceId} · ${subject.calibration.estimatorId}@${subject.calibration.estimatorVersion} · ${subject.calibration.protocolId}@${subject.calibration.protocolVersion}`)}${detailRow("Assessor", `${assessment.assessor.id}@${assessment.assessor.version}`)}${detailRow("Policy", `${assessment.policy.id}@${assessment.policy.version}`)}${detailRow("Reason codes", assessment.reasonCodes.length === 0 ? "none" : assessment.reasonCodes.join(", "))}${detailRow("Sessions / distinct dates", `${digest.sessionCount} / ${digest.distinctDateCount}`)}${detailRow("Excluded (identity / multi-phase / invalid)", `${digest.excludedIncompleteIdentitySessions} / ${digest.excludedMultiPhaseSessions} / ${digest.ignoredInvalidSessions}`)}${detailRow("Machine / profile", `${subject.machineId} / v${subject.machineProfileVersion}`)}${detailRow("Power provenance (calibration / observed)", `${personalizationDiagnosticLabel(subject.calibration.workloadProvenance)} / ${personalizationDiagnosticLabel(subject.observedPowerProvenance)}`)}${detailRow("Held-workload forward sessions (descriptive, not open-loop)", `${digest.heldWorkloadForwardSessionCount} · signed ${digest.medianHeldWorkloadForwardSignedErrorBpm === null ? "n/a" : formatSigned(digest.medianHeldWorkloadForwardSignedErrorBpm, " bpm")} · absolute ${digest.medianHeldWorkloadForwardAbsoluteErrorBpm === null ? "n/a" : `${digest.medianHeldWorkloadForwardAbsoluteErrorBpm} bpm`}`)}</dl>
+      <dl>${detailRow("Scientific state", assessment.state)}${detailRow("Runtime authority", assessment.runtimeAuthority ? "yes" : "no")}${detailRow("Subject", `${subject.athleteId} · ${subject.activity} ${subject.phaseKind} · ${subject.intensityId} · ${subject.modality} · ${subject.legacyHrBand.minBpm}–${subject.legacyHrBand.maxBpm} bpm`)}${detailRow("Calibration", `${digest.calibrationInstanceId} · ${subject.calibration.estimatorId}@${subject.calibration.estimatorVersion} · ${subject.calibration.protocolId}@${subject.calibration.protocolVersion}`)}${detailRow("Assessor", `${assessment.assessor.id}@${assessment.assessor.version}`)}${detailRow("Policy", `${assessment.policy.id}@${assessment.policy.version}`)}${detailRow("Reason codes", assessment.reasonCodes.length === 0 ? "none" : assessment.reasonCodes.join(", "))}${detailRow("Sessions / distinct dates", `${digest.sessionCount} / ${digest.distinctDateCount}`)}${detailRow("Excluded (identity / multi-phase / invalid)", `${digest.excludedIncompleteIdentitySessions} / ${digest.excludedMultiPhaseSessions} / ${digest.ignoredInvalidSessions}`)}${detailRow("Machine / profile", `${subject.machineId} / v${subject.machineProfileVersion}`)}${detailRow("Power provenance (calibration / observed)", `${personalizationDiagnosticLabel(subject.calibration.workloadProvenance)} / ${personalizationDiagnosticLabel(subject.observedPowerProvenance)}`)}${digest.provenanceV2 ? `${detailRow("Machine-comparable sessions", `${digest.provenanceV2.comparableSessionCount} (excluded: ${Object.entries(digest.provenanceV2.excludedMachineIncomparableSessions).map(([reason, count]) => `${personalizationDiagnosticLabel(reason)} ${count}`).join(", ") || "none"})`)}${detailRow("Held evidence / timed join sessions", `${digest.provenanceV2.sessionsWithHeldWorkloadEvidence} / ${digest.provenanceV2.sessionsWithTimedActuationJoin}`)}${detailRow("Held duration by context (controller / programmatic / no captured app selector / unknown)", Object.values(digest.provenanceV2.heldContexts).map((item) => `${item.durationSec} s`).join(" / "))}${detailRow("Independent open-loop evidence", "unavailable")}` : ""}${detailRow("Held-workload forward sessions (descriptive, not open-loop)", `${digest.heldWorkloadForwardSessionCount} · signed ${digest.medianHeldWorkloadForwardSignedErrorBpm === null ? "n/a" : formatSigned(digest.medianHeldWorkloadForwardSignedErrorBpm, " bpm")} · absolute ${digest.medianHeldWorkloadForwardAbsoluteErrorBpm === null ? "n/a" : `${digest.medianHeldWorkloadForwardAbsoluteErrorBpm} bpm`}`)}</dl>
       <div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Gate</th><th>Status</th><th>Reason</th></tr></thead><tbody>${gates}</tbody></table></div>
     </article>`;
     }).join("");
@@ -846,6 +912,7 @@ export function personalizationDiagnosticsHtml(model) {
     ${thresholdLongitudinalHtml(model.thresholdLongitudinal)}
     ${heldWorkloadForwardHtml(model.heldWorkloadForward)}
     ${executionProvenanceHtml(model.executionProvenance)}
+    ${heldActuationContextHtml(model.heldActuationContext)}
     ${scientificAssessmentsHtml(model.scientificAssessments)}
     <div class="personalization-filter-grid">${filtersHtml}</div>
     <div class="personalization-count-grid"><div><strong>${aggregate.workoutCount}</strong><span>Completed workouts with E2 data</span></div><div><strong>${aggregate.candidatePhases}</strong><span>Candidate phases</span></div><div><strong>${aggregate.evaluableCandidatePhases}</strong><span>Evaluable candidate phases</span></div><div><strong>${aggregate.fallbackPhases}</strong><span>Fallback phases</span></div></div>

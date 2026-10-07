@@ -539,6 +539,39 @@ const HELD_WORKLOAD_EMPTY_EXCLUSIONS = () => ({
  * (predicted HR = intercept + slope × watts) and compared with observed HR.
  * Deliberately no HR-band, candidate-agreement, or controller-success filter.
  */
+/**
+ * Transient internal view of the exact stable observed-resistance windows the
+ * canonical E2 v3 reducer used. Never persisted, never part of the E2 v3 reader,
+ * and produced only by the same loop that builds the durable summary.
+ */
+export interface HeldWorkloadWindowAnalysisInternal {
+  firstActiveSec: number;
+  lastActiveSec: number;
+  observedResistance: number;
+  provenance: BikeWattsProvenance | null;
+  /** First active second whose HR response may contribute (window start + settling). */
+  settledFromActiveSec: number;
+  qualifyingDurationSec: number;
+  /** First/last qualifying second, present when qualifyingDurationSec > 0. */
+  qualifyingFirstActiveSec?: number;
+  qualifyingLastActiveSec?: number;
+}
+
+export interface HeldWorkloadPhaseAnalysisInternal {
+  phaseId: string;
+  kind: PersonalizedPrescriptionPhaseEvaluationV1["kind"];
+  intervalIndex?: number;
+  activeStartSec?: number;
+  outcome: PersonalizedPrescriptionHeldWorkloadForwardResponseV1["outcome"];
+  windows: HeldWorkloadWindowAnalysisInternal[];
+}
+
+export interface HeldWorkloadForwardAnalysisInternal {
+  /** The exact record the canonical reducer produced for these inputs. */
+  record: CurrentPersonalizedPrescriptionCharacterization | null;
+  phases: HeldWorkloadPhaseAnalysisInternal[];
+}
+
 function characterizeHeldWorkload(
   shadow: PersonalizedPrescriptionPhaseEvaluationV1,
   hasResponse: boolean,
@@ -546,7 +579,8 @@ function characterizeHeldWorkload(
   hrBySecond: ReadonlyMap<number, number>,
   model: PersonalizedPrescriptionHeldWorkloadForwardModelV1 | undefined,
   observedPowerProvenance: PersonalizedPrescriptionHeldWorkloadForwardResponseV1["observedPowerProvenance"],
-  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1,
+  windowAnalysis?: HeldWorkloadWindowAnalysisInternal[]
 ): PersonalizedPrescriptionHeldWorkloadForwardResponseV1 {
   if (shadow.outcome !== "candidate") return { outcome: "not_candidate", observedPowerProvenance };
   if (!model) return { outcome: "calibration_unavailable", observedPowerProvenance };
@@ -568,6 +602,8 @@ function characterizeHeldWorkload(
     stableDurationSec += last - first + 1;
     const bySecond = new Map(window.samples.map((sample) => [sample.activeSec, sample]));
     let qualifying = 0;
+    let qualifyingFirst: number | undefined;
+    let qualifyingLast: number | undefined;
     for (let second = first + policy.settlingSeconds; second <= last; second += 1) {
       postSettlingDurationSec += 1;
       const sample = bySecond.get(second);
@@ -586,8 +622,20 @@ function characterizeHeldWorkload(
       predicted.push(prediction);
       if (sample.cadenceRpm) cadence.push(sample.cadenceRpm.value);
       qualifying += 1;
+      qualifyingFirst ??= second;
+      qualifyingLast = second;
     }
     if (qualifying > 0) qualifyingWindowCount += 1;
+    windowAnalysis?.push({
+      firstActiveSec: first,
+      lastActiveSec: last,
+      observedResistance: window.resistance,
+      provenance: window.provenance ?? null,
+      settledFromActiveSec: first + policy.settlingSeconds,
+      qualifyingDurationSec: qualifying,
+      ...(qualifyingFirst !== undefined ? { qualifyingFirstActiveSec: qualifyingFirst } : {}),
+      ...(qualifyingLast !== undefined ? { qualifyingLastActiveSec: qualifyingLast } : {}),
+    });
   }
   const stableResistance: PersonalizedPrescriptionStableResistanceSummaryV1 = {
     observedResistanceChangeCount: observedResistanceChangeCount(bike, policy),
@@ -636,7 +684,8 @@ function characterizePhase(
   bikeBySecond: ReadonlyMap<number, OrdinaryBikeTelemetrySample>,
   audit: readonly MachineDecisionAuditEntry[],
   policy: PersonalizedPrescriptionCharacterizationPolicyV1,
-  heldWorkloadPolicy: PersonalizedPrescriptionHeldWorkloadPolicyV1
+  heldWorkloadPolicy: PersonalizedPrescriptionHeldWorkloadPolicyV1,
+  analysis?: HeldWorkloadPhaseAnalysisInternal[]
 ): PersonalizedPrescriptionPhaseCharacterizationV3 {
   const closedLoop = characterizeClosedLoopPhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy);
   const start = response?.activeStartSec ?? shadow.activeStartSec;
@@ -644,18 +693,26 @@ function characterizePhase(
   const bike = start === undefined || completedEnd === undefined ? [] : [...bikeBySecond.values()]
     .filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
     .sort((a, b) => a.activeSec - b.activeSec);
-  return {
-    ...closedLoop,
-    heldWorkloadForwardResponse: characterizeHeldWorkload(
-      shadow,
-      response !== undefined && start !== undefined,
-      bike,
-      hrBySecond,
-      forwardModelFrom(evaluation),
-      closedLoop.observedPowerProvenance,
-      heldWorkloadPolicy
-    ),
-  };
+  const windows: HeldWorkloadWindowAnalysisInternal[] = [];
+  const heldWorkloadForwardResponse = characterizeHeldWorkload(
+    shadow,
+    response !== undefined && start !== undefined,
+    bike,
+    hrBySecond,
+    forwardModelFrom(evaluation),
+    closedLoop.observedPowerProvenance,
+    heldWorkloadPolicy,
+    analysis ? windows : undefined
+  );
+  analysis?.push({
+    phaseId: shadow.phaseId,
+    kind: shadow.kind,
+    ...(shadow.intervalIndex !== undefined ? { intervalIndex: shadow.intervalIndex } : {}),
+    ...(start !== undefined ? { activeStartSec: start } : {}),
+    outcome: heldWorkloadForwardResponse.outcome,
+    windows,
+  });
+  return { ...closedLoop, heldWorkloadForwardResponse };
 }
 
 /** Closed-loop transfer characterization, unchanged since E2 v2. */
@@ -843,6 +900,26 @@ function characterizeClosedLoopPhase(
 export function characterizePersonalizedPrescription(
   input: CharacterizePersonalizedPrescriptionInput
 ): CurrentPersonalizedPrescriptionCharacterization | null {
+  return characterizeWithOptionalAnalysis(input);
+}
+
+/**
+ * Transient E2 v3 held-window analysis from the canonical reducer itself (no
+ * second window algorithm). Returns the exact record plus the windows used to
+ * build its durable summaries. For read-only diagnostics/E4A joins only.
+ */
+export function analyzeHeldWorkloadForwardResponseInternal(
+  input: CharacterizePersonalizedPrescriptionInput
+): HeldWorkloadForwardAnalysisInternal {
+  const phases: HeldWorkloadPhaseAnalysisInternal[] = [];
+  const record = characterizeWithOptionalAnalysis(input, phases);
+  return { record, phases: record ? phases : [] };
+}
+
+function characterizeWithOptionalAnalysis(
+  input: CharacterizePersonalizedPrescriptionInput,
+  analysis?: HeldWorkloadPhaseAnalysisInternal[]
+): CurrentPersonalizedPrescriptionCharacterization | null {
   const shadow = parsePersonalizedPrescriptionEvaluation(input.shadowEvaluation);
   const response = parseWorkoutResponse(input.workoutResponse);
   const heldWorkloadPolicy = input.heldWorkloadPolicy ?? PHASE_E2_HELD_WORKLOAD_POLICY_V1;
@@ -878,7 +955,8 @@ export function characterizePersonalizedPrescription(
     bikeBySecond,
     audit,
     input.policy,
-    heldWorkloadPolicy
+    heldWorkloadPolicy,
+    analysis
   ));
   const forwardModel = forwardModelFrom(shadow);
   return {

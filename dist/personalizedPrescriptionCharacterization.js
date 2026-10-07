@@ -354,13 +354,8 @@ const HELD_WORKLOAD_EMPTY_EXCLUSIONS = () => ({
     outsideCalibrationDomain: 0,
     heartRateUnavailable: 0,
 });
-/**
- * Held-workload forward-response characterization. Observed watts under held
- * observed resistance are mapped through the frozen E1 calibration
- * (predicted HR = intercept + slope × watts) and compared with observed HR.
- * Deliberately no HR-band, candidate-agreement, or controller-success filter.
- */
-function characterizeHeldWorkload(shadow, hasResponse, bike, hrBySecond, model, observedPowerProvenance, policy) {
+function characterizeHeldWorkload(shadow, hasResponse, bike, hrBySecond, model, observedPowerProvenance, policy, windowAnalysis) {
+    var _a;
     if (shadow.outcome !== "candidate")
         return { outcome: "not_candidate", observedPowerProvenance };
     if (!model)
@@ -383,6 +378,8 @@ function characterizeHeldWorkload(shadow, hasResponse, bike, hrBySecond, model, 
         stableDurationSec += last - first + 1;
         const bySecond = new Map(window.samples.map((sample) => [sample.activeSec, sample]));
         let qualifying = 0;
+        let qualifyingFirst;
+        let qualifyingLast;
         for (let second = first + policy.settlingSeconds; second <= last; second += 1) {
             postSettlingDurationSec += 1;
             const sample = bySecond.get(second);
@@ -411,9 +408,21 @@ function characterizeHeldWorkload(shadow, hasResponse, bike, hrBySecond, model, 
             if (sample.cadenceRpm)
                 cadence.push(sample.cadenceRpm.value);
             qualifying += 1;
+            qualifyingFirst !== null && qualifyingFirst !== void 0 ? qualifyingFirst : (qualifyingFirst = second);
+            qualifyingLast = second;
         }
         if (qualifying > 0)
             qualifyingWindowCount += 1;
+        windowAnalysis === null || windowAnalysis === void 0 ? void 0 : windowAnalysis.push({
+            firstActiveSec: first,
+            lastActiveSec: last,
+            observedResistance: window.resistance,
+            provenance: (_a = window.provenance) !== null && _a !== void 0 ? _a : null,
+            settledFromActiveSec: first + policy.settlingSeconds,
+            qualifyingDurationSec: qualifying,
+            ...(qualifyingFirst !== undefined ? { qualifyingFirstActiveSec: qualifyingFirst } : {}),
+            ...(qualifyingLast !== undefined ? { qualifyingLastActiveSec: qualifyingLast } : {}),
+        });
     }
     const stableResistance = {
         observedResistanceChangeCount: observedResistanceChangeCount(bike, policy),
@@ -453,7 +462,7 @@ function characterizeHeldWorkload(shadow, hasResponse, bike, hrBySecond, model, 
         } : {}),
     };
 }
-function characterizePhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy, heldWorkloadPolicy) {
+function characterizePhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy, heldWorkloadPolicy, analysis) {
     var _a, _b;
     const closedLoop = characterizeClosedLoopPhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy);
     const start = (_a = response === null || response === void 0 ? void 0 : response.activeStartSec) !== null && _a !== void 0 ? _a : shadow.activeStartSec;
@@ -461,10 +470,17 @@ function characterizePhase(shadow, response, evaluation, hrBySecond, bikeBySecon
     const bike = start === undefined || completedEnd === undefined ? [] : [...bikeBySecond.values()]
         .filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
         .sort((a, b) => a.activeSec - b.activeSec);
-    return {
-        ...closedLoop,
-        heldWorkloadForwardResponse: characterizeHeldWorkload(shadow, response !== undefined && start !== undefined, bike, hrBySecond, forwardModelFrom(evaluation), closedLoop.observedPowerProvenance, heldWorkloadPolicy),
-    };
+    const windows = [];
+    const heldWorkloadForwardResponse = characterizeHeldWorkload(shadow, response !== undefined && start !== undefined, bike, hrBySecond, forwardModelFrom(evaluation), closedLoop.observedPowerProvenance, heldWorkloadPolicy, analysis ? windows : undefined);
+    analysis === null || analysis === void 0 ? void 0 : analysis.push({
+        phaseId: shadow.phaseId,
+        kind: shadow.kind,
+        ...(shadow.intervalIndex !== undefined ? { intervalIndex: shadow.intervalIndex } : {}),
+        ...(start !== undefined ? { activeStartSec: start } : {}),
+        outcome: heldWorkloadForwardResponse.outcome,
+        windows,
+    });
+    return { ...closedLoop, heldWorkloadForwardResponse };
 }
 /** Closed-loop transfer characterization, unchanged since E2 v2. */
 function characterizeClosedLoopPhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy) {
@@ -620,6 +636,19 @@ function characterizeClosedLoopPhase(shadow, response, evaluation, hrBySecond, b
 }
 /** Pure E2 reducer. All current-state and time inputs are supplied explicitly. */
 export function characterizePersonalizedPrescription(input) {
+    return characterizeWithOptionalAnalysis(input);
+}
+/**
+ * Transient E2 v3 held-window analysis from the canonical reducer itself (no
+ * second window algorithm). Returns the exact record plus the windows used to
+ * build its durable summaries. For read-only diagnostics/E4A joins only.
+ */
+export function analyzeHeldWorkloadForwardResponseInternal(input) {
+    const phases = [];
+    const record = characterizeWithOptionalAnalysis(input, phases);
+    return { record, phases: record ? phases : [] };
+}
+function characterizeWithOptionalAnalysis(input, analysis) {
     var _a, _b;
     const shadow = parsePersonalizedPrescriptionEvaluation(input.shadowEvaluation);
     const response = parseWorkoutResponse(input.workoutResponse);
@@ -651,7 +680,7 @@ export function characterizePersonalizedPrescription(input) {
             sourceIds.add(sample.sourceSampleId);
     }
     const audit = (_b = input.machineDecisionAudit) !== null && _b !== void 0 ? _b : [];
-    const phases = shadow.phases.map((phase) => characterizePhase(phase, responseForPhase(phase, response), shadow, hrBySecond, bikeBySecond, audit, input.policy, heldWorkloadPolicy));
+    const phases = shadow.phases.map((phase) => characterizePhase(phase, responseForPhase(phase, response), shadow, hrBySecond, bikeBySecond, audit, input.policy, heldWorkloadPolicy, analysis));
     const forwardModel = forwardModelFrom(shadow);
     return {
         schemaVersion: PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V3,

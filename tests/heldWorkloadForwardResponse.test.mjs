@@ -750,14 +750,14 @@ test("production E4A stays non-eligible and reports both open-loop and actuation
   assert.equal(assessment.gates.find((gate) => gate.id === "actuation_mode_evidence").status, "fail");
   assert.equal(assessment.evidenceDigest.heldWorkloadForwardSessionCount, days.length);
   assert.equal(assessment.evidenceDigest.medianHeldWorkloadForwardAbsoluteErrorBpm, 0);
-  // Diagnostics surface the same production blockers.
+  // Diagnostics use production policy v2: open-loop stays unavailable and nothing becomes eligible.
   const model = buildPersonalizationDiagnosticsModel(inputs.records, undefined, inputs.assessmentContexts,
     inputs.workoutContexts, {}, "2026-09-21T00:00:00.000Z");
   assert.ok(model.scientificAssessments.length > 0);
   for (const item of model.scientificAssessments) {
     assert.notEqual(item.state, "eligible");
+    assert.equal(item.runtimeAuthority, false);
     assert.ok(item.reasonCodes.includes("open_loop_evidence_unavailable"));
-    assert.ok(item.reasonCodes.includes("actuation_mode_unknown"));
   }
 });
 
@@ -783,6 +783,7 @@ test("E2 v3 has no runtime, control, E1, or FitnessState feedback path", () => {
     "../src/personalizationDiagnosticsView.ts",
     "../src/personalizationScientificAssessment.ts",
     "../src/personalizedPrescriptionCharacterization.ts",
+    "../src/scientificSessionEvidence.ts",
     "../src/types.ts",
     "../src/workoutSummary.ts",
   ]);

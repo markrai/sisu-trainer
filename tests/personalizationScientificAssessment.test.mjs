@@ -966,16 +966,19 @@ test("developer diagnostics show runtime-only E4A without exporting it", () => {
   const [assessment] = model.scientificAssessments;
   assert.equal(assessment.state, "collecting");
   assert.equal(assessment.runtimeAuthority, false);
-  assert.deepEqual(assessment.policy, { id: "e4a-scientific-assessment-policy", version: 1 });
+  // Production diagnostics now use policy v2 (deliberate switch from v1).
+  assert.deepEqual(assessment.policy, { id: "e4a-scientific-assessment-policy", version: 2 });
   const html = personalizationDiagnosticsHtml(model);
   const start = html.indexOf('id="personalizationScientificAssessments"');
   assert.ok(start > 0);
   const section = html.slice(start, html.indexOf("</section>", start));
+  // No v2 provenance join was supplied, so both sessions are excluded as machine-incomparable.
   for (const pattern of [/Scientific state<\/dt><dd>collecting/, /Runtime authority<\/dt><dd>no/,
     /Subject<\/dt><dd>athlete-a/, /personalization-scientific-assessor@1/,
-    /e4a-scientific-assessment-policy@1/, /open_loop_evidence_unavailable/, /insufficient_independent_sessions/,
-    /Sessions \/ distinct dates<\/dt><dd>2 \/ 2/, /proform-smart-power-10 \/ v1/,
-    /Measured watts \/ Measured watts/, /<td>calendar_spread<\/td><td>fail<\/td>/]) {
+    /e4a-scientific-assessment-policy@2/, /open_loop_evidence_unavailable/, /machine_comparability_unavailable/,
+    /Sessions \/ distinct dates<\/dt><dd>0 \/ 0/, /proform-smart-power-10 \/ v1/,
+    /Measured watts \/ Measured watts/, /Machine-comparable sessions<\/dt><dd>0 \(excluded: Execution provenance unavailable 2\)/,
+    /Independent open-loop evidence<\/dt><dd>unavailable/]) {
     assert.match(section, pattern);
   }
   const withoutClock = buildPersonalizationDiagnosticsModel(rows.map((row) => row.record), undefined,

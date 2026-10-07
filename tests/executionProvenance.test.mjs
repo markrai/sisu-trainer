@@ -710,13 +710,15 @@ test("finalization writes the frozen identity and durable provenance; history re
   const model = buildPersonalizationDiagnosticsModel(records, undefined,
     extractTrustedPersonalizationAssessmentContexts(reloaded, ATHLETE),
     extractTrustedPersonalizationWorkoutContexts(reloaded, ATHLETE), {}, "2026-09-21T00:00:00.000Z", contexts);
-  // Production E4A ignores provenance: both blockers remain and there is no runtime authority.
+  // Production E4A (policy v2) without a v2 join: open-loop stays unavailable, no runtime authority,
+  // and provenance absence is reported truthfully instead of the v1 generic actuation_mode_unknown.
   assert.ok(model.scientificAssessments.length > 0);
   for (const assessment of model.scientificAssessments) {
     assert.equal(assessment.runtimeAuthority, false);
     assert.notEqual(assessment.state, "eligible");
+    assert.deepEqual(assessment.policy, { id: "e4a-scientific-assessment-policy", version: 2 });
     assert.ok(assessment.reasonCodes.includes("open_loop_evidence_unavailable"));
-    assert.ok(assessment.reasonCodes.includes("actuation_mode_unknown"));
+    assert.equal(assessment.reasonCodes.includes("actuation_mode_unknown"), false);
   }
   const html = personalizationDiagnosticsHtml(model);
   const section = html.slice(html.indexOf("id=\"personalizationExecutionProvenance\""));
@@ -770,16 +772,18 @@ test("historical summaries without provenance stay readable with unknown provena
   assert.match(personalizationDiagnosticDetailHtml(row), /not recorded \(historical workout\)/);
 });
 
-test("provenance has no path into prescription, guidance, control, E1, E2, E4A, or FitnessState", () => {
+test("provenance has no path into prescription, guidance, control, E1, E2, or FitnessState", () => {
   const forbidden = /executionProvenance|calibrationMachineProvenance|actuationProvenanceObserver|execution_provenance/;
+  // E4A v2 consumes only structural provenance-derived evidence handed to it; it still imports nothing.
   for (const file of ["workoutPrescription.ts", "personalizedPrescription.ts", "personalizedPrescriptionCharacterization.ts",
-    "personalizationScientificAssessment.ts", "fitnessState.ts", "fitnessRefinement.ts", "machines/guidance.ts",
+    "fitnessState.ts", "fitnessRefinement.ts", "machines/guidance.ts",
     "machines/proformSmartPower10.ts", "machines/learning/index.ts", "machines/dynamics/index.ts", "workoutLogic.ts"]) {
     assert.doesNotMatch(readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"), forbidden, file);
   }
   const bridge = readFileSync(new URL("../src/platform/bikeBridgeRuntime.ts", import.meta.url), "utf8");
   assert.doesNotMatch(bridge, forbidden, "the bridge only exposes an observer seam");
   const e4a = readFileSync(new URL("../src/personalizationScientificAssessment.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(e4a, /from ["']\.\//, "E4A imports nothing");
   assert.match(e4a, /openLoopEvidence: "required_but_unavailable"/);
   assert.match(e4a, /actuationModeEvidence: "required_but_unavailable"/);
 });

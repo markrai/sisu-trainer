@@ -36,6 +36,7 @@ import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } 
 import { formatHrvDisplay, type HrvDisplayModel } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
 import { createActuationProvenanceObserver } from "./actuationProvenanceObserver.js";
+import { buildScientificSessionEvidenceV2Contexts, type RawWorkoutTelemetry } from "./scientificSessionEvidence.js";
 import {
   isVo2WorkoutSelector,
   vo2ProtocolDisplayName,
@@ -133,6 +134,7 @@ let personalizationAssessmentContexts: ReturnType<typeof extractTrustedPersonali
 let personalizationWorkoutContexts: ReturnType<typeof extractTrustedPersonalizationWorkoutContexts> = {};
 let personalizationPerformedLoadContexts: ReturnType<typeof extractTrustedPersonalizationPerformedLoadContexts> = {};
 let personalizationExecutionProvenanceContexts: ReturnType<typeof extractTrustedExecutionProvenanceContexts> = {};
+let personalizationScientificSessionContexts: ReturnType<typeof buildScientificSessionEvidenceV2Contexts> = {};
 let personalizationDiagnosticsModel: PersonalizationDiagnosticsModel | null = null;
 
 let heartPulseTargetBpm: number | null = null;
@@ -1288,6 +1290,18 @@ async function loadPersonalizationDiagnostics() {
     personalizationWorkoutContexts = extractTrustedPersonalizationWorkoutContexts(history, athleteId);
     personalizationPerformedLoadContexts = extractTrustedPersonalizationPerformedLoadContexts(history, athleteId);
     personalizationExecutionProvenanceContexts = extractTrustedExecutionProvenanceContexts(history, athleteId);
+    // Retained raw telemetry lets the canonical E2 v3 reducer re-derive held windows for the E4A v2 join.
+    const rawBySession: Record<string, RawWorkoutTelemetry> = {};
+    for (const { summary } of history) {
+      if (summary.athlete_id !== athleteId || !summary.execution_provenance ||
+          summary.shadow_prescription_characterization?.schemaVersion !== 3) continue;
+      const [hrSamples, bikeSamples] = await Promise.all([
+        getHrSamples(summary.external_session_id),
+        getOrdinaryBikeTelemetrySamples(summary.external_session_id),
+      ]);
+      rawBySession[summary.external_session_id] = { hrSamples, bikeSamples };
+    }
+    personalizationScientificSessionContexts = buildScientificSessionEvidenceV2Contexts(history, athleteId, rawBySession);
     renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(
       personalizationDiagnosticsRecords,
       EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
@@ -1295,7 +1309,8 @@ async function loadPersonalizationDiagnostics() {
       personalizationWorkoutContexts,
       personalizationPerformedLoadContexts,
       new Date().toISOString(),
-      personalizationExecutionProvenanceContexts
+      personalizationExecutionProvenanceContexts,
+      personalizationScientificSessionContexts
     ));
   } catch (error) {
     console.error("Error loading personalization diagnostics:", error);
@@ -1323,7 +1338,8 @@ function applyPersonalizationDiagnosticsFilters() {
     personalizationWorkoutContexts,
     personalizationPerformedLoadContexts,
     new Date().toISOString(),
-    personalizationExecutionProvenanceContexts
+    personalizationExecutionProvenanceContexts,
+    personalizationScientificSessionContexts
   ));
 }
 
@@ -1335,7 +1351,8 @@ function resetPersonalizationDiagnosticsFilters() {
     personalizationWorkoutContexts,
     personalizationPerformedLoadContexts,
     new Date().toISOString(),
-    personalizationExecutionProvenanceContexts
+    personalizationExecutionProvenanceContexts,
+    personalizationScientificSessionContexts
   ));
 }
 
