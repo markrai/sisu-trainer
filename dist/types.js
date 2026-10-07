@@ -55,3 +55,6 @@ export const VO2_PROTOCOL_VERSION_V3 = 3;
 export const VO2_PROTOCOL_ID = LEGACY_VO2_PROTOCOL_ID;
 /** v2 marker used by the v2 reader/validators. Do not point at v3: v2 validation depends on this staying 2. */
 export const VO2_PROTOCOL_VERSION = VO2_PROTOCOL_VERSION_V2;
+/** Permanent execution-provenance schema identity. */
+export const WORKOUT_EXECUTION_PROVENANCE_SCHEMA_VERSION_V1 = 1;
+export const FORMAL_CALIBRATION_MACHINE_PROVENANCE_SCHEMA_VERSION_V1 = 1;

@@ -1,4 +1,4 @@
-import type { Activity, WorkoutPhaseKind } from "../types.js";
+import type { Activity, ResistanceActuationOriginV1, WorkoutPhaseKind } from "../types.js";
 import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommendation } from "./guidance.js";
 import { lookupLearnedWorkStart } from "./learning/index.js";
 import { lookupPersonalizedTiming } from "./dynamics/index.js";
@@ -38,6 +38,8 @@ interface MachineRuntimeState {
   lastPhaseId?: string;
   pendingShortWork?: PendingShortWorkPhase;
   decisionAudit: MachineDecisionAuditState;
+  /** The selected machine changed after this session's runtime first resolved one. */
+  machineSelectionChanged: boolean;
 }
 
 export interface MachineGuidanceRuntimeInput {
@@ -64,6 +66,11 @@ export interface MachineGuidanceRuntimeUpdate {
   recommendationChanged: boolean;
   phaseChanged: boolean;
   voiceEvent: MachineGuidanceVoiceEvent | null;
+  /**
+   * Provenance of the current recommendation, classified from the guidance
+   * branch that produced it. Descriptive only; it never alters guidance.
+   */
+  actuationOrigin: ResistanceActuationOriginV1;
 }
 
 export interface MachineUsageSnapshot {
@@ -71,6 +78,7 @@ export interface MachineUsageSnapshot {
   profileVersion: number;
   guidanceTrace: MachineGuidanceTraceEntry[];
   decisionAudit?: MachineDecisionAuditEntry[];
+  machineSelectionChanged: boolean;
 }
 
 function newRuntimeState(sessionId: string | null): MachineRuntimeState {
@@ -80,7 +88,31 @@ function newRuntimeState(sessionId: string | null): MachineRuntimeState {
     recentHeartRates: [],
     trace: [],
     decisionAudit: createMachineDecisionAuditState(),
+    machineSelectionChanged: false,
   };
+}
+
+/**
+ * Who chose the recommendation, from the structured guidance branch:
+ * fixed protocol hold, scripted warm-up/recovery/cooldown program, work-phase
+ * start (carry-over, learned, or default), or a live HR evaluation.
+ */
+export function classifyRecommendationOrigin(input: {
+  phaseKind: WorkoutPhaseKind;
+  holdResistance?: number;
+  guidancePhaseChanged: boolean;
+  priorNextWorkResistance?: number;
+  learnedStartingResistance?: number;
+}): ResistanceActuationOriginV1 {
+  if (input.holdResistance != null && Number.isFinite(input.holdResistance)) return "vo2_protocol_fixed_resistance";
+  if (input.phaseKind === "warmup" || input.phaseKind === "cooldown") return "scripted_phase_program";
+  if (input.phaseKind === "recovery") return input.guidancePhaseChanged ? "scripted_phase_program" : "automatic_hr_control";
+  if (!input.guidancePhaseChanged) return "automatic_hr_control";
+  if (input.priorNextWorkResistance !== undefined) return "controller_carryover";
+  if (input.learnedStartingResistance !== undefined && Number.isFinite(input.learnedStartingResistance)) {
+    return "learned_starting_resistance";
+  }
+  return "default_starting_resistance";
 }
 
 let runtime = newRuntimeState(null);
@@ -187,6 +219,7 @@ export function updateMachineGuidanceRuntime(
   const machine = getMachineDefinition(machineId);
   if (!machine || machine.activity !== input.activity) return null;
   if (runtime.machineId !== machineId) {
+    if (runtime.machineId !== undefined) runtime.machineSelectionChanged = true;
     runtime.machineId = machineId;
     runtime.guidanceState = createMachineGuidanceState();
     runtime.previousGuidance = undefined;
@@ -226,6 +259,7 @@ export function updateMachineGuidanceRuntime(
         storage
       )
     : undefined;
+  const priorGuidanceState = runtime.guidanceState;
   const result = getMachineGuidance(
     {
       machineId,
@@ -310,6 +344,13 @@ export function updateMachineGuidanceRuntime(
     recommendationChanged,
     phaseChanged,
     voiceEvent,
+    actuationOrigin: classifyRecommendationOrigin({
+      phaseKind: input.phaseKind,
+      holdResistance: input.holdResistance,
+      guidancePhaseChanged: priorGuidanceState.currentPhaseId !== input.phaseId,
+      priorNextWorkResistance: priorGuidanceState.nextWorkResistance,
+      learnedStartingResistance,
+    }),
   };
 }
 
@@ -324,5 +365,6 @@ export function getMachineUsageSnapshot(sessionId: string): MachineUsageSnapshot
     decisionAudit: runtime.decisionAudit.entries.length > 0
       ? runtime.decisionAudit.entries.map((entry) => ({ ...entry }))
       : undefined,
+    machineSelectionChanged: runtime.machineSelectionChanged,
   };
 }

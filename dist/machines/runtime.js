@@ -11,7 +11,29 @@ function newRuntimeState(sessionId) {
         recentHeartRates: [],
         trace: [],
         decisionAudit: createMachineDecisionAuditState(),
+        machineSelectionChanged: false,
     };
+}
+/**
+ * Who chose the recommendation, from the structured guidance branch:
+ * fixed protocol hold, scripted warm-up/recovery/cooldown program, work-phase
+ * start (carry-over, learned, or default), or a live HR evaluation.
+ */
+export function classifyRecommendationOrigin(input) {
+    if (input.holdResistance != null && Number.isFinite(input.holdResistance))
+        return "vo2_protocol_fixed_resistance";
+    if (input.phaseKind === "warmup" || input.phaseKind === "cooldown")
+        return "scripted_phase_program";
+    if (input.phaseKind === "recovery")
+        return input.guidancePhaseChanged ? "scripted_phase_program" : "automatic_hr_control";
+    if (!input.guidancePhaseChanged)
+        return "automatic_hr_control";
+    if (input.priorNextWorkResistance !== undefined)
+        return "controller_carryover";
+    if (input.learnedStartingResistance !== undefined && Number.isFinite(input.learnedStartingResistance)) {
+        return "learned_starting_resistance";
+    }
+    return "default_starting_resistance";
 }
 let runtime = newRuntimeState(null);
 export function resetMachineGuidanceRuntime(sessionId = null) {
@@ -96,6 +118,8 @@ export function updateMachineGuidanceRuntime(input, storage) {
     if (!machine || machine.activity !== input.activity)
         return null;
     if (runtime.machineId !== machineId) {
+        if (runtime.machineId !== undefined)
+            runtime.machineSelectionChanged = true;
         runtime.machineId = machineId;
         runtime.guidanceState = createMachineGuidanceState();
         runtime.previousGuidance = undefined;
@@ -130,6 +154,7 @@ export function updateMachineGuidanceRuntime(input, storage) {
             durationSeconds: input.phaseDurationSeconds,
         }, storage)
         : undefined;
+    const priorGuidanceState = runtime.guidanceState;
     const result = getMachineGuidance({
         machineId,
         activity: input.activity,
@@ -202,6 +227,13 @@ export function updateMachineGuidanceRuntime(input, storage) {
         recommendationChanged,
         phaseChanged,
         voiceEvent,
+        actuationOrigin: classifyRecommendationOrigin({
+            phaseKind: input.phaseKind,
+            holdResistance: input.holdResistance,
+            guidancePhaseChanged: priorGuidanceState.currentPhaseId !== input.phaseId,
+            priorNextWorkResistance: priorGuidanceState.nextWorkResistance,
+            learnedStartingResistance,
+        }),
     };
 }
 export function getMachineUsageSnapshot(sessionId) {
@@ -217,5 +249,6 @@ export function getMachineUsageSnapshot(sessionId) {
         decisionAudit: runtime.decisionAudit.entries.length > 0
             ? runtime.decisionAudit.entries.map((entry) => ({ ...entry }))
             : undefined,
+        machineSelectionChanged: runtime.machineSelectionChanged,
     };
 }

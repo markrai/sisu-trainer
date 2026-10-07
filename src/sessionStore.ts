@@ -5,6 +5,8 @@ import type {
   PersonalizedPrescriptionEvaluationV1,
   PlanBlock,
   ResolvedWorkoutPrescription,
+  WorkoutExecutionProvenanceV1,
+  WorkoutMachineProvenanceV1,
 } from "./types.js";
 import { isActivity } from "./workoutActivity.js";
 import {
@@ -25,6 +27,14 @@ import {
   persistedHrTargetsFitBlocks,
 } from "./workoutPrescription.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
+import {
+  captureWorkoutMachineProvenance,
+  createInProgressExecutionProvenance,
+  executionProvenanceKey,
+  readInProgressExecutionProvenance,
+  writeInProgressExecutionProvenance,
+} from "./executionProvenance.js";
+import { calibrationIdentityFromE1Snapshot, resolveWorkoutCalibrationMachine } from "./calibrationMachineProvenance.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -67,6 +77,12 @@ export interface SessionData {
   /** A persisted protocol-v1 assessment must be restarted rather than resumed with v2 rules. */
   vo2ProtocolRestartRequired: boolean;
   blockedVo2ProtocolVersion?: number;
+  /**
+   * Start-time execution provenance for this session (frozen machine identity,
+   * calibration machine provenance, captured actuation events). Null for legacy
+   * sessions started without it; never reconstructed from current selection.
+   */
+  executionProvenance: WorkoutExecutionProvenanceV1 | null;
 }
 
 function storageOrBrowser(storage?: SessionStorage): SessionStorage {
@@ -215,9 +231,11 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
     }
     return persisted;
   })();
+  const sessionId = store.getItem("session_id_" + day);
+  const executionProvenance = readInProgressExecutionProvenance(day, store);
   return {
     startTime: store.getItem("start_" + day),
-    sessionId: store.getItem("session_id_" + day),
+    sessionId,
     sessionStart: store.getItem("session_start_" + day),
     summaryEmitted: store.getItem("summary_emitted_" + day),
     paused: store.getItem("paused_" + day) === "true",
@@ -234,6 +252,7 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
     ...(persistedVo2Runtime.observedProtocolVersion != null && persistedVo2Runtime.restartRequired
       ? { blockedVo2ProtocolVersion: persistedVo2Runtime.observedProtocolVersion }
       : {}),
+    executionProvenance: executionProvenance && executionProvenance.sessionId === sessionId ? executionProvenance : null,
   };
 }
 
@@ -244,7 +263,8 @@ export function startSession(
   activity?: Activity,
   storage?: SessionStorage,
   phasePlan?: PhasePlanSnapshot | null,
-  athleteFitnessSnapshotOverride?: AthleteFitnessSnapshot
+  athleteFitnessSnapshotOverride?: AthleteFitnessSnapshot,
+  machineProvenanceOverride?: WorkoutMachineProvenanceV1
 ): void {
   const store = storageOrBrowser(storage);
   store.removeItem(earlyCooldownKey(day));
@@ -257,6 +277,7 @@ export function startSession(
   store.removeItem(athleteFitnessSnapshotKey(day));
   store.removeItem(legacyVo2ProtocolPlanKey(day));
   store.removeItem(vo2ProtocolRuntimeKey(day));
+  store.removeItem(executionProvenanceKey(day));
   store.setItem("start_" + day, String(startTime));
   if (sessionId != null) {
     store.setItem("session_id_" + day, sessionId);
@@ -278,6 +299,18 @@ export function startSession(
         shadowPrescriptionEvaluation: phasePlan.shadowPrescriptionEvaluation,
       })
     );
+  }
+  if (sessionId != null) {
+    // Freeze provenance once, at start. Reload reads it back; finalization never re-reads selection.
+    const evaluation = phasePlan?.shadowPrescriptionEvaluation;
+    const calibrationIdentity = evaluation
+      ? calibrationIdentityFromE1Snapshot(evaluation.athleteId, evaluation.fitnessEvidenceSnapshot)
+      : null;
+    writeInProgressExecutionProvenance(day, createInProgressExecutionProvenance(
+      sessionId,
+      machineProvenanceOverride ?? captureWorkoutMachineProvenance(activity, store),
+      resolveWorkoutCalibrationMachine(calibrationIdentity, store)
+    ), store);
   }
 }
 
@@ -326,6 +359,7 @@ export function clearSession(day: string, storage?: SessionStorage): void {
   store.removeItem(phasePlanKey(day));
   store.removeItem(athleteIdKey(day));
   store.removeItem(athleteFitnessSnapshotKey(day));
+  store.removeItem(executionProvenanceKey(day));
   store.removeItem(legacyVo2ProtocolPlanKey(day));
   store.removeItem(vo2ProtocolRuntimeKey(day));
 }

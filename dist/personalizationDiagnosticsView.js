@@ -343,6 +343,51 @@ export function extractTrustedPersonalizationWorkoutContexts(history, currentAth
     }
     return contexts;
 }
+/** Strictly parsed summary provenance (from getAllWorkoutSummaries) linked to its own session. */
+export function extractTrustedExecutionProvenanceContexts(history, currentAthleteId) {
+    const contexts = {};
+    for (const { summary } of history) {
+        const provenance = summary.execution_provenance;
+        if (!provenance || summary.athlete_id !== currentAthleteId ||
+            provenance.sessionId !== summary.external_session_id)
+            continue;
+        contexts[provenance.sessionId] = provenance;
+    }
+    return contexts;
+}
+/**
+ * Calibration-vs-workout machine comparison. Identities are compared exactly:
+ * a different machine with the same profile version, or the same machine with a
+ * different profile version, stays distinguishable. No eligibility is implied.
+ */
+export function calibrationWorkoutMachineComparison(provenance) {
+    if (!provenance || provenance.machine.status !== "selected" ||
+        provenance.calibrationMachine.status !== "available")
+        return "unavailable";
+    if (provenance.machine.machineId !== provenance.calibrationMachine.machineId)
+        return "different_machine";
+    return provenance.machine.machineProfileVersion === provenance.calibrationMachine.machineProfileVersion
+        ? "same_machine_and_profile"
+        : "same_machine_different_profile";
+}
+export function summarizeExecutionProvenance(records, contexts) {
+    const sessions = [...new Set(records.map((record) => record.workoutSessionId))];
+    const provenance = sessions.flatMap((id) => contexts[id] ? [contexts[id]] : []);
+    const comparisons = provenance.map(calibrationWorkoutMachineComparison);
+    return {
+        workoutsWithE2: sessions.length,
+        workoutsWithProvenance: provenance.length,
+        frozenMachineSelected: provenance.filter((item) => item.machine.status === "selected").length,
+        selectionChangedDuringWorkout: provenance.filter((item) => item.machine.selectionChangedDuringWorkout).length,
+        calibrationMachineAvailable: provenance.filter((item) => item.calibrationMachine.status === "available").length,
+        calibrationMachineUnavailable: provenance.filter((item) => item.calibrationMachine.status === "unavailable").length,
+        calibrationMachineIntegrityFailures: provenance.filter((item) => item.calibrationMachine.status === "integrity_failure").length,
+        sameMachineAndProfile: comparisons.filter((item) => item === "same_machine_and_profile").length,
+        differentMachine: comparisons.filter((item) => item === "different_machine").length,
+        sameMachineDifferentProfile: comparisons.filter((item) => item === "same_machine_different_profile").length,
+        incompleteActuationCapture: provenance.filter((item) => item.actuation.coverage === "incomplete").length,
+    };
+}
 function matchPerformedLoadPhase(phase, views) {
     const matches = views.filter((view) => view.phaseId === phase.phaseId &&
         view.kind === phase.kind &&
@@ -448,13 +493,13 @@ export function filterPersonalizationCharacterizations(records, filters) {
         return phases.length > 0 ? [withPhases(record, phases)] : [];
     });
 }
-export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, assessmentContexts = {}, workoutContexts = {}, performedLoadContexts = {}, scientificAssessmentEvaluatedAt = null) {
+export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, assessmentContexts = {}, workoutContexts = {}, performedLoadContexts = {}, scientificAssessmentEvaluatedAt = null, executionProvenanceContexts = {}) {
     const normalizedFilters = { ...EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, ...filters };
     const filtered = filterPersonalizationCharacterizations(records, normalizedFilters);
     const baseRows = personalizedPrescriptionDiagnosticRows(filtered);
     let rowIndex = 0;
     const rows = filtered.flatMap((record) => record.phases.map((phase) => {
-        var _a, _b, _c, _d, _e, _f, _g;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const base = baseRows[rowIndex];
         const row = {
             ...base,
@@ -466,6 +511,7 @@ export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PE
             assessmentContext: (_e = assessmentContexts[record.workoutSessionId]) !== null && _e !== void 0 ? _e : null,
             workoutContext: (_f = workoutContexts[record.workoutSessionId]) !== null && _f !== void 0 ? _f : null,
             performedLoadPhase: matchPerformedLoadPhase(phase, (_g = performedLoadContexts[record.workoutSessionId]) !== null && _g !== void 0 ? _g : []),
+            executionProvenance: (_h = executionProvenanceContexts[record.workoutSessionId]) !== null && _h !== void 0 ? _h : null,
             record,
             phaseRecord: phase,
         };
@@ -484,6 +530,7 @@ export function buildPersonalizationDiagnosticsModel(records, filters = EMPTY_PE
         evidenceCollectionSummary: summarizePersonalizationEvidenceCollection(records),
         thresholdLongitudinal: buildThresholdLongitudinalAnalysis(records, assessmentContexts, workoutContexts),
         heldWorkloadForward: summarizeHeldWorkloadForwardEvidence(records),
+        executionProvenance: summarizeExecutionProvenance(records, executionProvenanceContexts),
         scientificAssessments: scientificAssessmentEvaluatedAt === null
             ? []
             : buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts, scientificAssessmentEvaluatedAt),
@@ -502,7 +549,7 @@ function exportBody(model) {
     return {
         filters: { ...model.filters },
         aggregate: model.aggregate,
-        diagnosticRows: model.rows.map(({ record: _record, phaseRecord: _phaseRecord, performedLoadPhase: _performedLoadPhase, ...row }) => row),
+        diagnosticRows: model.rows.map(({ record: _record, phaseRecord: _phaseRecord, performedLoadPhase: _performedLoadPhase, executionProvenance: _executionProvenance, ...row }) => row),
         characterizationRecords: [...model.records]
             .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.workoutSessionId.localeCompare(b.workoutSessionId))
             .map((record) => withPhases(record, record.phases)),
@@ -564,6 +611,22 @@ const LABELS = {
     unsupported_power_provenance: "Unsupported or mixed power source",
     phase_evidence_unavailable: "Phase evidence unavailable",
     calibration_unavailable: "Frozen calibration unavailable",
+    automatic_hr_control: "Automatic HR control",
+    learned_starting_resistance: "Learned starting resistance",
+    default_starting_resistance: "Default starting resistance",
+    controller_carryover: "Controller carry-over",
+    scripted_phase_program: "Scripted phase program",
+    vo2_protocol_fixed_resistance: "VO₂ protocol fixed resistance",
+    unclassified: "Unclassified",
+    decision: "Decision",
+    reconciliation_resend: "Re-send of current decision",
+    complete: "Complete",
+    incomplete: "Incomplete",
+    no_frozen_calibration: "No frozen calibration",
+    integrity_failure: "Conflicting provenance records",
+    same_machine_and_profile: "Same machine and profile",
+    different_machine: "Different machine",
+    same_machine_different_profile: "Same machine, different profile",
     no_stable_observed_resistance: "No stable observed resistance",
     insufficient_post_settling_evidence: "Insufficient post-settling evidence",
     edge: "Edge",
@@ -646,6 +709,42 @@ function thresholdLongitudinalHtml(analysis) {
     return `<section class="personalization-longitudinal" id="personalizationThresholdLongitudinal"><h4>Threshold transfer series</h4>${note}<div class="personalization-count-grid"><div><strong>${analysis.sessionCount}</strong><span>Comparable bike threshold sessions</span></div><div><strong>${analysis.cohorts.length}</strong><span>Calibration × provenance × machine cohorts</span></div></div><div class="personalization-cohorts">${cohorts}</div>${exclusions}</section>`;
 }
 const HELD_WORKLOAD_NOTE = `<p class="developer-diagnostics-note">Held-workload forward-response evidence: observed watts while observed resistance stays unchanged, after a settling interval, are mapped through the frozen formal calibration to a predicted heart rate (signed error = observed HR − predicted HR). It is not filtered by legacy heart-rate target occupancy. The live controller may have chosen the held resistance, so this is not independent open-loop evidence, and it does not authorize control.</p>`;
+function executionProvenanceHtml(summary) {
+    const note = `<p class="developer-diagnostics-note">Machine provenance is frozen at workout start; calibration machine provenance is copied at start from an exact formal-calibration record. Actuation provenance lists captured app resistance commands with their recorded origin; console resistance changes are not observable. Descriptive only: it does not change any assessment.</p>`;
+    return `<section class="personalization-longitudinal" id="personalizationExecutionProvenance"><h4>Machine and actuation provenance</h4>${note}<div class="personalization-count-grid">
+      <div><strong>${summary.workoutsWithProvenance} / ${summary.workoutsWithE2}</strong><span>Workouts with execution provenance</span></div>
+      <div><strong>${summary.frozenMachineSelected}</strong><span>Frozen workout machine recorded</span></div>
+      <div><strong>${summary.selectionChangedDuringWorkout}</strong><span>Machine selection changed mid-workout</span></div>
+      <div><strong>${summary.calibrationMachineAvailable} / ${summary.calibrationMachineUnavailable} / ${summary.calibrationMachineIntegrityFailures}</strong><span>Calibration machine available / unavailable / conflicting</span></div>
+      <div><strong>${summary.sameMachineAndProfile} / ${summary.differentMachine} / ${summary.sameMachineDifferentProfile}</strong><span>Calibration vs workout: same / other machine / other profile</span></div>
+      <div><strong>${summary.incompleteActuationCapture}</strong><span>Incomplete actuation capture</span></div>
+    </div></section>`;
+}
+const ACTUATION_MODE_LABELS = {
+    automatic: "Automatic",
+    programmatic: "Programmatic only",
+    none: "No app resistance commands",
+    unknown: "Unknown",
+};
+function machineLabel(identity) {
+    return `${identity.machineId} / profile ${identity.machineProfileVersion}`;
+}
+function provenanceDetailHtml(provenance, phase) {
+    var _a;
+    if (!provenance) {
+        return `<section><h5>Machine provenance</h5><dl>${detailRow("Availability", "not recorded (historical workout)")}${detailRow("Actuation provenance", "unknown")}</dl></section>`;
+    }
+    const machine = provenance.machine;
+    const calibration = provenance.calibrationMachine;
+    const phaseSummary = (_a = provenance.actuation.phases) === null || _a === void 0 ? void 0 : _a.find((item) => item.phaseId === phase.phaseId && item.intervalIndex === phase.intervalIndex &&
+        (phase.activeStartSec === undefined || item.activeStartSec === phase.activeStartSec));
+    const events = phaseSummary
+        ? provenance.actuation.events.filter((event) => event.activeSec >= phaseSummary.activeStartSec && event.activeSec < phaseSummary.activeEndSec)
+        : [];
+    const eventRows = events.map((event) => `<tr><td>${event.activeSec} s</td><td>${escapeHtml(personalizationDiagnosticLabel(event.origin))}</td><td>${escapeHtml(personalizationDiagnosticLabel(event.trigger))}</td><td>R${event.requestedResistance}</td><td>${escapeHtml(event.outcome)}</td></tr>`).join("");
+    return `<section><h5>Machine provenance</h5><dl>${detailRow("Frozen workout machine", machine.status === "selected" ? machineLabel(machine) : "none selected at start")}${detailRow("Selection changed mid-workout", machine.selectionChangedDuringWorkout ? "yes" : "no")}${detailRow("Calibration machine", calibration.status === "available" ? machineLabel(calibration) : personalizationDiagnosticLabel(calibration.status))}${detailRow("Calibration vs workout", personalizationDiagnosticLabel(calibrationWorkoutMachineComparison(provenance)))}</dl></section>
+    <section><h5>Actuation provenance</h5><dl>${detailRow("Capture", `${personalizationDiagnosticLabel(provenance.actuation.coverage)} app resistance commands; console changes not observable`)}${detailRow("Phase actuation mode", phaseSummary ? ACTUATION_MODE_LABELS[phaseSummary.mode] : "unavailable")}${detailRow("Captured automatic / programmatic resistance events", phaseSummary ? `${phaseSummary.automaticAcceptedCount} / ${phaseSummary.programmaticAcceptedCount}` : "n/a")}${detailRow("Rejected / ambiguous commands", phaseSummary ? `${phaseSummary.rejectedCount} / ${phaseSummary.ambiguousCount}` : "n/a")}${detailRow("Distinct decisions", phaseSummary === null || phaseSummary === void 0 ? void 0 : phaseSummary.decisionCount)}</dl>${eventRows ? `<div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Active time</th><th>Origin</th><th>Trigger</th><th>Requested</th><th>Outcome</th></tr></thead><tbody>${eventRows}</tbody></table></div>` : ""}</section>`;
+}
 function heldWorkloadForwardHtml(summary) {
     if (summary.phasesWithHeldWorkloadSummary === 0) {
         return `<section class="personalization-longitudinal" id="personalizationHeldWorkloadForward"><h4>Held-workload forward-response evidence</h4>${HELD_WORKLOAD_NOTE}<div class="personalization-diagnostics-empty"><strong>No E2 v3 held-workload evidence yet.</strong><span>Workouts characterized before E2 v3 carry closed-loop transfer evidence only.</span></div></section>`;
@@ -746,6 +845,7 @@ export function personalizationDiagnosticsHtml(model) {
   </section>
     ${thresholdLongitudinalHtml(model.thresholdLongitudinal)}
     ${heldWorkloadForwardHtml(model.heldWorkloadForward)}
+    ${executionProvenanceHtml(model.executionProvenance)}
     ${scientificAssessmentsHtml(model.scientificAssessments)}
     <div class="personalization-filter-grid">${filtersHtml}</div>
     <div class="personalization-count-grid"><div><strong>${aggregate.workoutCount}</strong><span>Completed workouts with E2 data</span></div><div><strong>${aggregate.candidatePhases}</strong><span>Candidate phases</span></div><div><strong>${aggregate.evaluableCandidatePhases}</strong><span>Evaluable candidate phases</span></div><div><strong>${aggregate.fallbackPhases}</strong><span>Fallback phases</span></div></div>
@@ -806,5 +906,6 @@ export function personalizationDiagnosticDetailHtml(row) {
     <section><h5>Frozen evidence provenance</h5><dl>${detailRow("App version", (_b = workout === null || workout === void 0 ? void 0 : workout.appVersion) !== null && _b !== void 0 ? _b : "unavailable")}${detailRow("Machine", (_c = workout === null || workout === void 0 ? void 0 : workout.machineId) !== null && _c !== void 0 ? _c : "unavailable")}${detailRow("Machine profile version", (_d = workout === null || workout === void 0 ? void 0 : workout.machineProfileVersion) !== null && _d !== void 0 ? _d : "unavailable")}${detailRow("Active / E1 / E2 schema", workout ? `${(_e = workout.activePrescriptionSchemaVersion) !== null && _e !== void 0 ? _e : "n/a"} / ${(_f = workout.shadowSchemaVersion) !== null && _f !== void 0 ? _f : "n/a"} / ${workout.characterizationSchemaVersion}` : "n/a")}${detailRow("Assessment evidence sessions", (_h = (_g = assessment === null || assessment === void 0 ? void 0 : assessment.evidenceSessionIds) === null || _g === void 0 ? void 0 : _g.join(", ")) !== null && _h !== void 0 ? _h : "n/a")}${detailRow("Assessment algorithm", (assessment === null || assessment === void 0 ? void 0 : assessment.algorithm) ? `${assessment.algorithm.id}@${assessment.algorithm.version}` : "n/a")}${detailRow("Assessment protocol", (assessment === null || assessment === void 0 ? void 0 : assessment.protocol) ? `${assessment.protocol.id}@${assessment.protocol.version}` : "n/a")}</dl></section>
     <section><h5>Frozen assessment context</h5><dl>${detailRow("Assessment date", assessment ? new Date(assessment.observedAt).toLocaleDateString() : "n/a")}${detailRow("Assessment quality", personalizationDiagnosticLabel((_k = (_j = assessment === null || assessment === void 0 ? void 0 : assessment.quality) !== null && _j !== void 0 ? _j : record.formalAssessmentQuality) !== null && _k !== void 0 ? _k : "unavailable"))}${detailRow("Calibration provenance", personalizationDiagnosticLabel((_m = (_l = assessment === null || assessment === void 0 ? void 0 : assessment.calibrationProvenance) !== null && _l !== void 0 ? _l : record.calibrationWorkloadProvenance) !== null && _m !== void 0 ? _m : "unavailable"))}${detailRow("Calibration HR range", assessment ? `${assessment.observedMinHeartRateBpm}–${assessment.observedMaxHeartRateBpm} bpm` : "n/a")}${detailRow("Calibration watt range", assessment ? `${assessment.observedMinWatts}–${assessment.observedMaxWatts} W` : "n/a")}${detailRow("Candidate watts", row.candidateWatts)}${detailRow("Assessment domain", personalizationDiagnosticLabel(row.assessmentDomain))}${detailRow("Domain HR margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.heartRateToLowerBoundaryBpm} / ${phase.candidateDomainMargins.heartRateToUpperBoundaryBpm} bpm` : "n/a")}${detailRow("Domain watt margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.wattsToLowerBoundary} / ${phase.candidateDomainMargins.wattsToUpperBoundary} W` : "n/a")}</dl></section>
     <section><h5>Closed-loop transfer evidence</h5><dl>${detailRow("Candidate midpoint", comparison ? `${comparison.candidateMidpointWatts} W` : "n/a")}${detailRow("Observed settled median", comparison ? `${comparison.observedInBandMedianWatts} W` : "n/a")}${detailRow("Signed / absolute difference", comparison ? `${signed(comparison.signedDifferenceWatts, " W")} / ${comparison.absoluteDifferenceWatts} W` : "n/a")}${detailRow("Percentage difference", comparison ? signed(comparison.signedDifferencePercent, "%") : "n/a")}${detailRow("Candidate contains observed median", comparison ? (comparison.candidateContainsObservedMedian ? "Yes" : "No") : "n/a")}${detailRow("Observed IQR overlap", comparison ? `${comparison.candidateObservedOverlapWatts} W · ${percent(comparison.candidateObservedOverlapRatio)}` : "n/a")}${detailRow("Descriptive agreement", personalizationDiagnosticLabel(row.agreement))}${detailRow("Outcome", personalizationDiagnosticLabel(row.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel(row.exclusion))}</dl></section>
-    ${heldWorkloadDetailHtml(heldWorkloadResponseOf(phase))}`;
+    ${heldWorkloadDetailHtml(heldWorkloadResponseOf(phase))}
+    ${provenanceDetailHtml(row.executionProvenance, phase)}`;
 }

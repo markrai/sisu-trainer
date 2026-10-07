@@ -47,6 +47,12 @@ export function createBikeBridgeSession(options = {}) {
     let pollInFlight = false;
     let sendInFlight = false;
     let pendingLevel;
+    // Logical decision identity: one per recommendation change; re-sends reuse it.
+    const decisionEpoch = Math.max(0, Math.floor(now())).toString(36);
+    let decisionSeq = 0;
+    let desiredDecision;
+    let pendingTrigger = "decision";
+    let actuationObserver = null;
     let lastAccepted;
     let holdFailedLevel;
     let needsReconcile = false;
@@ -116,7 +122,7 @@ export function createBikeBridgeSession(options = {}) {
             lastCommandOutcome,
         };
     }
-    function scheduleSend(level, force = false) {
+    function scheduleSend(level, force = false, trigger = "reconciliation_resend") {
         const target = level === undefined ? undefined : toBridgeResistanceLevel(level);
         if (target === undefined || !canCommand())
             return;
@@ -126,24 +132,56 @@ export function createBikeBridgeSession(options = {}) {
             return;
         if (sendInFlight) {
             pendingLevel = target;
+            pendingTrigger = trigger;
             return;
         }
-        void sendTarget(target);
+        void sendTarget(target, trigger);
     }
-    async function sendTarget(target) {
+    function observeRequest(target, trigger) {
+        var _a, _b;
+        if (!actuationObserver)
+            return undefined;
+        try {
+            return actuationObserver.requested({
+                decisionId: (_a = desiredDecision === null || desiredDecision === void 0 ? void 0 : desiredDecision.id) !== null && _a !== void 0 ? _a : decisionEpoch + "-0",
+                origin: (_b = desiredDecision === null || desiredDecision === void 0 ? void 0 : desiredDecision.origin) !== null && _b !== void 0 ? _b : "unclassified",
+                trigger,
+                requestedResistance: target,
+                observedAtMs: now(),
+            });
+        }
+        catch {
+            return undefined;
+        }
+    }
+    function observeOutcome(token, outcome) {
+        if (!actuationObserver || token === undefined)
+            return;
+        try {
+            actuationObserver.resolved(token, outcome);
+        }
+        catch {
+            // Provenance capture must never affect resistance commands.
+        }
+    }
+    async function sendTarget(target, trigger) {
         if (sendInFlight) {
             pendingLevel = target;
+            pendingTrigger = trigger;
             return;
         }
         sendInFlight = true;
         pendingLevel = undefined;
         commandedResistance = target;
+        const token = observeRequest(target, trigger);
+        let outcome = "failed";
         try {
             const result = await client.setResistance(target);
             if (isBikeBridgeClientOk(result)) {
                 lastAccepted = result.value.requested;
                 holdFailedLevel = undefined;
                 lastCommandOutcome = "accepted";
+                outcome = "accepted";
                 lastError = null;
                 if (lastStatus) {
                     lastStatus = {
@@ -157,11 +195,13 @@ export function createBikeBridgeSession(options = {}) {
             }
             else if (result.kind === "timeout") {
                 lastCommandOutcome = "timeout";
+                outcome = "timeout";
                 lastError = "resistance command timed out";
                 holdFailedLevel = target;
             }
             else if (result.status === 503 || result.kind === "unreachable") {
                 lastCommandOutcome = "unavailable";
+                outcome = "unavailable";
                 lastError = result.message;
                 holdFailedLevel = target;
             }
@@ -173,11 +213,12 @@ export function createBikeBridgeSession(options = {}) {
         }
         finally {
             sendInFlight = false;
+            observeOutcome(token, outcome);
             notify();
             if (pendingLevel !== undefined) {
                 const next = pendingLevel;
                 pendingLevel = undefined;
-                scheduleSend(next, false);
+                scheduleSend(next, false, pendingTrigger);
             }
         }
     }
@@ -382,11 +423,16 @@ export function createBikeBridgeSession(options = {}) {
             return pushConsoleBrightness(level);
         },
         onGuidance(input) {
+            var _a;
             const wasActive = workoutActive;
             const wasPaused = paused;
             workoutActive = input.workoutActive;
             paused = input.paused;
             desiredResistance = input.desiredResistance;
+            if (input.workoutActive && input.recommendationChanged) {
+                decisionSeq += 1;
+                desiredDecision = { id: decisionEpoch + "-" + decisionSeq, origin: (_a = input.actuationOrigin) !== null && _a !== void 0 ? _a : "unclassified" };
+            }
             if (!input.workoutActive) {
                 pendingLevel = undefined;
                 lastAccepted = undefined;
@@ -416,7 +462,7 @@ export function createBikeBridgeSession(options = {}) {
             if (input.recommendationChanged) {
                 holdFailedLevel = undefined;
                 needsReconcile = false;
-                scheduleSend(input.desiredResistance, true);
+                scheduleSend(input.desiredResistance, true, "decision");
             }
             else if (needsReconcile) {
                 holdFailedLevel = undefined;
@@ -427,6 +473,9 @@ export function createBikeBridgeSession(options = {}) {
         },
         postedResistanceBodies() {
             return [...postedBodies];
+        },
+        setActuationObserver(observer) {
+            actuationObserver = observer;
         },
     };
 }

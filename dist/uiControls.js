@@ -6,6 +6,7 @@ import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
 import { formatHrvDisplay } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
+import { createActuationProvenanceObserver } from "./actuationProvenanceObserver.js";
 import { isVo2WorkoutSelector, vo2ProtocolDisplayName, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
 import { vo2ProtocolHoldForPhaseForRuntime, vo2ProtocolUiTargetsForRuntime } from "./vo2ProtocolV3.js";
 import { genericWorkoutBlocksText, vo2AssessmentPresentation, vo2CancelModalBody, vo2CancelModalTitle, vo2EndWorkoutButtonLabel, vo2HistoryOutcomeText, vo2LimitReachedButtonVisible, vo2SelectorOptionText, vo2WorkoutBlocksText, } from "./vo2AssessmentView.js";
@@ -19,7 +20,7 @@ import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/
 import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
 import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
 import { loadAthleteProfile } from "./profile.js";
-import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, extractTrustedPersonalizationPerformedLoadContexts, extractTrustedPersonalizationWorkoutContexts, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
+import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, extractTrustedPersonalizationPerformedLoadContexts, extractTrustedExecutionProvenanceContexts, extractTrustedPersonalizationWorkoutContexts, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
 import { PERFORMED_LOAD_DIAGNOSTICS_RECENT_LIMIT, buildPerformedLoadWorkoutView, } from "./performedLoad.js";
 import { performedLoadDiagnosticsHtml } from "./performedLoadDiagnosticsView.js";
 import { ACTIVITY_LABELS, getActiveWorkoutActivity } from "./workoutActivity.js";
@@ -34,6 +35,7 @@ let personalizationDiagnosticsRecords = [];
 let personalizationAssessmentContexts = {};
 let personalizationWorkoutContexts = {};
 let personalizationPerformedLoadContexts = {};
+let personalizationExecutionProvenanceContexts = {};
 let personalizationDiagnosticsModel = null;
 let heartPulseTargetBpm = null;
 let heartPulseRafId = null;
@@ -676,6 +678,7 @@ function syncBikeBridgeGuidance(update, workoutActive, paused) {
         recommendationChanged: (update === null || update === void 0 ? void 0 : update.recommendationChanged) === true,
         workoutActive,
         paused,
+        actuationOrigin: update === null || update === void 0 ? void 0 : update.actuationOrigin,
     });
     renderBikeBridgeHud();
     const equipmentTab = document.getElementById("equipmentTab");
@@ -1142,7 +1145,8 @@ async function loadPersonalizationDiagnostics() {
         personalizationAssessmentContexts = extractTrustedPersonalizationAssessmentContexts(history, athleteId);
         personalizationWorkoutContexts = extractTrustedPersonalizationWorkoutContexts(history, athleteId);
         personalizationPerformedLoadContexts = extractTrustedPersonalizationPerformedLoadContexts(history, athleteId);
-        renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts, personalizationPerformedLoadContexts, new Date().toISOString()));
+        personalizationExecutionProvenanceContexts = extractTrustedExecutionProvenanceContexts(history, athleteId);
+        renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts, personalizationPerformedLoadContexts, new Date().toISOString(), personalizationExecutionProvenanceContexts));
     }
     catch (error) {
         console.error("Error loading personalization diagnostics:", error);
@@ -1161,10 +1165,10 @@ function currentPersonalizationDiagnosticsFilters() {
     };
 }
 function applyPersonalizationDiagnosticsFilters() {
-    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, currentPersonalizationDiagnosticsFilters(), personalizationAssessmentContexts, personalizationWorkoutContexts, personalizationPerformedLoadContexts, new Date().toISOString()));
+    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, currentPersonalizationDiagnosticsFilters(), personalizationAssessmentContexts, personalizationWorkoutContexts, personalizationPerformedLoadContexts, new Date().toISOString(), personalizationExecutionProvenanceContexts));
 }
 function resetPersonalizationDiagnosticsFilters() {
-    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts, personalizationPerformedLoadContexts, new Date().toISOString()));
+    renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(personalizationDiagnosticsRecords, EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, personalizationAssessmentContexts, personalizationWorkoutContexts, personalizationPerformedLoadContexts, new Date().toISOString(), personalizationExecutionProvenanceContexts));
 }
 function openPersonalizationDiagnostic(index) {
     const row = personalizationDiagnosticsModel === null || personalizationDiagnosticsModel === void 0 ? void 0 : personalizationDiagnosticsModel.rows[index];
@@ -1982,6 +1986,8 @@ async function persistWorkoutRelativeHr(session, bpm) {
 }
 function registerUiGlobals(phaseBoxEl) {
     phaseDisplayEl = phaseBoxEl;
+    // Record explicit resistance-actuation provenance at the Bike Bridge command site.
+    getBikeBridgeSession().setActuationObserver(createActuationProvenanceObserver(getSelectedDay));
     onBpm((bpm) => {
         liveBpm = bpm;
         lastBpmUpdateTime = Date.now();

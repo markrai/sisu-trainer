@@ -1,6 +1,7 @@
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
 import { parsePersonalizedPrescriptionCharacterization } from "./personalizedPrescriptionCharacterization.js";
+import { parseWorkoutExecutionProvenance } from "./executionProvenance.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 const DB_NAME = "vo2_workout_db";
@@ -346,7 +347,7 @@ async function getAllWorkoutSummaries() {
             const workouts = [];
             const request = index.openCursor(null, "prev");
             request.onsuccess = (event) => {
-                var _a, _b, _c;
+                var _a, _b, _c, _d;
                 const cursor = event.target.result;
                 if (cursor) {
                     const row = cursor.value;
@@ -373,7 +374,18 @@ async function getAllWorkoutSummaries() {
                             delete row.summary.shadow_prescription_evaluation;
                         }
                     }
-                    if (((_c = row === null || row === void 0 ? void 0 : row.summary) === null || _c === void 0 ? void 0 : _c.shadow_prescription_characterization) !== undefined) {
+                    if (((_c = row === null || row === void 0 ? void 0 : row.summary) === null || _c === void 0 ? void 0 : _c.execution_provenance) !== undefined) {
+                        const parsedProvenance = parseWorkoutExecutionProvenance(row.summary.execution_provenance);
+                        row.summary = { ...row.summary };
+                        if (parsedProvenance && parsedProvenance.sessionId === row.session_id &&
+                            parsedProvenance.sessionId === row.summary.external_session_id) {
+                            row.summary.execution_provenance = parsedProvenance;
+                        }
+                        else {
+                            delete row.summary.execution_provenance;
+                        }
+                    }
+                    if (((_d = row === null || row === void 0 ? void 0 : row.summary) === null || _d === void 0 ? void 0 : _d.shadow_prescription_characterization) !== undefined) {
                         const parsedCharacterization = row.summary.workout_response === undefined
                             ? null
                             : parsePersonalizedPrescriptionCharacterization(row.summary.shadow_prescription_characterization, row.summary.shadow_prescription_evaluation, {

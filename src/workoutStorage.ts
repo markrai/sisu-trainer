@@ -2,6 +2,7 @@ import { HrSample, WorkoutSummary, SisuSettings, type OrdinaryBikeTelemetrySampl
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parseWorkoutResponse } from "./workoutResponse.js";
 import { parsePersonalizedPrescriptionCharacterization } from "./personalizedPrescriptionCharacterization.js";
+import { parseWorkoutExecutionProvenance } from "./executionProvenance.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
 
@@ -400,6 +401,16 @@ async function getAllWorkoutSummaries(): Promise<Array<{ summary: WorkoutSummary
               row.summary.shadow_prescription_evaluation = parsedShadow;
             } else {
               delete row.summary.shadow_prescription_evaluation;
+            }
+          }
+          if (row?.summary?.execution_provenance !== undefined) {
+            const parsedProvenance = parseWorkoutExecutionProvenance(row.summary.execution_provenance);
+            row.summary = { ...row.summary };
+            if (parsedProvenance && parsedProvenance.sessionId === row.session_id &&
+                parsedProvenance.sessionId === row.summary.external_session_id) {
+              row.summary.execution_provenance = parsedProvenance;
+            } else {
+              delete row.summary.execution_provenance;
             }
           }
           if (row?.summary?.shadow_prescription_characterization !== undefined) {

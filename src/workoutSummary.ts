@@ -7,7 +7,8 @@ import {
   storeWorkoutSummary,
 } from "./workoutStorage.js";
 import { formatISO8601UTC } from "./utils/dateTime.js";
-import { Activity, WorkoutSummary } from "./types.js";
+import { Activity, WorkoutSummary, type WorkoutExecutionProvenanceV1 } from "./types.js";
+import type { MachineId } from "./machines/types.js";
 import { getMachineUsageSnapshot, type MachineUsageSnapshot } from "./machines/runtime.js";
 import { getSession, totalPausedDurationSec } from "./sessionStore.js";
 import { getPlan, getWorkoutMetadata, getHrTargets } from "./workoutData.js";
@@ -32,6 +33,10 @@ import {
   PHASE_E2_HELD_WORKLOAD_POLICY_V1,
 } from "./personalizedPrescriptionCharacterization.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
+import { finalizeExecutionProvenance } from "./executionProvenance.js";
+import { recordPromotedCalibrationMachineProvenance } from "./calibrationMachineProvenance.js";
+import { loadAthleteProfile } from "./profile.js";
+import { readFitnessState } from "./fitnessState.js";
 import { APP_VERSION } from "./version.js";
 
 export function buildHrTrace(hrSamples: any[]) {
@@ -77,6 +82,41 @@ export function applyMachineUsageToSummary(
     summary.machine_decision_audit = machineUsage.decisionAudit;
   }
   return summary;
+}
+
+/**
+ * Summary machine identity comes only from the identity frozen at workout start.
+ * Runtime guidance trace/audit are attached only when they belong to that same
+ * machine and the selection never changed mid-workout; a legacy session without
+ * a start snapshot gets no machine identity rather than today's selection.
+ */
+export function applyFrozenMachineUsageToSummary(
+  summary: WorkoutSummary,
+  provenance: WorkoutExecutionProvenanceV1 | null,
+  machineUsage: MachineUsageSnapshot | null
+): WorkoutSummary {
+  const machine = provenance && provenance.sessionId === summary.external_session_id ? provenance.machine : null;
+  if (!machine || machine.status !== "selected") return summary;
+  summary.machine_id = machine.machineId as MachineId;
+  summary.machine_profile_version = machine.machineProfileVersion;
+  if (machineUsage && !machineUsage.machineSelectionChanged && machineUsage.machineId === machine.machineId &&
+      machineUsage.profileVersion === machine.machineProfileVersion) {
+    summary.machine_guidance_trace = machineUsage.guidanceTrace;
+    if (machineUsage.decisionAudit && machineUsage.decisionAudit.length > 0) {
+      summary.machine_decision_audit = machineUsage.decisionAudit;
+    }
+  }
+  return summary;
+}
+
+function selectionChangedSinceStart(
+  machine: WorkoutExecutionProvenanceV1["machine"],
+  machineUsage: MachineUsageSnapshot | null
+): boolean {
+  if (!machineUsage) return false;
+  if (machineUsage.machineSelectionChanged) return true;
+  return machine.status !== "selected" || machineUsage.machineId !== machine.machineId ||
+    machineUsage.profileVersion !== machine.machineProfileVersion;
 }
 
 export function applyWorkoutActivityToSummary(
@@ -174,8 +214,9 @@ async function generateWorkoutSummary(
     cancelled: options?.cancelled,
   };
 
-  applyMachineUsageToSummary(summary, getMachineUsageSnapshot(sessionId));
   const session = getSession(day);
+  const machineUsage = getMachineUsageSnapshot(sessionId);
+  applyFrozenMachineUsageToSummary(summary, session.executionProvenance, machineUsage);
   if (session.athleteId) summary.athlete_id = session.athleteId;
   if (session.athleteFitnessSnapshot) {
     summary.athlete_fitness_snapshot = { ...session.athleteFitnessSnapshot };
@@ -282,6 +323,20 @@ async function generateWorkoutSummary(
     }
   }
 
+  if (session.executionProvenance && session.executionProvenance.sessionId === sessionId) {
+    const finalized = finalizeExecutionProvenance(session.executionProvenance, {
+      selectionChangedDuringWorkout: selectionChangedSinceStart(session.executionProvenance.machine, machineUsage),
+      phases: summary.workout_response?.phases.map((phase) => ({
+        phaseId: phase.phaseId,
+        kind: phase.kind,
+        ...(phase.intervalIndex !== undefined ? { intervalIndex: phase.intervalIndex } : {}),
+        activeStartSec: phase.activeStartSec,
+        activeEndSec: phase.activeEndSec,
+      })),
+    });
+    if (finalized) summary.execution_provenance = finalized;
+  }
+
   validateSummary(summary);
   const zoneSum =
     summary.zone_minutes.z1 +
@@ -298,11 +353,39 @@ async function generateWorkoutSummary(
   return summary;
 }
 
+/**
+ * Sidecar machine provenance for a just-promoted formal calibration. Uses the
+ * machine frozen at assessment start only; an ambiguous identity (no machine at
+ * start, or selection changed mid-assessment) records nothing.
+ */
+export function recordPromotedFormalCalibrationMachine(
+  summary: WorkoutSummary,
+  storage?: Storage,
+  recordedAt = new Date().toISOString()
+): ReturnType<typeof recordPromotedCalibrationMachineProvenance> {
+  const store = storage ?? localStorage;
+  const provenance = summary.execution_provenance;
+  const machine = provenance && provenance.sessionId === summary.external_session_id &&
+    provenance.machine.status === "selected" && !provenance.machine.selectionChangedDuringWorkout
+    ? { machineId: provenance.machine.machineId, machineProfileVersion: provenance.machine.machineProfileVersion }
+    : null;
+  const athlete = loadAthleteProfile(store);
+  return recordPromotedCalibrationMachineProvenance({
+    athleteId: athlete.athleteId,
+    sessionId: summary.external_session_id,
+    endedAt: summary.endedAt,
+    machine,
+    calibrationMetric: readFitnessState(athlete.athleteId, store)?.hrWorkloadCalibration,
+  }, store, recordedAt);
+}
+
 async function emitWorkoutSummary(summary: WorkoutSummary) {
   const saved = await storeWorkoutSummary(summary);
   if (saved && summary.vo2_assessment) {
     try {
-      promoteVo2SummaryToStoredFitnessState(summary);
+      if (promoteVo2SummaryToStoredFitnessState(summary) === "promoted") {
+        recordPromotedFormalCalibrationMachine(summary);
+      }
     } catch (error) {
       console.error("Error promoting VO2 assessment to fitness state:", error);
     }

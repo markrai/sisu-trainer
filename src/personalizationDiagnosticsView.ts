@@ -27,6 +27,7 @@ import {
   type PersonalizedPrescriptionHeldWorkloadForwardResponseV1,
   type PersonalizedPrescriptionPhaseCharacterizationV1,
   type PersonalizedPrescriptionWorkloadProvenanceV1,
+  type WorkoutExecutionProvenanceV1,
   type WorkoutSummary,
 } from "./types.js";
 
@@ -98,6 +99,8 @@ export interface PersonalizationDiagnosticPresentationRow {
   workoutContext: FrozenWorkoutDiagnosticContext | null;
   /** Durable WorkoutResponse observation only; never used to generate E1 candidates. */
   performedLoadPhase: PhasePerformedLoadView | null;
+  /** Frozen execution provenance for the workout; runtime diagnostics only, never exported. */
+  executionProvenance: WorkoutExecutionProvenanceV1 | null;
   record: PersonalizedPrescriptionCharacterization;
   phaseRecord: PersonalizedPrescriptionPhaseCharacterizationV1;
 }
@@ -136,6 +139,21 @@ export interface PersonalizationHeldWorkloadForwardSummary {
   medianPhaseAbsoluteErrorBpm?: number;
 }
 
+/** All-record execution-provenance counts. Descriptive only; filters never affect it. */
+export interface PersonalizationExecutionProvenanceSummary {
+  workoutsWithE2: number;
+  workoutsWithProvenance: number;
+  frozenMachineSelected: number;
+  selectionChangedDuringWorkout: number;
+  calibrationMachineAvailable: number;
+  calibrationMachineUnavailable: number;
+  calibrationMachineIntegrityFailures: number;
+  sameMachineAndProfile: number;
+  differentMachine: number;
+  sameMachineDifferentProfile: number;
+  incompleteActuationCapture: number;
+}
+
 export interface PersonalizationDiagnosticsModel {
   filters: PersonalizationDiagnosticsFilters;
   filterOptions: PersonalizationDiagnosticsFilterOptions;
@@ -148,6 +166,8 @@ export interface PersonalizationDiagnosticsModel {
   thresholdLongitudinal: ThresholdLongitudinalAnalysis;
   /** Runtime-only; never exported. */
   heldWorkloadForward: PersonalizationHeldWorkloadForwardSummary;
+  /** Runtime-only; never exported. */
+  executionProvenance: PersonalizationExecutionProvenanceSummary;
   /**
    * Runtime-only E4A scientific assessments under the frozen production
    * policy. Developer diagnostics only: never exported, never persisted,
@@ -599,6 +619,60 @@ export function extractTrustedPersonalizationWorkoutContexts(
   return contexts;
 }
 
+/** Strictly parsed summary provenance (from getAllWorkoutSummaries) linked to its own session. */
+export function extractTrustedExecutionProvenanceContexts(
+  history: readonly TrustedWorkoutHistoryRow[],
+  currentAthleteId: string
+): Record<string, WorkoutExecutionProvenanceV1> {
+  const contexts: Record<string, WorkoutExecutionProvenanceV1> = {};
+  for (const { summary } of history) {
+    const provenance = summary.execution_provenance;
+    if (!provenance || summary.athlete_id !== currentAthleteId ||
+        provenance.sessionId !== summary.external_session_id) continue;
+    contexts[provenance.sessionId] = provenance;
+  }
+  return contexts;
+}
+
+/**
+ * Calibration-vs-workout machine comparison. Identities are compared exactly:
+ * a different machine with the same profile version, or the same machine with a
+ * different profile version, stays distinguishable. No eligibility is implied.
+ */
+export function calibrationWorkoutMachineComparison(
+  provenance: WorkoutExecutionProvenanceV1 | null
+): "same_machine_and_profile" | "different_machine" | "same_machine_different_profile" | "unavailable" {
+  if (!provenance || provenance.machine.status !== "selected" ||
+      provenance.calibrationMachine.status !== "available") return "unavailable";
+  if (provenance.machine.machineId !== provenance.calibrationMachine.machineId) return "different_machine";
+  return provenance.machine.machineProfileVersion === provenance.calibrationMachine.machineProfileVersion
+    ? "same_machine_and_profile"
+    : "same_machine_different_profile";
+}
+
+export function summarizeExecutionProvenance(
+  records: readonly PersonalizedPrescriptionCharacterization[],
+  contexts: Readonly<Record<string, WorkoutExecutionProvenanceV1>>
+): PersonalizationExecutionProvenanceSummary {
+  const sessions = [...new Set(records.map((record) => record.workoutSessionId))];
+  const provenance = sessions.flatMap((id) => contexts[id] ? [contexts[id]] : []);
+  const comparisons = provenance.map(calibrationWorkoutMachineComparison);
+  return {
+    workoutsWithE2: sessions.length,
+    workoutsWithProvenance: provenance.length,
+    frozenMachineSelected: provenance.filter((item) => item.machine.status === "selected").length,
+    selectionChangedDuringWorkout: provenance.filter((item) => item.machine.selectionChangedDuringWorkout).length,
+    calibrationMachineAvailable: provenance.filter((item) => item.calibrationMachine.status === "available").length,
+    calibrationMachineUnavailable: provenance.filter((item) => item.calibrationMachine.status === "unavailable").length,
+    calibrationMachineIntegrityFailures: provenance.filter((item) =>
+      item.calibrationMachine.status === "integrity_failure").length,
+    sameMachineAndProfile: comparisons.filter((item) => item === "same_machine_and_profile").length,
+    differentMachine: comparisons.filter((item) => item === "different_machine").length,
+    sameMachineDifferentProfile: comparisons.filter((item) => item === "same_machine_different_profile").length,
+    incompleteActuationCapture: provenance.filter((item) => item.actuation.coverage === "incomplete").length,
+  };
+}
+
 function matchPerformedLoadPhase(
   phase: PersonalizedPrescriptionPhaseCharacterizationV1,
   views: readonly PhasePerformedLoadView[]
@@ -752,7 +826,8 @@ export function buildPersonalizationDiagnosticsModel(
   assessmentContexts: Readonly<Record<string, FrozenAssessmentDiagnosticContext>> = {},
   workoutContexts: Readonly<Record<string, FrozenWorkoutDiagnosticContext>> = {},
   performedLoadContexts: Readonly<Record<string, readonly PhasePerformedLoadView[]>> = {},
-  scientificAssessmentEvaluatedAt: string | null = null
+  scientificAssessmentEvaluatedAt: string | null = null,
+  executionProvenanceContexts: Readonly<Record<string, WorkoutExecutionProvenanceV1>> = {}
 ): PersonalizationDiagnosticsModel {
   const normalizedFilters = { ...EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, ...filters };
   const filtered = filterPersonalizationCharacterizations(records, normalizedFilters);
@@ -770,6 +845,7 @@ export function buildPersonalizationDiagnosticsModel(
       assessmentContext: assessmentContexts[record.workoutSessionId] ?? null,
       workoutContext: workoutContexts[record.workoutSessionId] ?? null,
       performedLoadPhase: matchPerformedLoadPhase(phase, performedLoadContexts[record.workoutSessionId] ?? []),
+      executionProvenance: executionProvenanceContexts[record.workoutSessionId] ?? null,
       record,
       phaseRecord: phase,
     };
@@ -788,6 +864,7 @@ export function buildPersonalizationDiagnosticsModel(
     evidenceCollectionSummary: summarizePersonalizationEvidenceCollection(records),
     thresholdLongitudinal: buildThresholdLongitudinalAnalysis(records, assessmentContexts, workoutContexts),
     heldWorkloadForward: summarizeHeldWorkloadForwardEvidence(records),
+    executionProvenance: summarizeExecutionProvenance(records, executionProvenanceContexts),
     scientificAssessments: scientificAssessmentEvaluatedAt === null
       ? []
       : buildDiagnosticScientificAssessments(records, assessmentContexts, workoutContexts,
@@ -826,7 +903,8 @@ export interface PersonalizationDiagnosticsExportV1 {
   characterizationRecords: PersonalizedPrescriptionCharacterizationV1[];
 }
 
-type ExportedDiagnosticRow = Omit<PersonalizationDiagnosticPresentationRow, "record" | "phaseRecord" | "performedLoadPhase">;
+type ExportedDiagnosticRow = Omit<PersonalizationDiagnosticPresentationRow,
+  "record" | "phaseRecord" | "performedLoadPhase" | "executionProvenance">;
 
 /**
  * Permanent historical export contract. Its record contract is exactly the E2
@@ -868,6 +946,7 @@ function exportBody(model: PersonalizationDiagnosticsModel) {
       record: _record,
       phaseRecord: _phaseRecord,
       performedLoadPhase: _performedLoadPhase,
+      executionProvenance: _executionProvenance,
       ...row
     }) => row),
     characterizationRecords: [...model.records]
@@ -940,6 +1019,22 @@ const LABELS: Record<string, string> = {
   unsupported_power_provenance: "Unsupported or mixed power source",
   phase_evidence_unavailable: "Phase evidence unavailable",
   calibration_unavailable: "Frozen calibration unavailable",
+  automatic_hr_control: "Automatic HR control",
+  learned_starting_resistance: "Learned starting resistance",
+  default_starting_resistance: "Default starting resistance",
+  controller_carryover: "Controller carry-over",
+  scripted_phase_program: "Scripted phase program",
+  vo2_protocol_fixed_resistance: "VO₂ protocol fixed resistance",
+  unclassified: "Unclassified",
+  decision: "Decision",
+  reconciliation_resend: "Re-send of current decision",
+  complete: "Complete",
+  incomplete: "Incomplete",
+  no_frozen_calibration: "No frozen calibration",
+  integrity_failure: "Conflicting provenance records",
+  same_machine_and_profile: "Same machine and profile",
+  different_machine: "Different machine",
+  same_machine_different_profile: "Same machine, different profile",
   no_stable_observed_resistance: "No stable observed resistance",
   insufficient_post_settling_evidence: "Insufficient post-settling evidence",
   edge: "Edge",
@@ -1027,6 +1122,50 @@ function thresholdLongitudinalHtml(analysis: ThresholdLongitudinalAnalysis): str
 }
 
 const HELD_WORKLOAD_NOTE = `<p class="developer-diagnostics-note">Held-workload forward-response evidence: observed watts while observed resistance stays unchanged, after a settling interval, are mapped through the frozen formal calibration to a predicted heart rate (signed error = observed HR − predicted HR). It is not filtered by legacy heart-rate target occupancy. The live controller may have chosen the held resistance, so this is not independent open-loop evidence, and it does not authorize control.</p>`;
+
+function executionProvenanceHtml(summary: PersonalizationExecutionProvenanceSummary): string {
+  const note = `<p class="developer-diagnostics-note">Machine provenance is frozen at workout start; calibration machine provenance is copied at start from an exact formal-calibration record. Actuation provenance lists captured app resistance commands with their recorded origin; console resistance changes are not observable. Descriptive only: it does not change any assessment.</p>`;
+  return `<section class="personalization-longitudinal" id="personalizationExecutionProvenance"><h4>Machine and actuation provenance</h4>${note}<div class="personalization-count-grid">
+      <div><strong>${summary.workoutsWithProvenance} / ${summary.workoutsWithE2}</strong><span>Workouts with execution provenance</span></div>
+      <div><strong>${summary.frozenMachineSelected}</strong><span>Frozen workout machine recorded</span></div>
+      <div><strong>${summary.selectionChangedDuringWorkout}</strong><span>Machine selection changed mid-workout</span></div>
+      <div><strong>${summary.calibrationMachineAvailable} / ${summary.calibrationMachineUnavailable} / ${summary.calibrationMachineIntegrityFailures}</strong><span>Calibration machine available / unavailable / conflicting</span></div>
+      <div><strong>${summary.sameMachineAndProfile} / ${summary.differentMachine} / ${summary.sameMachineDifferentProfile}</strong><span>Calibration vs workout: same / other machine / other profile</span></div>
+      <div><strong>${summary.incompleteActuationCapture}</strong><span>Incomplete actuation capture</span></div>
+    </div></section>`;
+}
+
+const ACTUATION_MODE_LABELS: Record<string, string> = {
+  automatic: "Automatic",
+  programmatic: "Programmatic only",
+  none: "No app resistance commands",
+  unknown: "Unknown",
+};
+
+function machineLabel(identity: { machineId: string; machineProfileVersion: number }): string {
+  return `${identity.machineId} / profile ${identity.machineProfileVersion}`;
+}
+
+function provenanceDetailHtml(
+  provenance: WorkoutExecutionProvenanceV1 | null,
+  phase: PersonalizedPrescriptionPhaseCharacterizationV1
+): string {
+  if (!provenance) {
+    return `<section><h5>Machine provenance</h5><dl>${detailRow("Availability", "not recorded (historical workout)")}${detailRow("Actuation provenance", "unknown")}</dl></section>`;
+  }
+  const machine = provenance.machine;
+  const calibration = provenance.calibrationMachine;
+  const phaseSummary = provenance.actuation.phases?.find((item) =>
+    item.phaseId === phase.phaseId && item.intervalIndex === phase.intervalIndex &&
+    (phase.activeStartSec === undefined || item.activeStartSec === phase.activeStartSec));
+  const events = phaseSummary
+    ? provenance.actuation.events.filter((event) =>
+      event.activeSec >= phaseSummary.activeStartSec && event.activeSec < phaseSummary.activeEndSec)
+    : [];
+  const eventRows = events.map((event) => `<tr><td>${event.activeSec} s</td><td>${escapeHtml(personalizationDiagnosticLabel(event.origin))}</td><td>${escapeHtml(personalizationDiagnosticLabel(event.trigger))}</td><td>R${event.requestedResistance}</td><td>${escapeHtml(event.outcome)}</td></tr>`).join("");
+  return `<section><h5>Machine provenance</h5><dl>${detailRow("Frozen workout machine", machine.status === "selected" ? machineLabel(machine) : "none selected at start")}${detailRow("Selection changed mid-workout", machine.selectionChangedDuringWorkout ? "yes" : "no")}${detailRow("Calibration machine", calibration.status === "available" ? machineLabel(calibration) : personalizationDiagnosticLabel(calibration.status))}${detailRow("Calibration vs workout", personalizationDiagnosticLabel(calibrationWorkoutMachineComparison(provenance)))}</dl></section>
+    <section><h5>Actuation provenance</h5><dl>${detailRow("Capture", `${personalizationDiagnosticLabel(provenance.actuation.coverage)} app resistance commands; console changes not observable`)}${detailRow("Phase actuation mode", phaseSummary ? ACTUATION_MODE_LABELS[phaseSummary.mode] : "unavailable")}${detailRow("Captured automatic / programmatic resistance events", phaseSummary ? `${phaseSummary.automaticAcceptedCount} / ${phaseSummary.programmaticAcceptedCount}` : "n/a")}${detailRow("Rejected / ambiguous commands", phaseSummary ? `${phaseSummary.rejectedCount} / ${phaseSummary.ambiguousCount}` : "n/a")}${detailRow("Distinct decisions", phaseSummary?.decisionCount)}</dl>${eventRows ? `<div class="personalization-table-scroll" tabindex="0"><table class="personalization-table"><thead><tr><th>Active time</th><th>Origin</th><th>Trigger</th><th>Requested</th><th>Outcome</th></tr></thead><tbody>${eventRows}</tbody></table></div>` : ""}</section>`;
+}
 
 function heldWorkloadForwardHtml(summary: PersonalizationHeldWorkloadForwardSummary): string {
   if (summary.phasesWithHeldWorkloadSummary === 0) {
@@ -1130,6 +1269,7 @@ export function personalizationDiagnosticsHtml(model: PersonalizationDiagnostics
   </section>
     ${thresholdLongitudinalHtml(model.thresholdLongitudinal)}
     ${heldWorkloadForwardHtml(model.heldWorkloadForward)}
+    ${executionProvenanceHtml(model.executionProvenance)}
     ${scientificAssessmentsHtml(model.scientificAssessments)}
     <div class="personalization-filter-grid">${filtersHtml}</div>
     <div class="personalization-count-grid"><div><strong>${aggregate.workoutCount}</strong><span>Completed workouts with E2 data</span></div><div><strong>${aggregate.candidatePhases}</strong><span>Candidate phases</span></div><div><strong>${aggregate.evaluableCandidatePhases}</strong><span>Evaluable candidate phases</span></div><div><strong>${aggregate.fallbackPhases}</strong><span>Fallback phases</span></div></div>
@@ -1195,5 +1335,6 @@ export function personalizationDiagnosticDetailHtml(row: PersonalizationDiagnost
     <section><h5>Frozen evidence provenance</h5><dl>${detailRow("App version", workout?.appVersion ?? "unavailable")}${detailRow("Machine", workout?.machineId ?? "unavailable")}${detailRow("Machine profile version", workout?.machineProfileVersion ?? "unavailable")}${detailRow("Active / E1 / E2 schema", workout ? `${workout.activePrescriptionSchemaVersion ?? "n/a"} / ${workout.shadowSchemaVersion ?? "n/a"} / ${workout.characterizationSchemaVersion}` : "n/a")}${detailRow("Assessment evidence sessions", assessment?.evidenceSessionIds?.join(", ") ?? "n/a")}${detailRow("Assessment algorithm", assessment?.algorithm ? `${assessment.algorithm.id}@${assessment.algorithm.version}` : "n/a")}${detailRow("Assessment protocol", assessment?.protocol ? `${assessment.protocol.id}@${assessment.protocol.version}` : "n/a")}</dl></section>
     <section><h5>Frozen assessment context</h5><dl>${detailRow("Assessment date", assessment ? new Date(assessment.observedAt).toLocaleDateString() : "n/a")}${detailRow("Assessment quality", personalizationDiagnosticLabel(assessment?.quality ?? record.formalAssessmentQuality ?? "unavailable"))}${detailRow("Calibration provenance", personalizationDiagnosticLabel(assessment?.calibrationProvenance ?? record.calibrationWorkloadProvenance ?? "unavailable"))}${detailRow("Calibration HR range", assessment ? `${assessment.observedMinHeartRateBpm}–${assessment.observedMaxHeartRateBpm} bpm` : "n/a")}${detailRow("Calibration watt range", assessment ? `${assessment.observedMinWatts}–${assessment.observedMaxWatts} W` : "n/a")}${detailRow("Candidate watts", row.candidateWatts)}${detailRow("Assessment domain", personalizationDiagnosticLabel(row.assessmentDomain))}${detailRow("Domain HR margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.heartRateToLowerBoundaryBpm} / ${phase.candidateDomainMargins.heartRateToUpperBoundaryBpm} bpm` : "n/a")}${detailRow("Domain watt margins", phase.candidateDomainMargins ? `${phase.candidateDomainMargins.wattsToLowerBoundary} / ${phase.candidateDomainMargins.wattsToUpperBoundary} W` : "n/a")}</dl></section>
     <section><h5>Closed-loop transfer evidence</h5><dl>${detailRow("Candidate midpoint", comparison ? `${comparison.candidateMidpointWatts} W` : "n/a")}${detailRow("Observed settled median", comparison ? `${comparison.observedInBandMedianWatts} W` : "n/a")}${detailRow("Signed / absolute difference", comparison ? `${signed(comparison.signedDifferenceWatts, " W")} / ${comparison.absoluteDifferenceWatts} W` : "n/a")}${detailRow("Percentage difference", comparison ? signed(comparison.signedDifferencePercent, "%") : "n/a")}${detailRow("Candidate contains observed median", comparison ? (comparison.candidateContainsObservedMedian ? "Yes" : "No") : "n/a")}${detailRow("Observed IQR overlap", comparison ? `${comparison.candidateObservedOverlapWatts} W · ${percent(comparison.candidateObservedOverlapRatio)}` : "n/a")}${detailRow("Descriptive agreement", personalizationDiagnosticLabel(row.agreement))}${detailRow("Outcome", personalizationDiagnosticLabel(row.outcome))}${detailRow("Exclusion", personalizationDiagnosticLabel(row.exclusion))}</dl></section>
-    ${heldWorkloadDetailHtml(heldWorkloadResponseOf(phase))}`;
+    ${heldWorkloadDetailHtml(heldWorkloadResponseOf(phase))}
+    ${provenanceDetailHtml(row.executionProvenance, phase)}`;
 }

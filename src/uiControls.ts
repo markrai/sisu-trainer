@@ -35,6 +35,7 @@ import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
 import { formatHrvDisplay, type HrvDisplayModel } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
+import { createActuationProvenanceObserver } from "./actuationProvenanceObserver.js";
 import {
   isVo2WorkoutSelector,
   vo2ProtocolDisplayName,
@@ -93,6 +94,7 @@ import {
   extractTrustedPersonalizationAssessmentContexts,
   extractTrustedPersonalizationCharacterizations,
   extractTrustedPersonalizationPerformedLoadContexts,
+  extractTrustedExecutionProvenanceContexts,
   extractTrustedPersonalizationWorkoutContexts,
   personalizationDiagnosticDetailHtml,
   personalizationDiagnosticsExportJson,
@@ -130,6 +132,7 @@ let personalizationDiagnosticsRecords: ReturnType<typeof extractTrustedPersonali
 let personalizationAssessmentContexts: ReturnType<typeof extractTrustedPersonalizationAssessmentContexts> = {};
 let personalizationWorkoutContexts: ReturnType<typeof extractTrustedPersonalizationWorkoutContexts> = {};
 let personalizationPerformedLoadContexts: ReturnType<typeof extractTrustedPersonalizationPerformedLoadContexts> = {};
+let personalizationExecutionProvenanceContexts: ReturnType<typeof extractTrustedExecutionProvenanceContexts> = {};
 let personalizationDiagnosticsModel: PersonalizationDiagnosticsModel | null = null;
 
 let heartPulseTargetBpm: number | null = null;
@@ -829,6 +832,7 @@ function syncBikeBridgeGuidance(
     recommendationChanged: update?.recommendationChanged === true,
     workoutActive,
     paused,
+    actuationOrigin: update?.actuationOrigin,
   });
   renderBikeBridgeHud();
   const equipmentTab = document.getElementById("equipmentTab");
@@ -1280,13 +1284,15 @@ async function loadPersonalizationDiagnostics() {
     personalizationAssessmentContexts = extractTrustedPersonalizationAssessmentContexts(history, athleteId);
     personalizationWorkoutContexts = extractTrustedPersonalizationWorkoutContexts(history, athleteId);
     personalizationPerformedLoadContexts = extractTrustedPersonalizationPerformedLoadContexts(history, athleteId);
+    personalizationExecutionProvenanceContexts = extractTrustedExecutionProvenanceContexts(history, athleteId);
     renderPersonalizationDiagnostics(buildPersonalizationDiagnosticsModel(
       personalizationDiagnosticsRecords,
       EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
       personalizationAssessmentContexts,
       personalizationWorkoutContexts,
       personalizationPerformedLoadContexts,
-      new Date().toISOString()
+      new Date().toISOString(),
+      personalizationExecutionProvenanceContexts
     ));
   } catch (error) {
     console.error("Error loading personalization diagnostics:", error);
@@ -1313,7 +1319,8 @@ function applyPersonalizationDiagnosticsFilters() {
     personalizationAssessmentContexts,
     personalizationWorkoutContexts,
     personalizationPerformedLoadContexts,
-    new Date().toISOString()
+    new Date().toISOString(),
+    personalizationExecutionProvenanceContexts
   ));
 }
 
@@ -1324,7 +1331,8 @@ function resetPersonalizationDiagnosticsFilters() {
     personalizationAssessmentContexts,
     personalizationWorkoutContexts,
     personalizationPerformedLoadContexts,
-    new Date().toISOString()
+    new Date().toISOString(),
+    personalizationExecutionProvenanceContexts
   ));
 }
 
@@ -2179,6 +2187,8 @@ async function persistWorkoutRelativeHr(
 
 function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   phaseDisplayEl = phaseBoxEl;
+  // Record explicit resistance-actuation provenance at the Bike Bridge command site.
+  getBikeBridgeSession().setActuationObserver(createActuationProvenanceObserver(getSelectedDay));
 
   onBpm((bpm) => {
     liveBpm = bpm;

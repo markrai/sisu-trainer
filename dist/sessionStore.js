@@ -4,6 +4,8 @@ import { isValidVo2ProtocolRuntimeV3, isVo2ProtocolRuntimeV3, parseVo2ProtocolRu
 import { captureAthleteFitnessSnapshot, parseAthleteFitnessSnapshot } from "./fitnessState.js";
 import { parsePersistedHrTargetsForDay, parseResolvedWorkoutPrescription, persistedHrTargetsFitBlocks, } from "./workoutPrescription.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
+import { captureWorkoutMachineProvenance, createInProgressExecutionProvenance, executionProvenanceKey, readInProgressExecutionProvenance, writeInProgressExecutionProvenance, } from "./executionProvenance.js";
+import { calibrationIdentityFromE1Snapshot, resolveWorkoutCalibrationMachine } from "./calibrationMachineProvenance.js";
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
@@ -142,9 +144,11 @@ export function getSession(day, storage) {
         }
         return persisted;
     })();
+    const sessionId = store.getItem("session_id_" + day);
+    const executionProvenance = readInProgressExecutionProvenance(day, store);
     return {
         startTime: store.getItem("start_" + day),
-        sessionId: store.getItem("session_id_" + day),
+        sessionId,
         sessionStart: store.getItem("session_start_" + day),
         summaryEmitted: store.getItem("summary_emitted_" + day),
         paused: store.getItem("paused_" + day) === "true",
@@ -161,9 +165,10 @@ export function getSession(day, storage) {
         ...(persistedVo2Runtime.observedProtocolVersion != null && persistedVo2Runtime.restartRequired
             ? { blockedVo2ProtocolVersion: persistedVo2Runtime.observedProtocolVersion }
             : {}),
+        executionProvenance: executionProvenance && executionProvenance.sessionId === sessionId ? executionProvenance : null,
     };
 }
-export function startSession(day, startTime, sessionId, activity, storage, phasePlan, athleteFitnessSnapshotOverride) {
+export function startSession(day, startTime, sessionId, activity, storage, phasePlan, athleteFitnessSnapshotOverride, machineProvenanceOverride) {
     var _a;
     const store = storageOrBrowser(storage);
     store.removeItem(earlyCooldownKey(day));
@@ -176,6 +181,7 @@ export function startSession(day, startTime, sessionId, activity, storage, phase
     store.removeItem(athleteFitnessSnapshotKey(day));
     store.removeItem(legacyVo2ProtocolPlanKey(day));
     store.removeItem(vo2ProtocolRuntimeKey(day));
+    store.removeItem(executionProvenanceKey(day));
     store.setItem("start_" + day, String(startTime));
     if (sessionId != null) {
         store.setItem("session_id_" + day, sessionId);
@@ -196,6 +202,14 @@ export function startSession(day, startTime, sessionId, activity, storage, phase
             resolvedPrescription: phasePlan.resolvedPrescription,
             shadowPrescriptionEvaluation: phasePlan.shadowPrescriptionEvaluation,
         }));
+    }
+    if (sessionId != null) {
+        // Freeze provenance once, at start. Reload reads it back; finalization never re-reads selection.
+        const evaluation = phasePlan === null || phasePlan === void 0 ? void 0 : phasePlan.shadowPrescriptionEvaluation;
+        const calibrationIdentity = evaluation
+            ? calibrationIdentityFromE1Snapshot(evaluation.athleteId, evaluation.fitnessEvidenceSnapshot)
+            : null;
+        writeInProgressExecutionProvenance(day, createInProgressExecutionProvenance(sessionId, machineProvenanceOverride !== null && machineProvenanceOverride !== void 0 ? machineProvenanceOverride : captureWorkoutMachineProvenance(activity, store), resolveWorkoutCalibrationMachine(calibrationIdentity, store)), store);
     }
 }
 export function pauseSession(day, elapsedSec, storage, now = Date.now()) {
@@ -236,6 +250,7 @@ export function clearSession(day, storage) {
     store.removeItem(phasePlanKey(day));
     store.removeItem(athleteIdKey(day));
     store.removeItem(athleteFitnessSnapshotKey(day));
+    store.removeItem(executionProvenanceKey(day));
     store.removeItem(legacyVo2ProtocolPlanKey(day));
     store.removeItem(vo2ProtocolRuntimeKey(day));
 }
