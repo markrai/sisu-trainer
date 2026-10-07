@@ -1,5 +1,31 @@
 import { analyzeHeldWorkloadForwardResponseInternal, } from "./personalizedPrescriptionCharacterization.js";
 import { calibrationIdentityFromE1Snapshot, calibrationIdentityKey } from "./calibrationMachineProvenance.js";
+/**
+ * Who established the held resistance of one qualifying E2 v3 window.
+ * `no_app_selector_observed` means only that no captured app command was
+ * established as the selector; console-knob changes are not observable, so it
+ * never means manual, athlete-selected, or open-loop.
+ */
+/** Canonical vocabularies (E4A v2 mirrors them at its trust boundary; kept in step by test). */
+export const MACHINE_COMPARABILITY_REASONS_V2 = [
+    "same_machine_and_profile",
+    "execution_provenance_unavailable",
+    "workout_machine_unavailable",
+    "workout_machine_selection_changed",
+    "calibration_unavailable",
+    "calibration_machine_unavailable",
+    "calibration_machine_integrity_failure",
+    "calibration_identity_mismatch",
+    "different_machine",
+    "same_machine_different_profile",
+];
+export const TIMED_ACTUATION_JOINS_V2 = [
+    "available",
+    "not_applicable",
+    "execution_provenance_unavailable",
+    "raw_telemetry_unavailable",
+    "reconstruction_mismatch",
+];
 const PROGRAMMATIC_ORIGINS = new Set([
     "learned_starting_resistance",
     "default_starting_resistance",
@@ -45,8 +71,9 @@ export function compareSessionMachines(summary) {
  * window's first stable second. It establishes the hold only if its requested
  * resistance equals the observed held resistance and nothing after it (up to
  * the window end) is unresolved, rejected, unclassified, or a new decision.
- * Re-sends of the selector's own decision are counted but never become a new
- * selector. With complete capture and no accepted command before the hold,
+ * A later event is a harmless re-send only when its trigger is
+ * `reconciliation_resend` and it repeats the selector's decision ID and
+ * resistance; it is counted but never becomes a new selector. With complete capture and no accepted command before the hold,
  * the window is `no_app_selector_observed`. Everything else is `unknown`.
  */
 export function classifyHeldWindowActuation(window, actuation) {
@@ -78,7 +105,10 @@ export function classifyHeldWindowActuation(window, actuation) {
     }
     const after = relevant.filter((event) => event !== selector);
     for (const event of after) {
-        if (selector && event.decisionId === selector.decisionId && event.requestedResistance === selector.requestedResistance) {
+        // Only a genuine reconciliation re-send of the selector's own decision at the
+        // same resistance is harmless; anything else is a new decision or ambiguity.
+        if (selector && event.trigger === "reconciliation_resend" && event.decisionId === selector.decisionId &&
+            event.requestedResistance === selector.requestedResistance) {
             base.sameDecisionResendsDuringHold += 1;
         }
         else if (event.origin === "automatic_hr_control") {

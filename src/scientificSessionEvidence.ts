@@ -47,6 +47,20 @@ export type MachineComparabilityReasonV2 =
  * established as the selector; console-knob changes are not observable, so it
  * never means manual, athlete-selected, or open-loop.
  */
+/** Canonical vocabularies (E4A v2 mirrors them at its trust boundary; kept in step by test). */
+export const MACHINE_COMPARABILITY_REASONS_V2: readonly MachineComparabilityReasonV2[] = [
+  "same_machine_and_profile",
+  "execution_provenance_unavailable",
+  "workout_machine_unavailable",
+  "workout_machine_selection_changed",
+  "calibration_unavailable",
+  "calibration_machine_unavailable",
+  "calibration_machine_integrity_failure",
+  "calibration_identity_mismatch",
+  "different_machine",
+  "same_machine_different_profile",
+];
+
 export type HeldWindowActuationContextV2 =
   | "automatic_selected"
   | "programmatic_selected"
@@ -59,6 +73,14 @@ export type TimedActuationJoinV2 =
   | "execution_provenance_unavailable"
   | "raw_telemetry_unavailable"
   | "reconstruction_mismatch";
+
+export const TIMED_ACTUATION_JOINS_V2: readonly TimedActuationJoinV2[] = [
+  "available",
+  "not_applicable",
+  "execution_provenance_unavailable",
+  "raw_telemetry_unavailable",
+  "reconstruction_mismatch",
+];
 
 export interface HeldWindowActuationDetailInternal {
   firstActiveSec: number;
@@ -159,8 +181,9 @@ export function compareSessionMachines(summary: WorkoutSummary): ScientificSessi
  * window's first stable second. It establishes the hold only if its requested
  * resistance equals the observed held resistance and nothing after it (up to
  * the window end) is unresolved, rejected, unclassified, or a new decision.
- * Re-sends of the selector's own decision are counted but never become a new
- * selector. With complete capture and no accepted command before the hold,
+ * A later event is a harmless re-send only when its trigger is
+ * `reconciliation_resend` and it repeats the selector's decision ID and
+ * resistance; it is counted but never becomes a new selector. With complete capture and no accepted command before the hold,
  * the window is `no_app_selector_observed`. Everything else is `unknown`.
  */
 export function classifyHeldWindowActuation(
@@ -195,7 +218,10 @@ export function classifyHeldWindowActuation(
   }
   const after = relevant.filter((event: ResistanceActuationEventV1) => event !== selector);
   for (const event of after) {
-    if (selector && event.decisionId === selector.decisionId && event.requestedResistance === selector.requestedResistance) {
+    // Only a genuine reconciliation re-send of the selector's own decision at the
+    // same resistance is harmless; anything else is a new decision or ambiguity.
+    if (selector && event.trigger === "reconciliation_resend" && event.decisionId === selector.decisionId &&
+        event.requestedResistance === selector.requestedResistance) {
       base.sameDecisionResendsDuringHold += 1;
     } else if (event.origin === "automatic_hr_control") {
       base.newDecisionsDuringHold.automatic += 1;

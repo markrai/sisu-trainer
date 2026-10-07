@@ -295,6 +295,54 @@ export interface ScientificAssessmentSessionEvidence {
   provenanceV2?: ScientificAssessmentSessionProvenanceV2 | null;
 }
 
+/**
+ * Exact policy-v2 trust-boundary vocabularies. They mirror the read-only join's
+ * canonical vocabularies (kept in step by test); E4A imports nothing.
+ */
+export const SCIENTIFIC_MACHINE_COMPARABILITY_REASONS_V2 = [
+  "same_machine_and_profile",
+  "execution_provenance_unavailable",
+  "workout_machine_unavailable",
+  "workout_machine_selection_changed",
+  "calibration_unavailable",
+  "calibration_machine_unavailable",
+  "calibration_machine_integrity_failure",
+  "calibration_identity_mismatch",
+  "different_machine",
+  "same_machine_different_profile",
+] as const;
+
+export const SCIENTIFIC_TIMED_ACTUATION_JOINS_V2 = [
+  "available",
+  "not_applicable",
+  "execution_provenance_unavailable",
+  "raw_telemetry_unavailable",
+  "reconstruction_mismatch",
+] as const;
+
+/**
+ * Policy-v2 held-response cohort member: one subject-matching workout whose
+ * exact subject phase has characterized E2 v3 held-workload forward-response
+ * evidence. It deliberately carries NO closed-loop values (no candidate bias,
+ * agreement, settled watts, or saturation) and never requires legacy HR-band
+ * success or closed-loop characterization. It feeds only machine
+ * comparability, held-workload evidence, and actuation-context gates.
+ */
+export interface ScientificHeldSessionEvidenceV2 {
+  workoutSessionId: string;
+  createdAt: string;
+  athleteId: string;
+  activity: string;
+  phaseKind: string;
+  intensityId: string;
+  calibration: ScientificAssessmentCalibrationIdentity;
+  machineId: string;
+  machineProfileVersion: number;
+  observedPowerProvenance: "measured_watts" | "calibrated_watts";
+  legacyHrBand: { minBpm: number; maxBpm: number };
+  provenanceV2: ScientificAssessmentSessionProvenanceV2;
+}
+
 export type ScientificAssessmentHeldActuationContext =
   | "automatic_selected"
   | "programmatic_selected"
@@ -386,6 +434,11 @@ export interface ScientificAssessmentEvidence {
   excludedMultiPhaseSessions: number;
   /** Descriptive only (see type docs); absent means not supplied. */
   heldWorkloadForwardSessions?: readonly ScientificAssessmentHeldWorkloadForwardSession[];
+  /**
+   * Policy v2 held-response cohort, separate from the closed-loop transfer
+   * cohort in `sessions`. Absent means not supplied; policy v1 ignores it.
+   */
+  heldSessionsV2?: readonly ScientificHeldSessionEvidenceV2[];
 }
 
 /**
@@ -603,10 +656,19 @@ export interface ScientificAssessment {
   evaluatedAt: string;
 }
 
+/**
+ * Runtime-only policy-v2 digest (never persisted or exported). Each evidence
+ * channel counts only the workouts it owns: closed-loop transfer sessions vs
+ * held-response sessions. One workout is at most one session per channel.
+ */
 export interface ScientificAssessmentProvenanceDigestV2 {
-  comparableSessionCount: number;
-  /** Machine-incomparable in-cohort sessions excluded from evidence, by reason. */
-  excludedMachineIncomparableSessions: Record<string, number>;
+  transferComparableSessionCount: number;
+  heldComparableSessionCount: number;
+  /** Machine-incomparable sessions excluded from each channel, by reason. */
+  excludedTransferMachineIncomparableSessions: Record<string, number>;
+  excludedHeldMachineIncomparableSessions: Record<string, number>;
+  /** Malformed, duplicated, or cross-cohort held sessions, excluded (fail closed). */
+  ignoredInvalidHeldSessions: number;
   sessionsWithHeldWorkloadEvidence: number;
   sessionsWithTimedActuationJoin: number;
   /** Window counts/durations are descriptive; longitudinal N stays workout-level. */
@@ -680,8 +742,12 @@ function calibrationIdentityValid(identity: unknown): identity is ScientificAsse
     identity.workloadProvenance === "calibrated_at_verified_cadence";
 }
 
+/** Subject identity fields shared by both cohorts; no HR-band success or closed-loop value involved. */
+type SubjectIdentityFields = Pick<ScientificAssessmentSessionEvidence, "athleteId" | "activity" | "phaseKind" |
+  "intensityId" | "calibration" | "machineId" | "machineProfileVersion" | "observedPowerProvenance" | "legacyHrBand">;
+
 function sessionMatchesSubject(
-  session: ScientificAssessmentSessionEvidence,
+  session: SubjectIdentityFields,
   subject: ScientificAssessmentSubject
 ): boolean {
   if (session.athleteId !== subject.athleteId) return false;
@@ -784,28 +850,64 @@ function countValid(value: unknown): boolean {
   return Number.isInteger(value) && (value as number) >= 0;
 }
 
-function provenanceV2Valid(value: ScientificAssessmentSessionProvenanceV2): boolean {
-  if (!isRecord(value) || value.independentOpenLoopEvidence !== false) return false;
-  if (!isRecord(value.machineComparison) || typeof value.machineComparison.comparable !== "boolean" ||
-    !isNonEmptyString(value.machineComparison.reason)) return false;
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && keys.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+/**
+ * Strict policy-v2 trust boundary. Exact vocabularies and exact keys; the
+ * comparability flag must agree with its reason; provenance absence must be
+ * consistent everywhere; contexts exist exactly when the timed join is
+ * available and must account for exactly the durable qualifying windows.
+ */
+function provenanceV2Valid(value: ScientificAssessmentSessionProvenanceV2, requireHeld = false): boolean {
+  if (!isRecord(value) || value.independentOpenLoopEvidence !== false ||
+    !exactKeys(value, ["machineComparison", "actuationCapture", "heldWorkload", "independentOpenLoopEvidence"])) return false;
+  const comparison = value.machineComparison;
+  if (!isRecord(comparison) || !exactKeys(comparison, ["comparable", "reason"]) ||
+    typeof comparison.comparable !== "boolean" ||
+    !(SCIENTIFIC_MACHINE_COMPARABILITY_REASONS_V2 as readonly unknown[]).includes(comparison.reason)) return false;
+  if (comparison.comparable !== (comparison.reason === "same_machine_and_profile")) return false;
   if (value.actuationCapture !== "complete" && value.actuationCapture !== "incomplete" &&
     value.actuationCapture !== "unavailable") return false;
+  const provenanceAbsent = value.actuationCapture === "unavailable";
+  if (provenanceAbsent !== (comparison.reason === "execution_provenance_unavailable")) return false;
   const held = value.heldWorkload;
-  if (held === null) return true;
-  if (!isRecord(held) || typeof held.available !== "boolean" || !isNonEmptyString(held.timedJoin) ||
+  if (held === null) return !requireHeld;
+  if (!isRecord(held) ||
+    !exactKeys(held, ["available", "timedJoin", "qualifyingWindowCount", "qualifyingDurationSec", "contexts"]) ||
+    typeof held.available !== "boolean" ||
+    !(SCIENTIFIC_TIMED_ACTUATION_JOINS_V2 as readonly unknown[]).includes(held.timedJoin) ||
     !countValid(held.qualifyingWindowCount) || !countValid(held.qualifyingDurationSec)) return false;
+  if (requireHeld && !held.available) return false;
+  if ((held.timedJoin === "execution_provenance_unavailable") !== provenanceAbsent &&
+    !(provenanceAbsent && held.timedJoin === "not_applicable")) return false;
+  if ((held.timedJoin === "available") !== (held.contexts !== null)) return false;
   if (held.contexts === null) return true;
-  if (!isRecord(held.contexts)) return false;
+  if (!isRecord(held.contexts) || !exactKeys(held.contexts, HELD_CONTEXTS)) return false;
   let windows = 0;
   let duration = 0;
   for (const context of HELD_CONTEXTS) {
     const totals = held.contexts[context];
-    if (!isRecord(totals) || !countValid(totals.windowCount) || !countValid(totals.durationSec)) return false;
+    if (!isRecord(totals) || !exactKeys(totals, ["windowCount", "durationSec"]) ||
+      !countValid(totals.windowCount) || !countValid(totals.durationSec)) return false;
     windows += totals.windowCount;
     duration += totals.durationSec;
   }
   // Window-level classification covers exactly the durable qualifying windows.
   return windows === held.qualifyingWindowCount && duration === held.qualifyingDurationSec;
+}
+
+/** Held-response cohort row: identity is checked exactly like a transfer row; no closed-loop value exists. */
+function heldSessionValid(session: ScientificHeldSessionEvidenceV2): boolean {
+  if (!isRecord(session) || !isNonEmptyString(session.workoutSessionId) || utcDateKey(session.createdAt) === null) return false;
+  if (!isRecord(session.legacyHrBand) ||
+    !isFiniteNumber(session.legacyHrBand.minBpm) || !isFiniteNumber(session.legacyHrBand.maxBpm) ||
+    session.legacyHrBand.minBpm <= 0 || session.legacyHrBand.maxBpm < session.legacyHrBand.minBpm) return false;
+  if (isRecord(session.calibration) && isIsoDateTime(session.calibration.observedAt) &&
+    Date.parse(session.createdAt) < Date.parse(session.calibration.observedAt)) return false;
+  return provenanceV2Valid(session.provenanceV2, true);
 }
 
 function emptyHeldContextDigest(): ScientificAssessmentProvenanceDigestV2["heldContexts"] {
@@ -1024,29 +1126,58 @@ export function assessPersonalizedWorkloadEvidence(
   const evaluable = identityPass && candidatePass;
 
   // Policy v2: exact machine/profile/calibration comparability is an admission
-  // rule. Incomparable sessions are excluded (counted by reason); they never
-  // contribute to bias/variance, so a mismatch can never read as contradiction.
-  const excludedMachineIncomparableSessions: Record<string, number> = {};
+  // rule, applied independently to each evidence channel. Incomparable
+  // sessions are excluded (counted by reason); they never contribute to
+  // bias/variance, so a mismatch can never read as contradiction.
+  const excludedTransferMachineIncomparableSessions: Record<string, number> = {};
   const sessions = generation === 1 ? validSessions : validSessions.filter((session) => {
     if (session.provenanceV2?.machineComparison.comparable === true) return true;
     const reason = session.provenanceV2?.machineComparison.reason ?? "execution_provenance_unavailable";
-    excludedMachineIncomparableSessions[reason] = (excludedMachineIncomparableSessions[reason] ?? 0) + 1;
+    excludedTransferMachineIncomparableSessions[reason] = (excludedTransferMachineIncomparableSessions[reason] ?? 0) + 1;
     return false;
   });
+  // Policy v2 held-response cohort: subject-matching held-forward workouts,
+  // independent of closed-loop characterization and HR-band success.
+  let ignoredInvalidHeldSessions = 0;
+  const excludedHeldMachineIncomparableSessions: Record<string, number> = {};
+  let heldSessions: ScientificHeldSessionEvidenceV2[] = [];
+  let validHeldCount = 0;
+  if (generation === 2) {
+    const candidates = [...(evidence.heldSessionsV2 ?? [])];
+    const heldIds = new Map<string, number>();
+    for (const session of candidates) {
+      if (isRecord(session) && isNonEmptyString(session.workoutSessionId)) {
+        heldIds.set(session.workoutSessionId, (heldIds.get(session.workoutSessionId) ?? 0) + 1);
+      }
+    }
+    const validHeld = candidates.filter((session) => {
+      if (subjectComparable && heldSessionValid(session) && sessionMatchesSubject(session, subject) &&
+        heldIds.get(session.workoutSessionId) === 1) return true;
+      ignoredInvalidHeldSessions += 1;
+      return false;
+    }).sort((a, b) => a.workoutSessionId.localeCompare(b.workoutSessionId));
+    validHeldCount = validHeld.length;
+    heldSessions = validHeld.filter((session) => {
+      if (session.provenanceV2.machineComparison.comparable) return true;
+      const reason = session.provenanceV2.machineComparison.reason;
+      excludedHeldMachineIncomparableSessions[reason] = (excludedHeldMachineIncomparableSessions[reason] ?? 0) + 1;
+      return false;
+    });
+  }
   let machinePass = true;
   if (generation === 2) {
-    if (!evaluable || validSessions.length === 0) {
+    const measured = {
+      transferComparableSessions: sessions.length,
+      transferExcludedSessions: validSessions.length - sessions.length,
+      heldComparableSessions: heldSessions.length,
+      heldExcludedSessions: validHeldCount - heldSessions.length,
+    };
+    if (!evaluable || validSessions.length + validHeldCount === 0) {
       acc.push("machine_comparability", "not_applicable");
-    } else if (sessions.length === 0) {
-      acc.push("machine_comparability", "fail", "machine_comparability_unavailable", {
-        comparableSessions: 0,
-        excludedSessions: validSessions.length,
-      });
+    } else if (sessions.length + heldSessions.length === 0) {
+      acc.push("machine_comparability", "fail", "machine_comparability_unavailable", measured);
     } else {
-      acc.push("machine_comparability", "pass", undefined, {
-        comparableSessions: sessions.length,
-        excludedSessions: validSessions.length - sessions.length,
-      });
+      acc.push("machine_comparability", "pass", undefined, measured);
     }
     machinePass = acc.gates[acc.gates.length - 1].status !== "fail";
   }
@@ -1209,14 +1340,18 @@ export function assessPersonalizedWorkloadEvidence(
   let actuationContextPass = true;
   let provenanceDigest: ScientificAssessmentProvenanceDigestV2 | undefined;
   if (generation === 2) {
-    const v2 = assessProvenanceV2(acc, sessions, evaluable);
+    const v2 = assessProvenanceV2(acc, heldSessions, evaluable);
     heldPass = v2.heldPass;
     actuationContextPass = v2.actuationContextPass;
+    const sortedCounts = (counts: Record<string, number>) =>
+      Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
     provenanceDigest = {
+      transferComparableSessionCount: sessions.length,
+      heldComparableSessionCount: heldSessions.length,
+      excludedTransferMachineIncomparableSessions: sortedCounts(excludedTransferMachineIncomparableSessions),
+      excludedHeldMachineIncomparableSessions: sortedCounts(excludedHeldMachineIncomparableSessions),
+      ignoredInvalidHeldSessions,
       ...v2.digest,
-      comparableSessionCount: sessions.length,
-      excludedMachineIncomparableSessions: Object.fromEntries(
-        Object.entries(excludedMachineIncomparableSessions).sort(([a], [b]) => a.localeCompare(b))),
     };
   } else if (!evaluable || sessions.length === 0) {
     acc.push("open_loop_evidence", "not_applicable");
@@ -1381,20 +1516,23 @@ export function assessPersonalizedWorkloadEvidence(
 }
 
 /**
- * Policy v2 provenance gates over machine-comparable sessions (one workout =
- * one session, however many held windows it contains):
+ * Policy v2 provenance gates over the machine-comparable held-response cohort
+ * (one workout = one session, however many held windows it contains). The
+ * closed-loop transfer cohort is never consulted here:
  * held_workload_evidence → actuation_context (is window-level context known?)
  * → per-category context gates (truthful, non-independent categories) →
  * open_loop_evidence (never satisfied: no category is independent evidence).
  */
 function assessProvenanceV2(
   acc: GateAccumulator,
-  sessions: readonly ScientificAssessmentSessionEvidence[],
+  sessions: readonly ScientificHeldSessionEvidenceV2[],
   evaluable: boolean
 ): {
   heldPass: boolean;
   actuationContextPass: boolean;
-  digest: Omit<ScientificAssessmentProvenanceDigestV2, "comparableSessionCount" | "excludedMachineIncomparableSessions">;
+  digest: Omit<ScientificAssessmentProvenanceDigestV2, "transferComparableSessionCount" |
+    "heldComparableSessionCount" | "excludedTransferMachineIncomparableSessions" |
+    "excludedHeldMachineIncomparableSessions" | "ignoredInvalidHeldSessions">;
 } {
   const held = sessions.filter((session) => session.provenanceV2?.heldWorkload?.available === true);
   const joined = held.filter((session) =>
@@ -1560,6 +1698,24 @@ export interface BuildSubjectEvidenceInput {
   sessionEvidenceV2?: Readonly<Record<string, ScientificAssessmentSessionEvidenceV2Input>>;
 }
 
+/** No v2 join for the workout: execution provenance is unavailable, stated consistently. */
+function unavailableHeldProvenance(
+  stable: { qualifyingWindowCount: number; qualifyingDurationSec: number }
+): ScientificAssessmentSessionProvenanceV2 {
+  return {
+    machineComparison: { comparable: false, reason: "execution_provenance_unavailable" },
+    actuationCapture: "unavailable",
+    heldWorkload: {
+      available: true,
+      timedJoin: "execution_provenance_unavailable",
+      qualifyingWindowCount: stable.qualifyingWindowCount,
+      qualifyingDurationSec: stable.qualifyingDurationSec,
+      contexts: null,
+    },
+    independentOpenLoopEvidence: false,
+  };
+}
+
 function sessionProvenanceV2(
   input: ScientificAssessmentSessionEvidenceV2Input | undefined,
   phase: FrozenPhase
@@ -1644,6 +1800,7 @@ function sessionIdentityFrom(
 export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): ScientificAssessmentEvidence {
   const sessions: ScientificAssessmentSessionEvidence[] = [];
   const heldWorkloadForwardSessions: ScientificAssessmentHeldWorkloadForwardSession[] = [];
+  const heldSessionsV2: ScientificHeldSessionEvidenceV2[] = [];
   let excludedIncompleteIdentitySessions = 0;
   let excludedMultiPhaseSessions = 0;
   let candidateSeen = false;
@@ -1700,7 +1857,8 @@ export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): Scientif
       phase.observedPowerProvenance === subject.observedPowerProvenance);
     if (relevantPhases.length === 1 &&
       relevantPhases[0].heldWorkloadForwardResponse?.outcome === "characterized") {
-      const held = relevantPhases[0].heldWorkloadForwardResponse!;
+      const heldPhase = relevantPhases[0];
+      const held = heldPhase.heldWorkloadForwardResponse!;
       if (held.stableResistance && held.forwardHeartRate) {
         heldWorkloadForwardSessions.push({
           workoutSessionId: record.workoutSessionId,
@@ -1709,6 +1867,25 @@ export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): Scientif
           medianSignedErrorBpm: held.forwardHeartRate.signedErrorBpm.median,
           medianAbsoluteErrorBpm: held.forwardHeartRate.absoluteErrorBpm.median,
         });
+        // Policy v2 held-response cohort member: the same exact subject phase,
+        // with no closed-loop characterization or HR-band requirement.
+        if (input.sessionEvidenceV2 && heldPhase.intensityId !== undefined) {
+          heldSessionsV2.push({
+            workoutSessionId: record.workoutSessionId,
+            createdAt: record.createdAt,
+            athleteId: record.athleteId,
+            activity: record.activity,
+            phaseKind: heldPhase.kind,
+            intensityId: heldPhase.intensityId,
+            calibration: identity,
+            machineId: workout!.machineId!,
+            machineProfileVersion: workout!.machineProfileVersion!,
+            observedPowerProvenance: heldPhase.observedPowerProvenance as "measured_watts" | "calibrated_watts",
+            legacyHrBand: { minBpm: heldPhase.legacyHeartRate!.min!, maxBpm: heldPhase.legacyHeartRate!.max! },
+            provenanceV2: sessionProvenanceV2(input.sessionEvidenceV2[record.workoutSessionId], heldPhase) ??
+              unavailableHeldProvenance(held.stableResistance),
+          });
+        }
       }
     }
     // Uncharacterized phases (E1 fallback or insufficient E2 evidence) never
@@ -1779,6 +1956,7 @@ export function buildSubjectEvidence(input: BuildSubjectEvidenceInput): Scientif
     excludedIncompleteIdentitySessions,
     excludedMultiPhaseSessions,
     heldWorkloadForwardSessions,
+    ...(input.sessionEvidenceV2 ? { heldSessionsV2 } : {}),
   };
 }
 

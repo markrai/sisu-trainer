@@ -977,7 +977,8 @@ test("developer diagnostics show runtime-only E4A without exporting it", () => {
     /Subject<\/dt><dd>athlete-a/, /personalization-scientific-assessor@1/,
     /e4a-scientific-assessment-policy@2/, /open_loop_evidence_unavailable/, /machine_comparability_unavailable/,
     /Sessions \/ distinct dates<\/dt><dd>0 \/ 0/, /proform-smart-power-10 \/ v1/,
-    /Measured watts \/ Measured watts/, /Machine-comparable sessions<\/dt><dd>0 \(excluded: Execution provenance unavailable 2\)/,
+    /Measured watts \/ Measured watts/, /Machine-comparable closed-loop transfer sessions<\/dt><dd>0 \(excluded: Execution provenance unavailable 2\)/,
+    /Machine-comparable held-response sessions<\/dt><dd>0 \(excluded: none\)/,
     /Independent open-loop evidence<\/dt><dd>unavailable/]) {
     assert.match(section, pattern);
   }

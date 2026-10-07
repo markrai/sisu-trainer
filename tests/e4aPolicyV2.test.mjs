@@ -394,7 +394,8 @@ test("known automatic provenance is reported truthfully, never as actuation_mode
   assert.equal(assessment.gates.find((gate) => gate.id === "actuation_context").status, "pass");
   assert.equal(assessment.gates.find((gate) => gate.id === "open_loop_evidence").status, "fail");
   assert.equal(assessment.evidenceDigest.provenanceV2.independentOpenLoopEvidence, "unavailable");
-  assert.equal(assessment.evidenceDigest.provenanceV2.comparableSessionCount, DATES.length);
+  assert.equal(assessment.evidenceDigest.provenanceV2.transferComparableSessionCount, DATES.length);
+  assert.equal(assessment.evidenceDigest.provenanceV2.heldComparableSessionCount, DATES.length);
   assert.equal(assessment.state, "collecting", "adequate, agreeing evidence still cannot become eligible");
 });
 
@@ -430,11 +431,14 @@ test("machine mismatch excludes sessions and never produces contradiction", () =
   const { assessment } = assessV2(mismatched);
   assert.notEqual(assessment.state, "contradicted");
   assert.equal(assessment.evidenceDigest.sessionCount, 0);
-  assert.deepEqual(assessment.evidenceDigest.provenanceV2.excludedMachineIncomparableSessions, { different_machine: DATES.length });
+  assert.deepEqual(assessment.evidenceDigest.provenanceV2.excludedTransferMachineIncomparableSessions,
+    { different_machine: DATES.length });
+  assert.deepEqual(assessment.evidenceDigest.provenanceV2.excludedHeldMachineIncomparableSessions,
+    { different_machine: DATES.length });
   assert.ok(assessment.reasonCodes.includes("machine_comparability_unavailable"));
   assert.equal(assessment.reasonCodes.some((reason) => reason.startsWith("persistent_signed_bias")), false);
   const profile = assessV2(cohort([[55, "automatic_hr_control", 8]], { calibrationMachine: { machineProfileVersion: 2 } })).assessment;
-  assert.deepEqual(profile.evidenceDigest.provenanceV2.excludedMachineIncomparableSessions,
+  assert.deepEqual(profile.evidenceDigest.provenanceV2.excludedHeldMachineIncomparableSessions,
     { same_machine_different_profile: DATES.length });
 });
 
@@ -444,7 +448,8 @@ test("five qualifying windows in one workout remain one longitudinal session", (
   assert.equal(multi.characterization.phases[0].heldWorkloadForwardResponse.stableResistance.qualifyingWindowCount, 5);
   const { assessment } = assessV2([multi]);
   assert.equal(assessment.evidenceDigest.sessionCount, 1);
-  assert.equal(assessment.evidenceDigest.provenanceV2.comparableSessionCount, 1);
+  assert.equal(assessment.evidenceDigest.provenanceV2.transferComparableSessionCount, 1);
+  assert.equal(assessment.evidenceDigest.provenanceV2.heldComparableSessionCount, 1);
   const contexts = assessment.evidenceDigest.provenanceV2.heldContexts;
   assert.equal(Object.values(contexts).reduce((sum, item) => sum + item.windows, 0), 5);
   assert.ok(Object.values(contexts).every((item) => item.sessions <= 1), "windows never inflate session counts");
@@ -597,4 +602,183 @@ test("no runtime, control, E1, E2-writer, or FitnessState path consumes the v2 j
   const all = files.map((file) => readFileSync(new URL(file, import.meta.url), "utf8")).join("\n");
   assert.doesNotMatch(all, /runtimeAuthority:\s*true/);
   assert.equal(files.some((file) => /e4b|e4c|authorization/i.test(file)), false, "no E4B/E4C module exists");
+});
+
+// ---------------------------------------------------------------- corrective pass: separate cohorts
+
+test("a held-only workout enters the held-response cohort without any closed-loop value", () => {
+  const heldOnly = workout({ sessionId: "held-only", hrAt: () => 160, events: [[55, "automatic_hr_control", 8]] });
+  const record = heldOnly.characterization.phases[0];
+  assert.equal(record.characterizationOutcome, "insufficient_evidence", "HR entirely outside the legacy target");
+  assert.equal(record.heldWorkloadForwardResponse.outcome, "characterized");
+  const { assessment, evidence } = assessV2([heldOnly]);
+  assert.equal(evidence.sessions.length, 0, "no closed-loop transfer session");
+  assert.equal(evidence.heldSessionsV2.length, 1, "one held-response session");
+  for (const closedLoopField of ["signedDifferenceWatts", "observedSettledWatts", "candidateMidpointWatts",
+    "saturationRatio", "domainBucket", "comparison"]) {
+    assert.equal(closedLoopField in evidence.heldSessionsV2[0], false, closedLoopField);
+  }
+  const digest = assessment.evidenceDigest;
+  assert.equal(digest.sessionCount, 0);
+  assert.equal(digest.provenanceV2.transferComparableSessionCount, 0);
+  assert.equal(digest.provenanceV2.heldComparableSessionCount, 1);
+  assert.equal(digest.medianSignedDifferenceWatts, null, "no fabricated bias");
+  assert.equal(digest.observedSettledWattsCv, null, "no fabricated variance");
+  assert.equal(digest.saturationIncidence, null, "no fabricated saturation");
+  const gate = (id) => assessment.gates.find((item) => item.id === id);
+  assert.equal(gate("held_workload_evidence").status, "pass");
+  assert.equal(gate("held_workload_evidence").measured.sessionsWithHeldEvidence, 1);
+  assert.equal(gate("actuation_context").status, "pass");
+  assert.equal(gate("actuation_context").measured.sessionsWithTimedJoin, 1);
+  assert.equal(gate("controller_selected_context").measured.sessions, 1);
+  assert.equal(gate("signed_bias").status, "not_applicable");
+  assert.ok(assessment.reasonCodes.includes("open_loop_evidence_unavailable"));
+  assert.ok(assessment.reasonCodes.includes("controller_selected_evidence"));
+  assert.equal(assessment.runtimeAuthority, false);
+  assert.notEqual(assessment.state, "eligible");
+  assert.notEqual(assessment.state, "contradicted");
+});
+
+test("in a mixed cohort each evidence channel counts only the workouts it owns", () => {
+  const a = workout({ sessionId: "mixed-a", createdAt: "2026-09-10T12:10:00.000Z", events: [[55, "automatic_hr_control", 8]] });
+  const b = workout({ sessionId: "mixed-b", createdAt: "2026-09-12T12:10:00.000Z", hrAt: () => 160,
+    events: [[55, "default_starting_resistance", 8]] });
+  const c = workout({ sessionId: "mixed-c", createdAt: "2026-09-14T12:10:00.000Z", hrAt: () => 160,
+    events: [[55, "automatic_hr_control", 8]], calibrationMachine: { machineId: "machine-b" } });
+  const { assessment, evidence } = assessV2([a, b, c]);
+  assert.deepEqual(evidence.sessions.map((session) => session.workoutSessionId), ["mixed-a"]);
+  assert.deepEqual(evidence.heldSessionsV2.map((session) => session.workoutSessionId).sort(), ["mixed-a", "mixed-b", "mixed-c"]);
+  const digest = assessment.evidenceDigest;
+  assert.equal(digest.sessionCount, 1, "closed-loop transfer cohort: A only");
+  assert.equal(digest.provenanceV2.transferComparableSessionCount, 1);
+  assert.deepEqual(digest.provenanceV2.excludedTransferMachineIncomparableSessions, {});
+  assert.equal(digest.provenanceV2.heldComparableSessionCount, 2, "held-response cohort: A and B");
+  assert.deepEqual(digest.provenanceV2.excludedHeldMachineIncomparableSessions, { different_machine: 1 });
+  assert.equal(digest.provenanceV2.heldContexts.automatic_selected.sessions, 1);
+  assert.equal(digest.provenanceV2.heldContexts.programmatic_selected.sessions, 1);
+  assert.equal(assessment.gates.find((gate) => gate.id === "machine_comparability").measured.heldExcludedSessions, 1);
+});
+
+test("the held-response cohort keeps exact subject matching and the multi-phase rule", () => {
+  const otherBand = workout({ sessionId: "other-band", target: "125-140", hrAt: () => 160, events: [[55, "automatic_hr_control", 8]] });
+  const subjectWorkout = workout({ sessionId: "subject", hrAt: () => 160, events: [[55, "automatic_hr_control", 8]] });
+  const { evidence, assessment } = assessV2([subjectWorkout, otherBand]);
+  assert.equal(assessment.subject.legacyHrBand.minBpm, 115);
+  assert.equal(assessment.evidenceDigest.provenanceV2.heldComparableSessionCount, 1,
+    "a different legacy band is a different subject");
+  assert.ok(evidence.heldSessionsV2.every((session) => session.legacyHrBand.minBpm === 115));
+});
+
+// ---------------------------------------------------------------- corrective pass: strict trust boundary
+
+test("malformed or contradictory v2 provenance fails closed in both cohorts", () => {
+  const item = workout({ sessionId: "strict", events: [[55, "automatic_hr_control", 8]] });
+  const { evidence, assessment } = assessV2([item]);
+  assert.equal(assessment.evidenceDigest.provenanceV2.heldComparableSessionCount, 1);
+  const reassess = (mutate) => {
+    const forged = structuredClone(evidence);
+    mutate(forged.heldSessionsV2[0].provenanceV2);
+    return assessPersonalizedWorkloadEvidence(forged, assessment.subject, E4A_SCIENTIFIC_ASSESSMENT_POLICY_V2, EVALUATED_AT)
+      .evidenceDigest.provenanceV2;
+  };
+  for (const [label, mutate] of [
+    ["comparable true + different_machine", (p) => { p.machineComparison.reason = "different_machine"; }],
+    ["comparable false + same_machine_and_profile", (p) => { p.machineComparison.comparable = false; }],
+    ["unknown machine reason", (p) => { p.machineComparison = { comparable: false, reason: "similar_machine" }; }],
+    ["unknown timed join", (p) => { p.heldWorkload.timedJoin = "probably_available"; }],
+    ["unavailable join with contexts", (p) => { p.heldWorkload.timedJoin = "raw_telemetry_unavailable"; }],
+    ["available join without contexts", (p) => { p.heldWorkload.contexts = null; }],
+    ["missing context category", (p) => { delete p.heldWorkload.contexts.unknown; }],
+    ["extra context category", (p) => { p.heldWorkload.contexts.manual_selected = { windowCount: 0, durationSec: 0 }; }],
+    ["context totals mismatch", (p) => { p.heldWorkload.contexts.unknown.durationSec += 1; }],
+    ["context window mismatch", (p) => { p.heldWorkload.contexts.unknown.windowCount += 1; }],
+    ["fractional context duration", (p) => { p.heldWorkload.contexts.automatic_selected.durationSec = 119.5;
+      p.heldWorkload.contexts.unknown.durationSec = 0.5; }],
+    ["independent evidence claimed", (p) => { p.independentOpenLoopEvidence = true; }],
+    ["extra provenance key", (p) => { p.manual = true; }],
+    ["absent provenance with comparable machine", (p) => { p.actuationCapture = "unavailable"; }],
+    ["held evidence missing", (p) => { p.heldWorkload = null; }],
+  ]) {
+    const digest = reassess(mutate);
+    assert.equal(digest.ignoredInvalidHeldSessions, 1, label);
+    assert.equal(digest.heldComparableSessionCount, 0, label);
+  }
+  // The transfer cohort rejects contradictory machine comparison too.
+  const forged = structuredClone(evidence);
+  forged.sessions[0].provenanceV2.machineComparison.reason = "different_machine";
+  const transfer = assessPersonalizedWorkloadEvidence(forged, assessment.subject, E4A_SCIENTIFIC_ASSESSMENT_POLICY_V2,
+    EVALUATED_AT);
+  assert.equal(transfer.evidenceDigest.ignoredInvalidSessions, 1);
+  assert.equal(transfer.evidenceDigest.provenanceV2.transferComparableSessionCount, 0);
+});
+
+test("the E4A trust-boundary vocabularies match the join's canonical vocabularies", async () => {
+  const e4a = await import("../dist/personalizationScientificAssessment.js");
+  const join = await import("../dist/scientificSessionEvidence.js");
+  assert.deepEqual([...e4a.SCIENTIFIC_MACHINE_COMPARABILITY_REASONS_V2], [...join.MACHINE_COMPARABILITY_REASONS_V2]);
+  assert.deepEqual([...e4a.SCIENTIFIC_TIMED_ACTUATION_JOINS_V2], [...join.TIMED_ACTUATION_JOINS_V2]);
+});
+
+// ---------------------------------------------------------------- corrective pass: resend trigger
+
+test("only a reconciliation_resend of the selector's decision and resistance is a harmless re-send", () => {
+  const resend = classifyHeldWindowActuation(window(60, 299, 8), complete([
+    event(1, 55, "automatic_hr_control", 8, { decisionId: "x" }),
+    event(2, 150, "automatic_hr_control", 8, { decisionId: "x", trigger: "reconciliation_resend" }),
+  ]));
+  assert.equal(resend.context, "automatic_selected");
+  assert.equal(resend.sameDecisionResendsDuringHold, 1);
+  const sameIdDecision = classifyHeldWindowActuation(window(60, 299, 8), complete([
+    event(1, 55, "automatic_hr_control", 8, { decisionId: "x" }),
+    event(2, 150, "automatic_hr_control", 8, { decisionId: "x", trigger: "decision" }),
+  ]));
+  assert.equal(sameIdDecision.context, "unknown");
+  assert.equal(sameIdDecision.reason, "new_decision_during_hold");
+  assert.equal(sameIdDecision.sameDecisionResendsDuringHold, 0);
+  const differentResistance = classifyHeldWindowActuation(window(60, 299, 8), complete([
+    event(1, 55, "automatic_hr_control", 8, { decisionId: "x" }),
+    event(2, 150, "automatic_hr_control", 9, { decisionId: "x", trigger: "reconciliation_resend" }),
+  ]));
+  assert.equal(differentResistance.context, "unknown");
+  assert.equal(differentResistance.sameDecisionResendsDuringHold, 0);
+});
+
+// ---------------------------------------------------------------- corrective pass: state semantics
+
+test("held-only, incomparable, or unjoined evidence never contradicts; admitted closed-loop evidence still can", () => {
+  const biased = { target: "125-140", watts: 200 };
+  const heldOnly = assessV2(cohort([[55, "automatic_hr_control", 8]], { ...biased, hrAt: () => 160 })).assessment;
+  assert.equal(heldOnly.evidenceDigest.sessionCount, 0);
+  assert.notEqual(heldOnly.state, "contradicted", "held-only sessions own no closed-loop bias");
+  const heldIncomparable = assessV2(cohort([[55, "automatic_hr_control", 8]],
+    { ...biased, hrAt: () => 160, calibrationMachine: { machineId: "machine-b" } })).assessment;
+  assert.notEqual(heldIncomparable.state, "contradicted");
+  const unjoined = assessV2(cohort([[55, "automatic_hr_control", 8]]).map((item) => ({ ...item, raw: null }))).assessment;
+  assert.ok(unjoined.reasonCodes.includes("timed_actuation_join_unavailable"));
+  assert.notEqual(unjoined.state, "contradicted", "missing timed actuation evidence is not contradiction");
+  const admitted = assessV2(cohort([[55, "automatic_hr_control", 8]], { ...biased, hrAt: () => 130 })).assessment;
+  assert.equal(admitted.state, "contradicted", "genuine admitted closed-loop disagreement still contradicts");
+});
+
+test("no production-v2 scenario reaches eligible, and every valid assessment keeps open-loop unavailable", () => {
+  assert.equal(E4A_CURRENT_SCIENTIFIC_ASSESSMENT_POLICY.version, 2);
+  const scenarios = [
+    cohort([[55, "automatic_hr_control", 8]]),
+    cohort([[55, "default_starting_resistance", 8]]),
+    cohort([]),
+    cohort([[55, "automatic_hr_control", 8]], { hrAt: () => 160 }),
+    cohort([[55, "automatic_hr_control", 8]], { coverage: "incomplete" }),
+    cohort([[55, "automatic_hr_control", 8]], { calibrationMachine: { machineProfileVersion: 2 } }),
+  ];
+  for (const scenario of scenarios) {
+    const { assessment } = assessV2(scenario);
+    assert.notEqual(assessment.state, "eligible");
+    assert.equal(assessment.runtimeAuthority, false);
+    assert.ok(assessment.reasonCodes.includes("open_loop_evidence_unavailable"));
+    assert.equal(assessment.reasonCodes.includes("actuation_mode_unknown"), false);
+  }
+  const reasons = (events, extra) => assessV2(cohort(events, extra)).assessment.reasonCodes;
+  assert.ok(reasons([[55, "automatic_hr_control", 8]]).includes("controller_selected_evidence"));
+  assert.ok(reasons([[55, "default_starting_resistance", 8]]).includes("programmatic_selected_evidence"));
+  assert.ok(reasons([]).includes("no_app_selector_observed"));
 });
