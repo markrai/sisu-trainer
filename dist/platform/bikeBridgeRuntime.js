@@ -53,6 +53,7 @@ export function createBikeBridgeSession(options = {}) {
     let desiredDecision;
     let pendingTrigger = "decision";
     let actuationObserver = null;
+    let guidanceWorkout;
     let lastAccepted;
     let holdFailedLevel;
     let needsReconcile = false;
@@ -148,6 +149,7 @@ export function createBikeBridgeSession(options = {}) {
                 trigger,
                 requestedResistance: target,
                 observedAtMs: now(),
+                ...(guidanceWorkout ? { workout: { ...guidanceWorkout } } : {}),
             });
         }
         catch {
@@ -429,6 +431,8 @@ export function createBikeBridgeSession(options = {}) {
             workoutActive = input.workoutActive;
             paused = input.paused;
             desiredResistance = input.desiredResistance;
+            if (input.workoutActive)
+                guidanceWorkout = input.workout ? { ...input.workout } : undefined;
             if (input.workoutActive && input.recommendationChanged) {
                 decisionSeq += 1;
                 desiredDecision = { id: decisionEpoch + "-" + decisionSeq, origin: (_a = input.actuationOrigin) !== null && _a !== void 0 ? _a : "unclassified" };

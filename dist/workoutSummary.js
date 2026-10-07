@@ -23,7 +23,6 @@ import { characterizePersonalizedPrescription, PHASE_E2_CHARACTERIZATION_POLICY_
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 import { finalizeExecutionProvenance } from "./executionProvenance.js";
 import { recordPromotedCalibrationMachineProvenance } from "./calibrationMachineProvenance.js";
-import { loadAthleteProfile } from "./profile.js";
 import { readFitnessState } from "./fitnessState.js";
 import { APP_VERSION } from "./version.js";
 export function buildHrTrace(hrSamples) {
@@ -301,7 +300,9 @@ async function generateWorkoutSummary(sessionId, startedAt, endedAt, day, option
 /**
  * Sidecar machine provenance for a just-promoted formal calibration. Uses the
  * machine frozen at assessment start only; an ambiguous identity (no machine at
- * start, or selection changed mid-assessment) records nothing.
+ * start, or selection changed mid-assessment) records nothing. The athlete is the
+ * summary's own frozen `athlete_id` (the identity promotion verified), never the
+ * currently loaded profile; without it nothing is recorded.
  */
 export function recordPromotedFormalCalibrationMachine(summary, storage, recordedAt = new Date().toISOString()) {
     var _a;
@@ -311,13 +312,16 @@ export function recordPromotedFormalCalibrationMachine(summary, storage, recorde
         provenance.machine.status === "selected" && !provenance.machine.selectionChangedDuringWorkout
         ? { machineId: provenance.machine.machineId, machineProfileVersion: provenance.machine.machineProfileVersion }
         : null;
-    const athlete = loadAthleteProfile(store);
+    const athleteId = summary.athlete_id;
+    if (typeof athleteId !== "string" || !athleteId)
+        return "not_applicable";
     return recordPromotedCalibrationMachineProvenance({
-        athleteId: athlete.athleteId,
+        athleteId,
         sessionId: summary.external_session_id,
         endedAt: summary.endedAt,
         machine,
-        calibrationMetric: (_a = readFitnessState(athlete.athleteId, store)) === null || _a === void 0 ? void 0 : _a.hrWorkloadCalibration,
+        // readFitnessState returns state only when it belongs to this exact athlete.
+        calibrationMetric: (_a = readFitnessState(athleteId, store)) === null || _a === void 0 ? void 0 : _a.hrWorkloadCalibration,
     }, store, recordedAt);
 }
 async function emitWorkoutSummary(summary) {

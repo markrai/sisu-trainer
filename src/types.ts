@@ -1555,8 +1555,8 @@ export interface ResistanceActuationEventV1 {
  * Phase-level actuation mode derived from explicit events:
  * automatic    — ≥1 accepted automatic_hr_control command;
  * programmatic — accepted app commands, none automatic_hr_control;
- * none         — no app-issued resistance commands and app-command capture complete;
- * unknown      — incomplete capture, ambiguous (timeout/pending) or unclassified commands.
+ * none         — zero app resistance-command events in the phase and app-command capture complete;
+ * unknown      — incomplete capture, ambiguous (timeout/pending), unclassified, or failed/unavailable commands.
  * Console-knob changes are not observable, so `none` never means the athlete held resistance.
  */
 export type PhaseActuationModeV1 = "automatic" | "programmatic" | "none" | "unknown";

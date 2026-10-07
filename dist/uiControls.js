@@ -672,13 +672,14 @@ function renderBikeBridgeSettingsStatus() {
         lines.push(escapeBikeBridgeHudText(state.lastError));
     el.innerHTML = lines.join("\n");
 }
-function syncBikeBridgeGuidance(update, workoutActive, paused) {
+function syncBikeBridgeGuidance(update, workoutActive, paused, workout) {
     getBikeBridgeSession().onGuidance({
         desiredResistance: update === null || update === void 0 ? void 0 : update.guidance.resistance,
         recommendationChanged: (update === null || update === void 0 ? void 0 : update.recommendationChanged) === true,
         workoutActive,
         paused,
         actuationOrigin: update === null || update === void 0 ? void 0 : update.actuationOrigin,
+        workout,
     });
     renderBikeBridgeHud();
     const equipmentTab = document.getElementById("equipmentTab");
@@ -942,7 +943,7 @@ function renderWorkout(state) {
             holdCadenceRpm: hold === null || hold === void 0 ? void 0 : hold.cadenceRpm,
         })
         : null;
-    syncBikeBridgeGuidance(machineUpdate, true, active.paused);
+    syncBikeBridgeGuidance(machineUpdate, true, active.paused, session.sessionId ? { day: active.day, sessionId: session.sessionId } : undefined);
     renderMachineGuidance(machineUpdate);
     if (typeof window.announceWorkoutGuidance === "function") {
         window.announceWorkoutGuidance(active.phaseDisplayName, (_e = machineUpdate === null || machineUpdate === void 0 ? void 0 : machineUpdate.voiceEvent) !== null && _e !== void 0 ? _e : null, pendingVo2Cues);
@@ -1987,7 +1988,7 @@ async function persistWorkoutRelativeHr(session, bpm) {
 function registerUiGlobals(phaseBoxEl) {
     phaseDisplayEl = phaseBoxEl;
     // Record explicit resistance-actuation provenance at the Bike Bridge command site.
-    getBikeBridgeSession().setActuationObserver(createActuationProvenanceObserver(getSelectedDay));
+    getBikeBridgeSession().setActuationObserver(createActuationProvenanceObserver());
     onBpm((bpm) => {
         liveBpm = bpm;
         lastBpmUpdateTime = Date.now();

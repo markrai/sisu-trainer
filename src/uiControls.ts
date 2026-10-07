@@ -825,7 +825,8 @@ function renderBikeBridgeSettingsStatus() {
 function syncBikeBridgeGuidance(
   update: MachineGuidanceRuntimeUpdate | null,
   workoutActive: boolean,
-  paused: boolean
+  paused: boolean,
+  workout?: { day: string; sessionId: string }
 ) {
   getBikeBridgeSession().onGuidance({
     desiredResistance: update?.guidance.resistance,
@@ -833,6 +834,7 @@ function syncBikeBridgeGuidance(
     workoutActive,
     paused,
     actuationOrigin: update?.actuationOrigin,
+    workout,
   });
   renderBikeBridgeHud();
   const equipmentTab = document.getElementById("equipmentTab");
@@ -1077,7 +1079,8 @@ function renderWorkout(state: WorkoutDisplayState) {
         holdCadenceRpm: hold?.cadenceRpm,
       })
     : null;
-  syncBikeBridgeGuidance(machineUpdate, true, active.paused);
+  syncBikeBridgeGuidance(machineUpdate, true, active.paused,
+    session.sessionId ? { day: active.day, sessionId: session.sessionId } : undefined);
   renderMachineGuidance(machineUpdate);
   if (typeof (window as any).announceWorkoutGuidance === "function") {
     (window as any).announceWorkoutGuidance(
@@ -2188,7 +2191,7 @@ async function persistWorkoutRelativeHr(
 function registerUiGlobals(phaseBoxEl: HTMLElement | null) {
   phaseDisplayEl = phaseBoxEl;
   // Record explicit resistance-actuation provenance at the Bike Bridge command site.
-  getBikeBridgeSession().setActuationObserver(createActuationProvenanceObserver(getSelectedDay));
+  getBikeBridgeSession().setActuationObserver(createActuationProvenanceObserver());
 
   onBpm((bpm) => {
     liveBpm = bpm;

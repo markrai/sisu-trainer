@@ -72,6 +72,13 @@ export interface BikeBridgeGuidanceInput {
   paused: boolean;
   /** Who chose this recommendation; recorded on posted commands only. Never changes command behavior. */
   actuationOrigin?: ResistanceActuationOriginV1;
+  /** Workout session that produced this guidance; provenance routing only. */
+  workout?: BikeBridgeWorkoutContext;
+}
+
+export interface BikeBridgeWorkoutContext {
+  day: string;
+  sessionId: string;
 }
 
 /** One posted resistance command, reported at the actual actuation call site. */
@@ -81,6 +88,8 @@ export interface BikeBridgeActuationRequest {
   trigger: ResistanceActuationTriggerV1;
   requestedResistance: number;
   observedAtMs: number;
+  /** Session whose guidance set the current desired resistance; never the UI's selected day. */
+  workout?: BikeBridgeWorkoutContext;
 }
 
 export type BikeBridgeActuationOutcome = "accepted" | "failed" | "unavailable" | "timeout";
@@ -170,6 +179,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
   let desiredDecision: { id: string; origin: ResistanceActuationOriginV1 } | undefined;
   let pendingTrigger: ResistanceActuationTriggerV1 = "decision";
   let actuationObserver: BikeBridgeActuationObserver | null = null;
+  let guidanceWorkout: BikeBridgeWorkoutContext | undefined;
   let lastAccepted: number | undefined;
   let holdFailedLevel: number | undefined;
   let needsReconcile = false;
@@ -271,6 +281,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
         trigger,
         requestedResistance: target,
         observedAtMs: now(),
+        ...(guidanceWorkout ? { workout: { ...guidanceWorkout } } : {}),
       });
     } catch {
       return undefined;
@@ -552,6 +563,7 @@ export function createBikeBridgeSession(options: BikeBridgeSessionOptions = {}):
       workoutActive = input.workoutActive;
       paused = input.paused;
       desiredResistance = input.desiredResistance;
+      if (input.workoutActive) guidanceWorkout = input.workout ? { ...input.workout } : undefined;
       if (input.workoutActive && input.recommendationChanged) {
         decisionSeq += 1;
         desiredDecision = { id: decisionEpoch + "-" + decisionSeq, origin: input.actuationOrigin ?? "unclassified" };

@@ -186,8 +186,11 @@ export function derivePhaseActuationSummaries(
     const programmaticAcceptedCount = accepted.filter((event) => PROGRAMMATIC_ORIGINS.has(event.origin)).length;
     const ambiguousCount = events.filter(isAmbiguous).length;
     const rejectedCount = events.filter((event) => event.outcome === "failed" || event.outcome === "unavailable").length;
+    // `none` means zero app resistance-command events under complete capture.
+    // A failed/unavailable command was still an app actuation attempt whose
+    // physical effect is not established, so it makes the phase unknown.
     let mode: PhaseActuationModeV1;
-    if (actuation.coverage !== "complete" || ambiguousCount > 0) mode = "unknown";
+    if (actuation.coverage !== "complete" || ambiguousCount > 0 || rejectedCount > 0) mode = "unknown";
     else if (automaticAcceptedCount > 0) mode = "automatic";
     else if (programmaticAcceptedCount > 0) mode = "programmatic";
     else mode = "none";

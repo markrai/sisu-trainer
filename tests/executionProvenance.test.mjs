@@ -187,7 +187,8 @@ function start(storage, options = {}) {
 }
 
 function request(origin, observedAtMs, extras = {}) {
-  return { decisionId: "d-1", origin, trigger: "decision", requestedResistance: 8, observedAtMs, ...extras };
+  return { decisionId: "d-1", origin, trigger: "decision", requestedResistance: 8, observedAtMs,
+    workout: { day: "Tuesday", sessionId: SESSION }, ...extras };
 }
 
 // ---------------------------------------------------------------- machine freeze
@@ -240,7 +241,7 @@ test("a legacy session without a start snapshot stays unavailable instead of tak
   assert.equal(summary.machine_id, undefined);
   assert.equal(summary.machine_profile_version, undefined);
   // An observer cannot create provenance for it either.
-  const observer = createActuationProvenanceObserver(() => "Tuesday", storage);
+  const observer = createActuationProvenanceObserver(storage);
   assert.equal(observer.requested(request("automatic_hr_control", START_MS + 10_000)), undefined);
   assert.equal(getSession("Tuesday", storage).executionProvenance, null);
 });
@@ -274,6 +275,7 @@ test("a promoted formal calibration records the machine frozen at assessment sta
   setSelectedMachine("bike", undefined, storage);
   const summary = {
     external_session_id: FORMAL_SESSION,
+    athlete_id: ATHLETE,
     endedAt: FORMAL_OBSERVED_AT,
     execution_provenance: finalizeExecutionProvenance(assessmentProvenance, { selectionChangedDuringWorkout: false }),
   };
@@ -509,7 +511,7 @@ test("observer events persist on the active clock, survive reload, and pause nev
   const storage = memoryStorage();
   setSelectedMachine("bike", MACHINE, storage);
   start(storage);
-  const observer = createActuationProvenanceObserver(() => "Tuesday", storage);
+  const observer = createActuationProvenanceObserver(storage);
   const first = observer.requested(request("default_starting_resistance", START_MS + 500, { decisionId: "e-1" }));
   observer.resolved(first, "accepted");
   // Pause at active 60 s for 5 minutes, then resume: active time continues from 60 s.
@@ -574,9 +576,19 @@ test("per-phase actuation mode is derived deterministically from explicit events
   const ambiguous = derivePhaseActuationSummaries(provenanceWith([[10, "automatic_hr_control", "timeout"]]).actuation,
     phases([["a", 0, 120]]));
   assert.equal(ambiguous[0].mode, "unknown");
-  const rejected = derivePhaseActuationSummaries(provenanceWith([[10, "automatic_hr_control", "failed"]]).actuation,
+  const failed = derivePhaseActuationSummaries(provenanceWith([[10, "automatic_hr_control", "failed"]]).actuation,
     phases([["a", 0, 120]]));
-  assert.deepEqual([rejected[0].mode, rejected[0].rejectedCount], ["none", 1]);
+  assert.deepEqual([failed[0].mode, failed[0].rejectedCount], ["unknown", 1], "a failed app command is not none");
+  const unavailable = derivePhaseActuationSummaries(provenanceWith([[10, "scripted_phase_program", "unavailable"]]).actuation,
+    phases([["a", 0, 120]]));
+  assert.deepEqual([unavailable[0].mode, unavailable[0].rejectedCount], ["unknown", 1]);
+  const rejectedBesideAccepted = derivePhaseActuationSummaries(provenanceWith([
+    [10, "automatic_hr_control"], [20, "automatic_hr_control", "failed"],
+  ]).actuation, phases([["a", 0, 120]]));
+  assert.deepEqual([rejectedBesideAccepted[0].mode, rejectedBesideAccepted[0].automaticAcceptedCount,
+    rejectedBesideAccepted[0].rejectedCount], ["unknown", 1, 1], "counts are preserved");
+  const empty = derivePhaseActuationSummaries(provenanceWith([]).actuation, phases([["a", 0, 120]]));
+  assert.equal(empty[0].mode, "none", "zero events under complete capture stays none");
   const incomplete = derivePhaseActuationSummaries(provenanceWith([], "incomplete").actuation, phases([["a", 0, 120]]));
   assert.equal(incomplete[0].mode, "unknown", "no events under incomplete capture is never none");
   const resend = provenanceWith([[10, "automatic_hr_control", "accepted", "x"], [70, "automatic_hr_control", "accepted", "x"]]);
@@ -653,7 +665,7 @@ test("finalization writes the frozen identity and durable provenance; history re
   setSelectedMachine("bike", MACHINE, storage);
   recordFormalCalibrationMachineProvenance(sidecar(), storage);
   const summary = await finishWorkout(storage, () => {
-    const observer = createActuationProvenanceObserver(() => "Tuesday", storage);
+    const observer = createActuationProvenanceObserver(storage);
     observer.resolved(observer.requested(request("default_starting_resistance", START_MS + 1_000, { decisionId: "f-1" })), "accepted");
     observer.resolved(observer.requested(request("automatic_hr_control", START_MS + 95_000,
       { decisionId: "f-2", requestedResistance: 9 })), "accepted");
@@ -766,4 +778,73 @@ test("provenance has no path into prescription, guidance, control, E1, E2, E4A, 
   const e4a = readFileSync(new URL("../src/personalizationScientificAssessment.ts", import.meta.url), "utf8");
   assert.match(e4a, /openLoopEvidence: "required_but_unavailable"/);
   assert.match(e4a, /actuationModeEvidence: "required_but_unavailable"/);
+});
+
+test("sidecar promotion uses the assessment's frozen athlete, never the currently loaded profile", () => {
+  const ATHLETE_B = "athlete-other";
+  const storage = memoryStorage({
+    // The UI has since switched to athlete B; A's promoted FitnessState is what promotion wrote.
+    athlete_profile_v1: JSON.stringify({ ...profile(), athleteId: ATHLETE_B }),
+    fitness_state_v1: JSON.stringify(fitness()),
+  });
+  setSelectedMachine("bike", MACHINE, storage);
+  startSession("VO2", Date.parse(FORMAL_OBSERVED_AT) - 1_800_000, FORMAL_SESSION, "bike", storage, null,
+    { athleteId: ATHLETE, profileSchemaVersion: 1 });
+  const provenance = finalizeExecutionProvenance(getSession("VO2", storage).executionProvenance,
+    { selectionChangedDuringWorkout: false });
+  const summary = { external_session_id: FORMAL_SESSION, athlete_id: ATHLETE, endedAt: FORMAL_OBSERVED_AT,
+    execution_provenance: provenance };
+  assert.equal(recordPromotedFormalCalibrationMachine(summary, storage, "2026-09-01T00:02:00.000Z"), "recorded");
+  const records = readFormalCalibrationMachineProvenance(storage);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].calibration.athleteId, ATHLETE);
+  assert.equal(lookupCalibrationMachine(records, calibrationIdentity()).status, "available");
+  assert.equal(lookupCalibrationMachine(records, { ...calibrationIdentity(), athleteId: ATHLETE_B }).status, "unavailable",
+    "no cross-athlete lookup succeeds");
+  // Without a trustworthy frozen athlete nothing is written, even though a profile is loaded.
+  const anonymous = memoryStorage({ athlete_profile_v1: JSON.stringify(profile()), fitness_state_v1: JSON.stringify(fitness()) });
+  const { athlete_id: _omitted, ...withoutAthlete } = summary;
+  assert.equal(recordPromotedFormalCalibrationMachine(withoutAthlete, anonymous), "not_applicable");
+  assert.equal(anonymous.getItem(FORMAL_CALIBRATION_MACHINE_PROVENANCE_STORAGE_KEY), null);
+  // A summary claiming athlete B cannot bind A's stored calibration.
+  const claimsB = memoryStorage({ fitness_state_v1: JSON.stringify(fitness()) });
+  assert.equal(recordPromotedFormalCalibrationMachine({ ...summary, athlete_id: ATHLETE_B }, claimsB), "not_applicable");
+  assert.equal(claimsB.getItem(FORMAL_CALIBRATION_MACHINE_PROVENANCE_STORAGE_KEY), null);
+});
+
+test("commands are routed by the workout session that produced them, never the UI's selected day", () => {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", MACHINE, storage);
+  start(storage);
+  // Another day's session also exists with its own provenance record.
+  startSession("Wednesday", START_MS, "wednesday-session", "bike", storage, null,
+    { athleteId: ATHLETE, profileSchemaVersion: 1 });
+  const observer = createActuationProvenanceObserver(storage);
+  // The UI now shows Wednesday; the Tuesday workout's command still carries Tuesday's session.
+  const token = observer.requested(request("automatic_hr_control", START_MS + 30_000));
+  observer.resolved(token, "accepted");
+  assert.equal(readInProgressExecutionProvenance("Tuesday", storage).actuation.events.length, 1);
+  assert.equal(readInProgressExecutionProvenance("Wednesday", storage).actuation.events.length, 0);
+  // A command for a replaced or ended session is never written into another session's record.
+  assert.equal(observer.requested(request("automatic_hr_control", START_MS + 40_000,
+    { workout: { day: "Wednesday", sessionId: SESSION } })), undefined);
+  assert.equal(observer.requested(request("automatic_hr_control", START_MS + 40_000, { workout: undefined })), undefined);
+  assert.equal(readInProgressExecutionProvenance("Wednesday", storage).actuation.events.length, 0);
+  const source = readFileSync(new URL("../src/uiControls.ts", import.meta.url), "utf8");
+  assert.match(source, /createActuationProvenanceObserver\(\)/);
+  assert.doesNotMatch(source, /createActuationProvenanceObserver\(getSelectedDay\)/);
+});
+
+test("the Bike Bridge carries the guidance session context onto each posted command", async () => {
+  const fake = fakeBridge();
+  const requests = [];
+  const session = await readyBridge(fake, { requested(value) { requests.push(value); return requests.length; }, resolved() {} });
+  try {
+    session.onGuidance({ desiredResistance: 8, recommendationChanged: true, workoutActive: true, paused: false,
+      actuationOrigin: "default_starting_resistance", workout: { day: "Tuesday", sessionId: SESSION } });
+    await waitUntil(() => requests.length === 1);
+    assert.deepEqual(requests[0].workout, { day: "Tuesday", sessionId: SESSION });
+  } finally {
+    session.stop();
+  }
 });
