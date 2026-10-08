@@ -38,6 +38,19 @@ import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescript
 import { parseWorkoutResponse } from "./workoutResponse.js";
 import { VO2_FORMAL_ASSESSMENT_CONTRACT_V1 } from "./vo2Estimator.js";
 import { cadenceInBand } from "./vo2Workload.js";
+import {
+  absolutePredictionError,
+  countContinuousResistanceChanges,
+  numericDistribution,
+  numericMedian,
+  numericQuantile,
+  orderByActiveSecond,
+  predictForwardResponse,
+  segmentStableResistance,
+  settledActiveSeconds,
+  signedPredictionError,
+  type StableResistanceObservation,
+} from "./workloadForwardResponse.js";
 
 /** Provisional evidence-quality policy only. These values never authorize control. */
 export const PHASE_E2_CHARACTERIZATION_POLICY_V1: PersonalizedPrescriptionCharacterizationPolicyV1 = {
@@ -217,23 +230,8 @@ function nearlyEqual(a: number, b: number): boolean {
   return Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
 }
 
-function sorted(values: readonly number[]): number[] {
-  return [...values].sort((a, b) => a - b);
-}
-
-function quantile(values: readonly number[], probability: number): number {
-  const ordered = sorted(values);
-  if (ordered.length === 1) return ordered[0];
-  const position = (ordered.length - 1) * probability;
-  const lower = Math.floor(position);
-  const upper = Math.ceil(position);
-  const fraction = position - lower;
-  return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction;
-}
-
-function median(values: readonly number[]): number {
-  return quantile(values, 0.5);
-}
+const quantile = numericQuantile;
+const median = numericMedian;
 
 function policyValid(value: unknown): value is PersonalizedPrescriptionCharacterizationPolicyV1 {
   if (!isObject(value) || value.id !== "e2-characterization-policy" || value.version !== 1) return false;
@@ -315,7 +313,7 @@ function resistanceChangeSeconds(samples: readonly OrdinaryBikeTelemetrySample[]
   let previousObserved: number | undefined;
   let previousDesired: number | undefined;
   let previousCommanded: number | undefined;
-  for (const sample of [...samples].sort((a, b) => a.activeSec - b.activeSec)) {
+  for (const sample of orderByActiveSecond(samples)) {
     const values = [sample.observedResistance?.value, sample.desiredResistance, sample.commandedResistance];
     const previous = [previousObserved, previousDesired, previousCommanded];
     if (values.some((value, index) => value !== undefined && previous[index] !== undefined && value !== previous[index])) {
@@ -393,13 +391,7 @@ function compareCandidate(
 }
 
 function distribution(values: readonly number[]): PersonalizedPrescriptionDistributionV1 {
-  return {
-    median: median(values),
-    q1: quantile(values, 0.25),
-    q3: quantile(values, 0.75),
-    min: Math.min(...values),
-    max: Math.max(...values),
-  };
+  return numericDistribution(values);
 }
 
 function heldWorkloadPolicyValid(value: unknown): value is PersonalizedPrescriptionHeldWorkloadPolicyV1 {
@@ -460,18 +452,6 @@ function heldObservationTrustworthy(sample: OrdinaryBikeTelemetrySample, phasePr
  * excess reveals a pause. Wall-clock chronology must also move forward: a zero
  * or negative wall step for advancing active time breaks continuity.
  */
-function continuousObservations(
-  previous: OrdinaryBikeTelemetrySample,
-  next: OrdinaryBikeTelemetrySample,
-  policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
-): boolean {
-  const activeStep = next.activeSec - previous.activeSec;
-  if (activeStep < 1 || activeStep > policy.maxObservationGapSec) return false;
-  const wallStep = (Date.parse(next.observedAt) - Date.parse(previous.observedAt)) / 1000;
-  return Number.isFinite(wallStep) && wallStep > 0 &&
-    Math.abs(wallStep - activeStep) <= policy.maxWallClockExcessSec;
-}
-
 interface HeldWindow {
   resistance: number;
   provenance?: BikeWattsProvenance;
@@ -484,27 +464,20 @@ function stableObservedResistanceWindows(
   phaseProvenance: PhasePowerProvenance,
   policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
 ): HeldWindow[] {
-  const windows: HeldWindow[] = [];
-  let current: HeldWindow | undefined;
-  for (const sample of samples) {
-    if (!heldObservationTrustworthy(sample, phaseProvenance)) {
-      current = undefined;
-      continue;
-    }
-    const resistance = sample.observedResistance!.value;
-    const source = sample.watts?.source;
-    const previous = current?.samples[current.samples.length - 1];
-    const continues = current !== undefined && previous !== undefined &&
-      continuousObservations(previous, sample, policy) && current.resistance === resistance &&
-      (source === undefined || current.provenance === undefined || current.provenance === source);
-    if (!continues) {
-      current = { resistance, samples: [] };
-      windows.push(current);
-    }
-    current!.samples.push(sample);
-    if (source !== undefined && current!.provenance === undefined) current!.provenance = source;
-  }
-  return windows;
+  const normalized = samples.map((sample) => ({
+    sample,
+    activeSec: sample.activeSec,
+    observedAt: sample.observedAt,
+    ...(heldObservationTrustworthy(sample, phaseProvenance)
+      ? { observedResistance: sample.observedResistance!.value }
+      : {}),
+    ...(sample.watts?.source ? { workloadProvenance: sample.watts.source } : {}),
+  } satisfies StableResistanceObservation & { sample: OrdinaryBikeTelemetrySample }));
+  return segmentStableResistance(normalized, policy).map((window) => ({
+    resistance: window.resistance,
+    ...(window.workloadProvenance ? { provenance: window.workloadProvenance as BikeWattsProvenance } : {}),
+    samples: window.observations.map((observation) => observation.sample),
+  }));
 }
 
 /** Counted only between continuous fresh observations; a change across a pause or gap is not observable as one change. */
@@ -512,18 +485,11 @@ function observedResistanceChangeCount(
   samples: readonly OrdinaryBikeTelemetrySample[],
   policy: PersonalizedPrescriptionHeldWorkloadPolicyV1
 ): number {
-  let count = 0;
-  let previous: OrdinaryBikeTelemetrySample | undefined;
-  for (const sample of samples) {
-    if (!hasFreshObservedResistance(sample)) {
-      previous = undefined;
-      continue;
-    }
-    if (previous && continuousObservations(previous, sample, policy) &&
-        previous.observedResistance!.value !== sample.observedResistance!.value) count += 1;
-    previous = sample;
-  }
-  return count;
+  return countContinuousResistanceChanges(samples.map((sample) => ({
+    activeSec: sample.activeSec,
+    observedAt: sample.observedAt,
+    ...(hasFreshObservedResistance(sample) ? { observedResistance: sample.observedResistance!.value } : {}),
+  })), policy);
 }
 
 const HELD_WORKLOAD_EMPTY_EXCLUSIONS = () => ({
@@ -590,6 +556,7 @@ function characterizeHeldWorkload(
   const windows = stableObservedResistanceWindows(bike, observedPowerProvenance, policy);
   const excluded = HELD_WORKLOAD_EMPTY_EXCLUSIONS();
   const signed: number[] = [];
+  const absolute: number[] = [];
   const observed: number[] = [];
   const predicted: number[] = [];
   const cadence: number[] = [];
@@ -604,7 +571,7 @@ function characterizeHeldWorkload(
     let qualifying = 0;
     let qualifyingFirst: number | undefined;
     let qualifyingLast: number | undefined;
-    for (let second = first + policy.settlingSeconds; second <= last; second += 1) {
+    for (const second of settledActiveSeconds(first, last, policy.settlingSeconds)) {
       postSettlingDurationSec += 1;
       const sample = bySecond.get(second);
       if (!sample) { excluded.observationGap += 1; continue; }
@@ -616,8 +583,9 @@ function characterizeHeldWorkload(
       }
       const heartRate = hrBySecond.get(second);
       if (heartRate === undefined) { excluded.heartRateUnavailable += 1; continue; }
-      const prediction = model.interceptBpm + model.slopeBpmPerWatt * watts;
-      signed.push(heartRate - prediction);
+      const prediction = predictForwardResponse({ intercept: model.interceptBpm, slope: model.slopeBpmPerWatt }, watts);
+      signed.push(signedPredictionError(heartRate, prediction));
+      absolute.push(absolutePredictionError(heartRate, prediction));
       observed.push(heartRate);
       predicted.push(prediction);
       if (sample.cadenceRpm) cadence.push(sample.cadenceRpm.value);
@@ -663,7 +631,7 @@ function characterizeHeldWorkload(
       observedHeartRateMedianBpm: median(observed),
       predictedHeartRateMedianBpm: median(predicted),
       signedErrorBpm: distribution(signed),
-      absoluteErrorBpm: distribution(signed.map(Math.abs)),
+      absoluteErrorBpm: distribution(absolute),
     },
     ...(cadence.length > 0 ? {
       cadenceRpm: {
@@ -690,9 +658,9 @@ function characterizePhase(
   const closedLoop = characterizeClosedLoopPhase(shadow, response, evaluation, hrBySecond, bikeBySecond, audit, policy);
   const start = response?.activeStartSec ?? shadow.activeStartSec;
   const completedEnd = start === undefined ? undefined : start + (response?.completedDurationSec ?? 0);
-  const bike = start === undefined || completedEnd === undefined ? [] : [...bikeBySecond.values()]
-    .filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
-    .sort((a, b) => a.activeSec - b.activeSec);
+  const bike = start === undefined || completedEnd === undefined ? [] : orderByActiveSecond(
+    [...bikeBySecond.values()].filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
+  );
   const windows: HeldWorkloadWindowAnalysisInternal[] = [];
   const heldWorkloadForwardResponse = characterizeHeldWorkload(
     shadow,
@@ -734,9 +702,9 @@ function characterizeClosedLoopPhase(
   const hrEntries = start === undefined || completedEnd === undefined ? [] : [...hrBySecond.entries()]
     .filter(([second]) => second >= start && second < completedEnd)
     .sort(([a], [b]) => a - b);
-  const bike = start === undefined || completedEnd === undefined ? [] : [...bikeBySecond.values()]
-    .filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
-    .sort((a, b) => a.activeSec - b.activeSec);
+  const bike = start === undefined || completedEnd === undefined ? [] : orderByActiveSecond(
+    [...bikeBySecond.values()].filter((sample) => sample.activeSec >= start && sample.activeSec < completedEnd)
+  );
   const powerSamples = bike.filter((sample) => sample.watts !== undefined);
   const joint = powerSamples.filter((sample) => hrBySecond.has(sample.activeSec));
   const coverage = {

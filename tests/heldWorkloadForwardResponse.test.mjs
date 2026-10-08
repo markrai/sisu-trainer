@@ -10,6 +10,7 @@ import {
 import {
   PHASE_E2_CHARACTERIZATION_POLICY_V1,
   PHASE_E2_HELD_WORKLOAD_POLICY_V1,
+  analyzeHeldWorkloadForwardResponseInternal,
   characterizePersonalizedPrescription,
   parsePersonalizedPrescriptionCharacterization,
 } from "../dist/personalizedPrescriptionCharacterization.js";
@@ -47,6 +48,8 @@ const ATHLETE = "athlete-held";
 const KG_PER_LB = 0.45359237;
 // Frozen calibration: predicted HR = 60 + 0.5 × watts over the observed 100–200 W domain.
 const predicted = (watts) => 60 + 0.5 * watts;
+const refactorFixtures = JSON.parse(readFileSync(
+  new URL("./fixtures/e2-v3-forward-response-refactor.json", import.meta.url), "utf8"));
 
 function profile() {
   return {
@@ -147,6 +150,7 @@ function run(overrides = {}) {
     wallOffsetMsAt: () => 0,
     sessionId: SESSION,
     reverseInput: false,
+    omitBikeAt: () => false,
     ...overrides,
   };
   const duration = (options.warm + options.sustain) * 60;
@@ -166,7 +170,7 @@ function run(overrides = {}) {
     const hr = options.hrAt(second);
     return hr === undefined ? [] : [{ session_id: SESSION, timestamp_sec: second, hr }];
   });
-  const bikeSamples = seconds.map((second) => bikeSample(second, options));
+  const bikeSamples = seconds.flatMap((second) => options.omitBikeAt(second) ? [] : [bikeSample(second, options)]);
   if (options.reverseInput) {
     hrSamples.reverse();
     bikeSamples.reverse();
@@ -182,7 +186,7 @@ function run(overrides = {}) {
     bikeSamples,
   });
   const summary = { external_session_id: SESSION, athlete_id: ATHLETE, day: "Tuesday", intent: "aerobic_base", activity: "bike" };
-  const characterization = characterizePersonalizedPrescription({
+  const input = {
     summary,
     shadowEvaluation: e1,
     workoutResponse: response,
@@ -192,9 +196,10 @@ function run(overrides = {}) {
     policy: PHASE_E2_CHARACTERIZATION_POLICY_V1,
     heldWorkloadPolicy: PHASE_E2_HELD_WORKLOAD_POLICY_V1,
     createdAt: CREATED_AT,
-  });
+  };
+  const characterization = characterizePersonalizedPrescription(input);
   const phase = characterization.phases.find((item) => item.phaseId === "sustain");
-  return { e1, response, characterization, phase, held: phase.heldWorkloadForwardResponse };
+  return { e1, response, characterization, phase, held: phase.heldWorkloadForwardResponse, input };
 }
 
 function clone(value) {
@@ -251,6 +256,49 @@ test("E2 v3 is current, keeps the closed-loop v2 fields, and records the frozen 
   assert.deepEqual(Object.keys(asHistoricalV2(characterization)).sort(),
     Object.keys(characterization).filter((key) => !key.startsWith("heldWorkload")).sort());
   assert.equal(PHASE_E2_HELD_WORKLOAD_POLICY_V1.settlingSeconds, 120);
+});
+
+test("shared-helper refactor preserves the complete measured-watts E2 v3 record", () => {
+  const result = run({
+    hrAt: (second) => 145 + (second % 4),
+    wattsAt: (second) => 120 + (second % 3) * 10,
+  });
+  assert.deepEqual(result.characterization, refactorFixtures.measuredWatts);
+});
+
+test("shared-helper refactor preserves the complete calibrated-watts E2 v3 record", () => {
+  const result = run({
+    calibrationSource: "calibrated_at_verified_cadence",
+    sourceAt: () => "calibrated_watts",
+    hrAt: (second) => 140 + (second % 3),
+    wattsAt: (second) => 130 + (second % 2) * 20,
+    cadenceAt: (second) => 67 + (second % 7),
+  });
+  assert.deepEqual(result.characterization, refactorFixtures.calibratedWatts);
+});
+
+test("complex stable-window fixture pins boundaries, exclusions, and transient reconstruction", () => {
+  const result = run({
+    sustain: 10,
+    calibrationSource: "calibrated_at_verified_cadence",
+    sourceAt: () => "calibrated_watts",
+    resistanceAt: (second) => second < 180 ? 8 : second < 360 ? 9 : 10,
+    wallOffsetMsAt: (second) => second >= 340 ? 10_000 : 0,
+    cadenceAt: (second) => second >= 370 && second < 375 ? 85 : 70,
+    wattsAt: (second) => second >= 500 && second < 505 ? undefined : second >= 530 && second < 535 ? 250 : 150,
+    hrAt: (second) => second >= 540 && second < 545 ? undefined : 140,
+    omitBikeAt: (second) => second === 510,
+  });
+  const analysis = analyzeHeldWorkloadForwardResponseInternal(result.input);
+  assert.deepEqual({ held: result.held, analysis: analysis.phases[0] }, refactorFixtures.complexStableWindows);
+
+  const windows = analysis.phases[0].windows;
+  assert.equal(windows.reduce((sum, window) => sum + window.qualifyingDurationSec, 0),
+    result.held.stableResistance.qualifyingDurationSec);
+  assert.equal(windows.filter((window) => window.qualifyingDurationSec > 0).length,
+    result.held.stableResistance.qualifyingWindowCount);
+  assert.deepEqual(analysis.record, result.characterization,
+    "transient analysis must return the exact persisted E2 v3 aggregate");
 });
 
 test("unchanged fresh observed resistance forms one stable window with post-settling forward evidence", () => {
@@ -367,16 +415,21 @@ test("HR clearly outside the legacy target is valid held-workload forward eviden
 
 test("the held-workload reducer contains no HR-band, agreement, or controller-success filter", () => {
   const source = readFileSync(new URL("../src/personalizedPrescriptionCharacterization.ts", import.meta.url), "utf8");
+  const shared = readFileSync(new URL("../src/workloadForwardResponse.ts", import.meta.url), "utf8");
   const start = source.indexOf("function characterizeHeldWorkload(");
   const end = source.indexOf("\nfunction ", start + 1);
   const body = source.slice(start, end);
   assert.ok(body.length > 500);
   assert.doesNotMatch(body, /activeHeartRate|insideBand|candidateContainsObservedMedian|agreement|inside_candidate|candidatePower|saturation/);
-  for (const helper of ["stableObservedResistanceWindows", "heldObservationTrustworthy", "continuousObservations"]) {
+  for (const helper of ["stableObservedResistanceWindows", "heldObservationTrustworthy"]) {
     const helperStart = source.indexOf(`function ${helper}(`);
     const helperBody = source.slice(helperStart, source.indexOf("\nfunction ", helperStart + 1));
     assert.doesNotMatch(helperBody, /desiredResistance|commandedResistance|activeHeartRate/, helper);
   }
+  assert.match(source, /from "\.\/workloadForwardResponse\.js"/);
+  assert.doesNotMatch(shared,
+    /PHASE_E2|PersonalizedPrescription|FitnessState|sessionStore|localStorage|indexedDB|diagnostic|E4A|document\./,
+    "the shared mechanics must remain policy-neutral and portable");
 });
 
 test("measured-watts forward prediction follows the frozen calibration equation", () => {
