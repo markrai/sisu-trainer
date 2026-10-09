@@ -20,8 +20,13 @@ function newRuntimeState(sessionId) {
  * start (carry-over, learned, or default), or a live HR evaluation.
  */
 export function classifyRecommendationOrigin(input) {
-    if (input.holdResistance != null && Number.isFinite(input.holdResistance))
+    if (input.holdResistance != null && Number.isFinite(input.holdResistance)) {
+        if (input.controlMode === "prospective_fixed_load")
+            return "scripted_phase_program";
+        if (input.controlMode === "legacy_hr_control")
+            return "scripted_phase_program";
         return "vo2_protocol_fixed_resistance";
+    }
     if (input.phaseKind === "warmup" || input.phaseKind === "cooldown")
         return "scripted_phase_program";
     if (input.phaseKind === "recovery")
@@ -107,8 +112,25 @@ function completedShortWorkFromPending(pending, liveSamples) {
     };
 }
 export function updateMachineGuidanceRuntime(input, storage) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e;
     ensureSession(input.sessionId);
+    if (input.controlAuthority === null)
+        return null;
+    if (input.controlAuthority && input.controlAuthority.sessionId !== input.sessionId)
+        return null;
+    const controlMode = (_b = (_a = input.controlAuthority) === null || _a === void 0 ? void 0 : _a.mode) !== null && _b !== void 0 ? _b : (input.holdResistance != null && Number.isFinite(input.holdResistance)
+        ? "vo2_protocol"
+        : "legacy_hr_control");
+    const prospectiveFixedLoad = controlMode === "prospective_fixed_load";
+    if (prospectiveFixedLoad && ((_c = input.controlAuthority) === null || _c === void 0 ? void 0 : _c.source) !== "frozen")
+        return null;
+    if (prospectiveFixedLoad && (!Number.isInteger(input.holdResistance) ||
+        input.holdResistance < 1 ||
+        input.holdResistance > 15))
+        return null;
+    if (controlMode === "vo2_protocol" && input.controlAuthority &&
+        (input.holdResistance == null || !Number.isFinite(input.holdResistance)))
+        return null;
     runtime.recentHeartRates = runtime.recentHeartRates.filter((sample) => sample.elapsedSeconds >= input.workoutElapsedSeconds - 15 &&
         sample.elapsedSeconds <= input.workoutElapsedSeconds);
     const machineId = getSelectedMachineId(input.activity, storage);
@@ -128,7 +150,10 @@ export function updateMachineGuidanceRuntime(input, storage) {
         runtime.pendingShortWork = undefined;
         runtime.decisionAudit = createMachineDecisionAuditState();
     }
-    const leavingShortWork = runtime.pendingShortWork !== undefined &&
+    // Prospective authority branches before all ordinary HR/learning/timing work.
+    if (prospectiveFixedLoad)
+        runtime.pendingShortWork = undefined;
+    const leavingShortWork = !prospectiveFixedLoad && runtime.pendingShortWork !== undefined &&
         (input.phaseId !== runtime.pendingShortWork.phaseId || input.phaseKind !== "work");
     const completedShortWork = leavingShortWork && runtime.pendingShortWork && !runtime.guidanceState.shortIntervalEvaluated
         ? completedShortWorkFromPending(runtime.pendingShortWork, runtime.recentHeartRates)
@@ -136,7 +161,7 @@ export function updateMachineGuidanceRuntime(input, storage) {
     if (leavingShortWork)
         runtime.pendingShortWork = undefined;
     const phaseChanged = runtime.lastPhaseId !== input.phaseId;
-    const learnedStartingResistance = input.phaseKind === "work" && input.intent
+    const learnedStartingResistance = !prospectiveFixedLoad && input.phaseKind === "work" && input.intent
         ? lookupLearnedWorkStart({
             machineId,
             machineProfileVersion: machine.profileVersion,
@@ -145,7 +170,7 @@ export function updateMachineGuidanceRuntime(input, storage) {
             durationSeconds: input.phaseDurationSeconds,
         }, storage)
         : undefined;
-    const personalizedTiming = input.phaseKind === "work" && input.intent && input.phaseDurationSeconds > 75
+    const personalizedTiming = !prospectiveFixedLoad && input.phaseKind === "work" && input.intent && input.phaseDurationSeconds > 75
         ? lookupPersonalizedTiming({
             machineId,
             machineProfileVersion: machine.profileVersion,
@@ -164,11 +189,11 @@ export function updateMachineGuidanceRuntime(input, storage) {
         phaseDurationSeconds: input.phaseDurationSeconds,
         workoutElapsedSeconds: input.workoutElapsedSeconds,
         intervalIndex: input.intervalIndex,
-        heartRateBpm: input.heartRateBpm,
-        targetHeartRateMin: input.targetHeartRateMin,
-        targetHeartRateMax: input.targetHeartRateMax,
-        intent: input.intent,
-        recentHeartRates: runtime.recentHeartRates,
+        heartRateBpm: prospectiveFixedLoad ? undefined : input.heartRateBpm,
+        targetHeartRateMin: prospectiveFixedLoad ? undefined : input.targetHeartRateMin,
+        targetHeartRateMax: prospectiveFixedLoad ? undefined : input.targetHeartRateMax,
+        intent: prospectiveFixedLoad ? undefined : input.intent,
+        recentHeartRates: prospectiveFixedLoad ? [] : runtime.recentHeartRates,
         previousGuidance: runtime.previousGuidance,
         completedShortWork,
         learnedStartingResistance,
@@ -197,13 +222,13 @@ export function updateMachineGuidanceRuntime(input, storage) {
         workPhaseStarted: result.workPhaseStarted,
         workEvaluation: result.workEvaluation,
     });
-    if (input.phaseKind === "work" && input.phaseDurationSeconds <= 75) {
+    if (!prospectiveFixedLoad && input.phaseKind === "work" && input.phaseDurationSeconds <= 75) {
         runtime.pendingShortWork = {
             phaseId: input.phaseId,
             phaseDurationSeconds: input.phaseDurationSeconds,
             phaseElapsedSeconds: input.phaseElapsedSeconds,
             workoutElapsedSeconds: input.workoutElapsedSeconds,
-            resistance: (_b = (_a = result.state.currentResistance) !== null && _a !== void 0 ? _a : result.guidance.resistance) !== null && _b !== void 0 ? _b : 11,
+            resistance: (_e = (_d = result.state.currentResistance) !== null && _d !== void 0 ? _d : result.guidance.resistance) !== null && _e !== void 0 ? _e : 11,
             targetHeartRateMin: input.targetHeartRateMin,
             targetHeartRateMax: input.targetHeartRateMax,
             recentHeartRates: workPhaseHeartRates(runtime.recentHeartRates, input.workoutElapsedSeconds, input.phaseElapsedSeconds),
@@ -228,6 +253,7 @@ export function updateMachineGuidanceRuntime(input, storage) {
         phaseChanged,
         voiceEvent,
         actuationOrigin: classifyRecommendationOrigin({
+            controlMode,
             phaseKind: input.phaseKind,
             holdResistance: input.holdResistance,
             guidancePhaseChanged: priorGuidanceState.currentPhaseId !== input.phaseId,

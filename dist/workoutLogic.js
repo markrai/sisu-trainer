@@ -246,6 +246,10 @@ function startWorkout() {
     }
     beginWorkout();
 }
+/** Current product entry points may select only the two already-shipping authorities. */
+function controlModeForUserFacingWorkout(day) {
+    return isVo2WorkoutSelector(day) ? "vo2_protocol" : "legacy_hr_control";
+}
 /** Freeze the plan inputs the live runtime will use for this session. */
 function capturePhasePlanSnapshot(day, resolvedAt = new Date().toISOString()) {
     var _a;
@@ -344,11 +348,11 @@ function beginWorkout(activity) {
         if (typeof window.generateUUID === "function") {
             sessionId = window.generateUUID();
             void releaseReplacedSessionTelemetry(day, sessionId);
-            startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+            startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
         }
         else {
             void releaseReplacedSessionTelemetry(day, null);
-            startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+            startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
         }
         persistVo2ProtocolRuntime(day, runtime);
         resetMachineGuidanceRuntime(sessionId);
@@ -374,14 +378,14 @@ function beginWorkout(activity) {
     if (typeof window.generateUUID === "function") {
         sessionId = window.generateUUID();
         void releaseReplacedSessionTelemetry(day, sessionId);
-        startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+        startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
         if (typeof window.initDB === "function") {
             window.initDB().catch((err) => console.error("Failed to init DB:", err));
         }
     }
     else {
         void releaseReplacedSessionTelemetry(day, null);
-        startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+        startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
     }
     resetMachineGuidanceRuntime(sessionId);
     if (typeof window.requestWakeLock === "function") {
@@ -698,4 +702,4 @@ export function registerWorkoutLogicGlobals() {
     window.hrTargetText = hrTargetText;
     window.parseHrTargetRange = parseHrTargetRange;
 }
-export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, requestVo2LimitReached, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, releaseReplacedSessionTelemetry, capturePhasePlanSnapshot, captureWorkoutStartContext, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, markVo2ProtocolLimitReached, };
+export { todayName, getStartTime, isPaused, getPausedElapsed, pauseWorkout, resumeWorkout, startWorkout, beginWorkout, restartWorkout, requestEarlyCooldown, requestVo2LimitReached, planEarlyCooldownTransition, actualElapsedSeconds, activeElapsedSeconds, lastPersistedElapsedFromHrSamples, workoutRelativeHrSample, recordVo2ActiveBikeTelemetry, ordinaryActiveBikeTelemetrySample, releaseReplacedSessionTelemetry, capturePhasePlanSnapshot, captureWorkoutStartContext, controlModeForUserFacingWorkout, getPhase, formatTime, adjustedBlockLengths, updateRing, hrTargetText, parseHrTargetRange, tickVo2Protocol, tickVo2ProtocolWithCanonicalHr, markVo2ProtocolCancelled, markVo2ProtocolLimitReached, };

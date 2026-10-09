@@ -23,6 +23,7 @@ import {
 } from "./sessionStore.js";
 import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
+import type { HistoricalSessionControlMode } from "./sessionControlMode.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
 import {
   isVo2WorkoutSelector,
@@ -336,6 +337,11 @@ function startWorkout() {
   beginWorkout();
 }
 
+/** Current product entry points may select only the two already-shipping authorities. */
+function controlModeForUserFacingWorkout(day: string): HistoricalSessionControlMode {
+  return isVo2WorkoutSelector(day) ? "vo2_protocol" : "legacy_hr_control";
+}
+
 /** Freeze the plan inputs the live runtime will use for this session. */
 function capturePhasePlanSnapshot(day: string, resolvedAt = new Date().toISOString()): PhasePlanSnapshot | null {
   const base = getPlan()[day];
@@ -437,10 +443,12 @@ function beginWorkout(activity?: Activity) {
     if (typeof (window as any).generateUUID === "function") {
       sessionId = (window as any).generateUUID();
       void releaseReplacedSessionTelemetry(day, sessionId);
-      startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+      startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan,
+        startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
     } else {
       void releaseReplacedSessionTelemetry(day, null);
-      startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+      startSession(day, startTime, null, resolved, undefined, startContext.phasePlan,
+        startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
     }
     persistVo2ProtocolRuntime(day, runtime);
     resetMachineGuidanceRuntime(sessionId);
@@ -464,13 +472,15 @@ function beginWorkout(activity?: Activity) {
   if (typeof (window as any).generateUUID === "function") {
     sessionId = (window as any).generateUUID();
     void releaseReplacedSessionTelemetry(day, sessionId);
-    startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+    startSession(day, startTime, sessionId, resolved, undefined, startContext.phasePlan,
+      startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
     if (typeof (window as any).initDB === "function") {
       (window as any).initDB().catch((err: any) => console.error("Failed to init DB:", err));
     }
   } else {
     void releaseReplacedSessionTelemetry(day, null);
-    startSession(day, startTime, null, resolved, undefined, startContext.phasePlan, startContext.athleteFitnessSnapshot);
+    startSession(day, startTime, null, resolved, undefined, startContext.phasePlan,
+      startContext.athleteFitnessSnapshot, undefined, controlModeForUserFacingWorkout(day));
   }
   resetMachineGuidanceRuntime(sessionId);
 
@@ -865,6 +875,7 @@ export {
   releaseReplacedSessionTelemetry,
   capturePhasePlanSnapshot,
   captureWorkoutStartContext,
+  controlModeForUserFacingWorkout,
   getPhase,
   formatTime,
   adjustedBlockLengths,

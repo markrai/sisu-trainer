@@ -943,6 +943,7 @@ function renderWorkout(state) {
             intent: (_d = active.workoutMetadata[active.day]) === null || _d === void 0 ? void 0 : _d.intent,
             holdResistance: hold === null || hold === void 0 ? void 0 : hold.resistance,
             holdCadenceRpm: hold === null || hold === void 0 ? void 0 : hold.cadenceRpm,
+            controlAuthority: session.controlAuthority,
         })
         : null;
     syncBikeBridgeGuidance(machineUpdate, true, active.paused, session.sessionId ? { day: active.day, sessionId: session.sessionId } : undefined);

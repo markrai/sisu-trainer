@@ -35,6 +35,14 @@ import {
   writeInProgressExecutionProvenance,
 } from "./executionProvenance.js";
 import { calibrationIdentityFromE1Snapshot, resolveWorkoutCalibrationMachine } from "./calibrationMachineProvenance.js";
+import {
+  clearFrozenSessionControlMode,
+  freezeSessionControlMode,
+  resolveSessionControlAuthority,
+  sessionControlModeKey,
+  type SessionControlAuthority,
+  type SessionControlMode,
+} from "./sessionControlMode.js";
 
 const MAX_SESSION_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -83,6 +91,8 @@ export interface SessionData {
    * sessions started without it; never reconstructed from current selection.
    */
   executionProvenance: WorkoutExecutionProvenanceV1 | null;
+  /** Frozen runtime command authority, or the narrow pre-seam compatibility authority. */
+  controlAuthority: SessionControlAuthority | null;
 }
 
 function storageOrBrowser(storage?: SessionStorage): SessionStorage {
@@ -233,6 +243,12 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
   })();
   const sessionId = store.getItem("session_id_" + day);
   const executionProvenance = readInProgressExecutionProvenance(day, store);
+  const controlAuthority = resolveSessionControlAuthority(
+    day,
+    sessionId,
+    persistedVo2Runtime.runtime !== null,
+    store
+  );
   return {
     startTime: store.getItem("start_" + day),
     sessionId,
@@ -253,6 +269,7 @@ export function getSession(day: string, storage?: SessionStorage): SessionData {
       ? { blockedVo2ProtocolVersion: persistedVo2Runtime.observedProtocolVersion }
       : {}),
     executionProvenance: executionProvenance && executionProvenance.sessionId === sessionId ? executionProvenance : null,
+    controlAuthority,
   };
 }
 
@@ -264,9 +281,15 @@ export function startSession(
   storage?: SessionStorage,
   phasePlan?: PhasePlanSnapshot | null,
   athleteFitnessSnapshotOverride?: AthleteFitnessSnapshot,
-  machineProvenanceOverride?: WorkoutMachineProvenanceV1
+  machineProvenanceOverride?: WorkoutMachineProvenanceV1,
+  controlMode?: SessionControlMode
 ): void {
   const store = storageOrBrowser(storage);
+  const previousSessionId = store.getItem("session_id_" + day);
+  if (sessionId != null && controlMode && previousSessionId === sessionId && store.getItem(sessionControlModeKey(day)) != null) {
+    // Validate a same-session retry before any session-owned state is cleared.
+    freezeSessionControlMode(day, sessionId, controlMode, store);
+  }
   store.removeItem(earlyCooldownKey(day));
   store.removeItem(pausedDurationKey(day));
   store.removeItem(pauseWallStartKey(day));
@@ -278,6 +301,7 @@ export function startSession(
   store.removeItem(legacyVo2ProtocolPlanKey(day));
   store.removeItem(vo2ProtocolRuntimeKey(day));
   store.removeItem(executionProvenanceKey(day));
+  clearFrozenSessionControlMode(day, store);
   store.setItem("start_" + day, String(startTime));
   if (sessionId != null) {
     store.setItem("session_id_" + day, sessionId);
@@ -301,6 +325,7 @@ export function startSession(
     );
   }
   if (sessionId != null) {
+    if (controlMode) freezeSessionControlMode(day, sessionId, controlMode, store);
     // Freeze provenance once, at start. Reload reads it back; finalization never re-reads selection.
     const evaluation = phasePlan?.shadowPrescriptionEvaluation;
     const calibrationIdentity = evaluation
@@ -360,6 +385,7 @@ export function clearSession(day: string, storage?: SessionStorage): void {
   store.removeItem(athleteIdKey(day));
   store.removeItem(athleteFitnessSnapshotKey(day));
   store.removeItem(executionProvenanceKey(day));
+  clearFrozenSessionControlMode(day, store);
   store.removeItem(legacyVo2ProtocolPlanKey(day));
   store.removeItem(vo2ProtocolRuntimeKey(day));
 }

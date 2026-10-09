@@ -1,4 +1,5 @@
 import type { Activity, ResistanceActuationOriginV1, WorkoutPhaseKind } from "../types.js";
+import type { SessionControlAuthority, SessionControlMode } from "../sessionControlMode.js";
 import { createMachineGuidanceState, getMachineGuidance, isSameMachineRecommendation } from "./guidance.js";
 import { lookupLearnedWorkStart } from "./learning/index.js";
 import { lookupPersonalizedTiming } from "./dynamics/index.js";
@@ -58,6 +59,8 @@ export interface MachineGuidanceRuntimeInput {
   intent?: string;
   holdResistance?: number;
   holdCadenceRpm?: number;
+  /** Exact session-owned authority. Null is an integrity failure and fails closed. */
+  controlAuthority?: SessionControlAuthority | null;
 }
 
 export interface MachineGuidanceRuntimeUpdate {
@@ -98,13 +101,18 @@ function newRuntimeState(sessionId: string | null): MachineRuntimeState {
  * start (carry-over, learned, or default), or a live HR evaluation.
  */
 export function classifyRecommendationOrigin(input: {
+  controlMode?: SessionControlMode;
   phaseKind: WorkoutPhaseKind;
   holdResistance?: number;
   guidancePhaseChanged: boolean;
   priorNextWorkResistance?: number;
   learnedStartingResistance?: number;
 }): ResistanceActuationOriginV1 {
-  if (input.holdResistance != null && Number.isFinite(input.holdResistance)) return "vo2_protocol_fixed_resistance";
+  if (input.holdResistance != null && Number.isFinite(input.holdResistance)) {
+    if (input.controlMode === "prospective_fixed_load") return "scripted_phase_program";
+    if (input.controlMode === "legacy_hr_control") return "scripted_phase_program";
+    return "vo2_protocol_fixed_resistance";
+  }
   if (input.phaseKind === "warmup" || input.phaseKind === "cooldown") return "scripted_phase_program";
   if (input.phaseKind === "recovery") return input.guidancePhaseChanged ? "scripted_phase_program" : "automatic_hr_control";
   if (!input.guidancePhaseChanged) return "automatic_hr_control";
@@ -210,6 +218,21 @@ export function updateMachineGuidanceRuntime(
   storage?: EquipmentStorage
 ): MachineGuidanceRuntimeUpdate | null {
   ensureSession(input.sessionId);
+  if (input.controlAuthority === null) return null;
+  if (input.controlAuthority && input.controlAuthority.sessionId !== input.sessionId) return null;
+  const controlMode: SessionControlMode = input.controlAuthority?.mode ??
+    (input.holdResistance != null && Number.isFinite(input.holdResistance)
+      ? "vo2_protocol"
+      : "legacy_hr_control");
+  const prospectiveFixedLoad = controlMode === "prospective_fixed_load";
+  if (prospectiveFixedLoad && input.controlAuthority?.source !== "frozen") return null;
+  if (prospectiveFixedLoad && (
+    !Number.isInteger(input.holdResistance) ||
+    (input.holdResistance as number) < 1 ||
+    (input.holdResistance as number) > 15
+  )) return null;
+  if (controlMode === "vo2_protocol" && input.controlAuthority &&
+    (input.holdResistance == null || !Number.isFinite(input.holdResistance))) return null;
   runtime.recentHeartRates = runtime.recentHeartRates.filter(
     (sample) => sample.elapsedSeconds >= input.workoutElapsedSeconds - 15 &&
       sample.elapsedSeconds <= input.workoutElapsedSeconds
@@ -228,14 +251,16 @@ export function updateMachineGuidanceRuntime(
     runtime.pendingShortWork = undefined;
     runtime.decisionAudit = createMachineDecisionAuditState();
   }
-  const leavingShortWork = runtime.pendingShortWork !== undefined &&
+  // Prospective authority branches before all ordinary HR/learning/timing work.
+  if (prospectiveFixedLoad) runtime.pendingShortWork = undefined;
+  const leavingShortWork = !prospectiveFixedLoad && runtime.pendingShortWork !== undefined &&
     (input.phaseId !== runtime.pendingShortWork.phaseId || input.phaseKind !== "work");
   const completedShortWork = leavingShortWork && runtime.pendingShortWork && !runtime.guidanceState.shortIntervalEvaluated
     ? completedShortWorkFromPending(runtime.pendingShortWork, runtime.recentHeartRates)
     : undefined;
   if (leavingShortWork) runtime.pendingShortWork = undefined;
   const phaseChanged = runtime.lastPhaseId !== input.phaseId;
-  const learnedStartingResistance = input.phaseKind === "work" && input.intent
+  const learnedStartingResistance = !prospectiveFixedLoad && input.phaseKind === "work" && input.intent
     ? lookupLearnedWorkStart(
         {
           machineId,
@@ -247,7 +272,7 @@ export function updateMachineGuidanceRuntime(
         storage
       )
     : undefined;
-  const personalizedTiming = input.phaseKind === "work" && input.intent && input.phaseDurationSeconds > 75
+  const personalizedTiming = !prospectiveFixedLoad && input.phaseKind === "work" && input.intent && input.phaseDurationSeconds > 75
     ? lookupPersonalizedTiming(
         {
           machineId,
@@ -270,11 +295,11 @@ export function updateMachineGuidanceRuntime(
       phaseDurationSeconds: input.phaseDurationSeconds,
       workoutElapsedSeconds: input.workoutElapsedSeconds,
       intervalIndex: input.intervalIndex,
-      heartRateBpm: input.heartRateBpm,
-      targetHeartRateMin: input.targetHeartRateMin,
-      targetHeartRateMax: input.targetHeartRateMax,
-      intent: input.intent,
-      recentHeartRates: runtime.recentHeartRates,
+      heartRateBpm: prospectiveFixedLoad ? undefined : input.heartRateBpm,
+      targetHeartRateMin: prospectiveFixedLoad ? undefined : input.targetHeartRateMin,
+      targetHeartRateMax: prospectiveFixedLoad ? undefined : input.targetHeartRateMax,
+      intent: prospectiveFixedLoad ? undefined : input.intent,
+      recentHeartRates: prospectiveFixedLoad ? [] : runtime.recentHeartRates,
       previousGuidance: runtime.previousGuidance,
       completedShortWork,
       learnedStartingResistance,
@@ -310,7 +335,7 @@ export function updateMachineGuidanceRuntime(
     workPhaseStarted: result.workPhaseStarted,
     workEvaluation: result.workEvaluation,
   });
-  if (input.phaseKind === "work" && input.phaseDurationSeconds <= 75) {
+  if (!prospectiveFixedLoad && input.phaseKind === "work" && input.phaseDurationSeconds <= 75) {
     runtime.pendingShortWork = {
       phaseId: input.phaseId,
       phaseDurationSeconds: input.phaseDurationSeconds,
@@ -345,6 +370,7 @@ export function updateMachineGuidanceRuntime(
     phaseChanged,
     voiceEvent,
     actuationOrigin: classifyRecommendationOrigin({
+      controlMode,
       phaseKind: input.phaseKind,
       holdResistance: input.holdResistance,
       guidancePhaseChanged: priorGuidanceState.currentPhaseId !== input.phaseId,

@@ -488,6 +488,46 @@ test("Bike Bridge reports each posted command with explicit origin; re-sends reu
   }
 });
 
+test("prospective fixed-load reconciliation keeps its scripted origin and decision identity", async () => {
+  const fake = fakeBridge();
+  const requests = [];
+  const outcomes = [];
+  const session = await readyBridge(fake, {
+    requested(value) { requests.push(value); return requests.length; },
+    resolved(token, outcome) { outcomes.push([token, outcome]); },
+  });
+  try {
+    session.onGuidance({
+      desiredResistance: 8,
+      recommendationChanged: true,
+      workoutActive: true,
+      paused: false,
+      actuationOrigin: "scripted_phase_program",
+    });
+    await waitUntil(() => outcomes.length === 1);
+    session.onGuidance({
+      desiredResistance: 8,
+      recommendationChanged: false,
+      workoutActive: true,
+      paused: true,
+    });
+    session.onGuidance({
+      desiredResistance: 8,
+      recommendationChanged: false,
+      workoutActive: true,
+      paused: false,
+    });
+    await waitUntil(() => outcomes.length === 2);
+    assert.deepEqual(requests.map((item) => [item.origin, item.trigger, item.requestedResistance]), [
+      ["scripted_phase_program", "decision", 8],
+      ["scripted_phase_program", "reconciliation_resend", 8],
+    ]);
+    assert.equal(requests[0].decisionId, requests[1].decisionId);
+  } finally {
+    session.stop();
+  }
+});
+
 test("provenance capture never changes posted commands, and observer failures are contained", async () => {
   const sequence = async (observer) => {
     const fake = fakeBridge();

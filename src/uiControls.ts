@@ -1079,6 +1079,7 @@ function renderWorkout(state: WorkoutDisplayState) {
         intent: active.workoutMetadata[active.day]?.intent,
         holdResistance: hold?.resistance,
         holdCadenceRpm: hold?.cadenceRpm,
+        controlAuthority: session.controlAuthority,
       })
     : null;
   syncBikeBridgeGuidance(machineUpdate, true, active.paused,
