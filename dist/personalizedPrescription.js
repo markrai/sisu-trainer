@@ -412,6 +412,23 @@ export function evaluatePersonalizedPrescription(input) {
         phases: input.legacyPrescription.phases.map((phase) => evaluatePhase(phase, input, evidence)),
     };
 }
+/**
+ * Read-only workout advice projected from the already-frozen E1 evaluation.
+ * Exact phase identity is required; fallback data is never promoted to advice.
+ */
+export function assessmentBasedWorkloadForPhase(evaluation, phaseId) {
+    const phase = evaluation === null || evaluation === void 0 ? void 0 : evaluation.phases.find((candidate) => candidate.phaseId === phaseId);
+    if ((phase === null || phase === void 0 ? void 0 : phase.outcome) !== "candidate" || !phase.candidatePower)
+        return null;
+    const { minWatts, maxWatts } = phase.candidatePower;
+    if (!Number.isInteger(minWatts) ||
+        !Number.isInteger(maxWatts) ||
+        minWatts <= 0 ||
+        minWatts > maxWatts) {
+        return null;
+    }
+    return { minWatts, maxWatts };
+}
 function parseHeartRate(value) {
     if (value === undefined)
         return undefined;

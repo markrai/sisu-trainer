@@ -24,6 +24,7 @@ h1 { font-size: 1.8rem; text-align: center; margin: 16px 0 18px; }
 .phase-box { display: flex; justify-content: space-between; align-items: center; font-size: 1.5rem; padding: 14px; background: #232323; border-radius: 12px; margin-top: 18px; }
 .phase-box .phase-name { flex: 1; text-align: left; }
 .phase-box .phase-time { flex: 0 0 auto; text-align: right; font-weight: 600; }
+.assessment-workload-advice { margin-top: 9px; color: rgba(255,255,255,0.68); font-size: 0.78rem; line-height: 1.35; text-align: center; font-variant-numeric: tabular-nums; }
 .machine-guidance { margin-top: 14px; padding: 14px; border: 1px solid rgba(61,124,255,0.55); border-radius: 12px; background: rgba(61,124,255,0.1); text-align: center; }
 .machine-guidance-name { font-size: 0.8rem; font-weight: 650; letter-spacing: 0.04em; text-transform: uppercase; opacity: 0.9; }
 .machine-guidance-values { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }

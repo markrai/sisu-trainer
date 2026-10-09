@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 
 import {
   PHASE_E1_SHADOW_POLICY,
+  assessmentBasedWorkloadForPhase,
   evaluatePersonalizedPrescription,
   parsePersonalizedPrescriptionEvaluation,
 } from "../dist/personalizedPrescription.js";
@@ -156,6 +157,77 @@ function onlyPhase(evaluation) {
 function fallbackReason(overrides = {}) {
   return onlyPhase(evaluatePersonalizedPrescription(input(overrides))).fallbackReason;
 }
+
+test("frozen E1 workload advice projects only exact candidate phases", () => {
+  const evaluation = evaluatePersonalizedPrescription(input());
+  evaluation.phases = [
+    {
+      ...evaluation.phases[0],
+      phaseId: "sustain",
+      outcome: "candidate",
+      candidatePower: { minWatts: 138, maxWatts: 151 },
+    },
+    {
+      ...evaluation.phases[0],
+      phaseId: "cooldown",
+      outcome: "fallback",
+      fallbackReason: "unsupported_phase",
+      candidatePower: undefined,
+    },
+  ];
+
+  assert.deepEqual(
+    assessmentBasedWorkloadForPhase(evaluation, "sustain"),
+    { minWatts: 138, maxWatts: 151 }
+  );
+  assert.equal(assessmentBasedWorkloadForPhase(evaluation, "cooldown"), null);
+  assert.equal(assessmentBasedWorkloadForPhase(evaluation, "warmup"), null);
+  assert.equal(assessmentBasedWorkloadForPhase(null, "sustain"), null);
+});
+
+test("frozen E1 workload advice uses exact repeated-interval phase identity", () => {
+  const evaluation = evaluatePersonalizedPrescription(input());
+  evaluation.phases = [
+    {
+      ...evaluation.phases[0],
+      phaseId: "cycle:0:0",
+      candidatePower: { minWatts: 138, maxWatts: 151 },
+      outcome: "candidate",
+    },
+    {
+      ...evaluation.phases[0],
+      phaseId: "cycle:1:0",
+      candidatePower: { minWatts: 145, maxWatts: 159 },
+      outcome: "candidate",
+    },
+  ];
+
+  assert.deepEqual(
+    assessmentBasedWorkloadForPhase(evaluation, "cycle:0:0"),
+    { minWatts: 138, maxWatts: 151 }
+  );
+  assert.deepEqual(
+    assessmentBasedWorkloadForPhase(evaluation, "cycle:1:0"),
+    { minWatts: 145, maxWatts: 159 }
+  );
+});
+
+test("frozen E1 workload advice never infers or accepts invalid candidate power", () => {
+  const evaluation = evaluatePersonalizedPrescription(input());
+  const noCandidate = structuredClone(evaluation);
+  delete noCandidate.phases[0].candidatePower;
+  assert.equal(assessmentBasedWorkloadForPhase(noCandidate, "sustain"), null);
+
+  for (const candidatePower of [
+    { minWatts: 0, maxWatts: 151 },
+    { minWatts: 152, maxWatts: 151 },
+    { minWatts: 138.5, maxWatts: 151 },
+  ]) {
+    const invalid = structuredClone(evaluation);
+    invalid.phases[0].candidatePower = candidatePower;
+    assert.equal(assessmentBasedWorkloadForPhase(invalid, "sustain"), null);
+  }
+});
 
 test("pure E1 resolver deterministically interpolates aerobic-base power and freezes exact evidence", () => {
   const first = evaluatePersonalizedPrescription(input());

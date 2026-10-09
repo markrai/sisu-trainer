@@ -6,6 +6,7 @@ import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
 import { formatHrvDisplay } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
+import { assessmentBasedWorkloadForPhase } from "./personalizedPrescription.js";
 import { createActuationProvenanceObserver } from "./actuationProvenanceObserver.js";
 import { buildScientificSessionEvidenceV2Contexts } from "./scientificSessionEvidence.js";
 import { isVo2WorkoutSelector, vo2ProtocolDisplayName, VO2_WORKOUT_SELECTOR_ID, } from "./vo2Protocol.js";
@@ -456,7 +457,7 @@ function resolvedPrescriptionForSession(day, blocks, session) {
     });
 }
 function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused, pausedElapsed, liveBpm, lastBpmUpdateTime) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     if (day === "Downregulation") {
         return { screen: "downregulation", day: "Downregulation", plan, workoutMetadata };
     }
@@ -503,6 +504,9 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         phaseDisplayName = "Workout";
     }
     const hrTargetTextValue = formatResolvedHeartRateTarget(resolvedPhaseTarget);
+    const assessmentBasedWorkload = isVo2WorkoutSelector(day)
+        ? null
+        : assessmentBasedWorkloadForPhase((_c = session.phasePlan) === null || _c === void 0 ? void 0 : _c.shadowPrescriptionEvaluation, phase.phaseId);
     const nowTime = Date.now();
     const liveBpmStale = lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
     return {
@@ -516,9 +520,10 @@ function deriveWorkoutState(day, plan, workoutMetadata, base, startTime, paused,
         elapsedSec,
         phase,
         phaseDisplayName,
-        activity: (_d = getActiveWorkoutActivity((_c = workoutMetadata[day]) === null || _c === void 0 ? void 0 : _c.activities, getSession(day).activity)) !== null && _d !== void 0 ? _d : null,
+        activity: (_e = getActiveWorkoutActivity((_d = workoutMetadata[day]) === null || _d === void 0 ? void 0 : _d.activities, session.activity)) !== null && _e !== void 0 ? _e : null,
         paused,
         hrTargetTextValue,
+        assessmentBasedWorkload,
         resolvedPhaseTarget,
         liveBpm: liveBpm !== null && liveBpm !== void 0 ? liveBpm : null,
         liveBpmStale,
@@ -557,6 +562,19 @@ function renderMachineGuidance(update) {
         }
     }
     renderBikeBridgeHud();
+}
+function renderAssessmentBasedWorkloadAdvice(workload) {
+    const advice = document.getElementById("assessmentWorkloadAdvice");
+    if (!advice)
+        return;
+    if (!workload) {
+        advice.textContent = "";
+        advice.hidden = true;
+        return;
+    }
+    advice.textContent =
+        `Your assessment-based workload: ${workload.minWatts}\u2013${workload.maxWatts} W`;
+    advice.hidden = false;
 }
 function renderBikeBridgeHud() {
     const live = document.getElementById("machineGuidanceBikeLive");
@@ -693,6 +711,7 @@ function renderWorkout(state) {
     const downregEl = document.getElementById("downregulationContainer");
     const workoutMainContent = document.getElementById("workoutMainContent");
     const workoutBlocksEl = document.getElementById("workoutBlocks");
+    renderAssessmentBasedWorkloadAdvice(null);
     if (state.screen === "downregulation") {
         if (workoutMainContent)
             workoutMainContent.style.display = "none";
@@ -907,6 +926,7 @@ function renderWorkout(state) {
     }
     if (hrTargetEl)
         hrTargetEl.textContent = active.hrTargetTextValue;
+    renderAssessmentBasedWorkloadAdvice(active.assessmentBasedWorkload);
     currentExpectedHeartRate = (_b = (_a = active.resolvedPhaseTarget) === null || _a === void 0 ? void 0 : _a.expectedHeartRate) !== null && _b !== void 0 ? _b : null;
     updateHeartPulse();
     if (active.liveBpmStale) {

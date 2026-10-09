@@ -35,6 +35,7 @@ import { handleWorkoutCompletion } from "./workoutLifecycle.js";
 import { connect as hrConnect, disconnect as hrDisconnect, onBpm, onHrvUpdate } from "./hrMonitor.js";
 import { formatHrvDisplay, type HrvDisplayModel } from "./platform/hrvDisplay.js";
 import { getSession } from "./sessionStore.js";
+import { assessmentBasedWorkloadForPhase } from "./personalizedPrescription.js";
 import { createActuationProvenanceObserver } from "./actuationProvenanceObserver.js";
 import { buildScientificSessionEvidenceV2Contexts, type RawWorkoutTelemetry } from "./scientificSessionEvidence.js";
 import {
@@ -584,6 +585,7 @@ type WorkoutDisplayState =
       activity: Activity | null;
       paused: boolean;
       hrTargetTextValue: string;
+      assessmentBasedWorkload: { minWatts: number; maxWatts: number } | null;
       resolvedPhaseTarget?: ResolvedWorkoutPhaseTarget;
       liveBpm: number | null;
       liveBpmStale: boolean;
@@ -650,6 +652,12 @@ function deriveWorkoutState(
   }
 
   const hrTargetTextValue = formatResolvedHeartRateTarget(resolvedPhaseTarget);
+  const assessmentBasedWorkload = isVo2WorkoutSelector(day)
+    ? null
+    : assessmentBasedWorkloadForPhase(
+        session.phasePlan?.shadowPrescriptionEvaluation,
+        phase.phaseId
+      );
   const nowTime = Date.now();
   const liveBpmStale =
     lastBpmUpdateTime != null && nowTime - lastBpmUpdateTime > BPM_TIMEOUT_MS;
@@ -665,9 +673,10 @@ function deriveWorkoutState(
     elapsedSec,
     phase,
     phaseDisplayName,
-    activity: getActiveWorkoutActivity(workoutMetadata[day]?.activities, getSession(day).activity) ?? null,
+    activity: getActiveWorkoutActivity(workoutMetadata[day]?.activities, session.activity) ?? null,
     paused,
     hrTargetTextValue,
+    assessmentBasedWorkload,
     resolvedPhaseTarget,
     liveBpm: liveBpm ?? null,
     liveBpmStale,
@@ -701,6 +710,21 @@ function renderMachineGuidance(update: MachineGuidanceRuntimeUpdate | null) {
     }
   }
   renderBikeBridgeHud();
+}
+
+function renderAssessmentBasedWorkloadAdvice(
+  workload: { minWatts: number; maxWatts: number } | null
+) {
+  const advice = document.getElementById("assessmentWorkloadAdvice");
+  if (!advice) return;
+  if (!workload) {
+    advice.textContent = "";
+    advice.hidden = true;
+    return;
+  }
+  advice.textContent =
+    `Your assessment-based workload: ${workload.minWatts}\u2013${workload.maxWatts} W`;
+  advice.hidden = false;
 }
 
 function renderBikeBridgeHud() {
@@ -847,6 +871,7 @@ function renderWorkout(state: WorkoutDisplayState) {
   const downregEl = document.getElementById("downregulationContainer");
   const workoutMainContent = document.getElementById("workoutMainContent");
   const workoutBlocksEl = document.getElementById("workoutBlocks");
+  renderAssessmentBasedWorkloadAdvice(null);
 
   if (state.screen === "downregulation") {
     if (workoutMainContent) (workoutMainContent as HTMLElement).style.display = "none";
@@ -1044,6 +1069,7 @@ function renderWorkout(state: WorkoutDisplayState) {
     phaseDisplayEl.dataset.phaseState = "active";
   }
   if (hrTargetEl) hrTargetEl.textContent = active.hrTargetTextValue;
+  renderAssessmentBasedWorkloadAdvice(active.assessmentBasedWorkload);
   currentExpectedHeartRate = active.resolvedPhaseTarget?.expectedHeartRate ?? null;
   updateHeartPulse();
   if (active.liveBpmStale) {

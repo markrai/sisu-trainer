@@ -58,7 +58,7 @@ export interface PhasePlanSnapshot {
   hrTargets: HrTargetsForDay | null;
   /** Versioned, frozen target resolution used by UI, guidance, evidence, and summary. */
   resolvedPrescription?: ResolvedWorkoutPrescription;
-  /** Phase E1 diagnostic only. It is never consulted by UI or machine guidance. */
+  /** Phase E1 shadow record. UI may project read-only advice; machine guidance never consumes it. */
   shadowPrescriptionEvaluation?: PersonalizedPrescriptionEvaluationV1;
 }
 

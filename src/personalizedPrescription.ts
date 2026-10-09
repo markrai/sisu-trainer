@@ -517,6 +517,28 @@ export function evaluatePersonalizedPrescription(
   };
 }
 
+/**
+ * Read-only workout advice projected from the already-frozen E1 evaluation.
+ * Exact phase identity is required; fallback data is never promoted to advice.
+ */
+export function assessmentBasedWorkloadForPhase(
+  evaluation: PersonalizedPrescriptionEvaluationV1 | null | undefined,
+  phaseId: string
+): { minWatts: number; maxWatts: number } | null {
+  const phase = evaluation?.phases.find((candidate) => candidate.phaseId === phaseId);
+  if (phase?.outcome !== "candidate" || !phase.candidatePower) return null;
+  const { minWatts, maxWatts } = phase.candidatePower;
+  if (
+    !Number.isInteger(minWatts) ||
+    !Number.isInteger(maxWatts) ||
+    minWatts <= 0 ||
+    minWatts > maxWatts
+  ) {
+    return null;
+  }
+  return { minWatts, maxWatts };
+}
+
 function parseHeartRate(value: unknown): ResolvedHeartRateTarget | null | undefined {
   if (value === undefined) return undefined;
   if (!isObject(value)) return null;
