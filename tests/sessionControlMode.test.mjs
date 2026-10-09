@@ -15,6 +15,7 @@ import { ACTUATION_ORIGINS } from "../dist/executionProvenance.js";
 import { setSelectedMachine } from "../dist/machines/selection.js";
 import {
   classifyRecommendationOrigin,
+  recordMachineHeartRateSample,
   resetMachineGuidanceRuntime,
   updateMachineGuidanceRuntime,
 } from "../dist/machines/runtime.js";
@@ -50,6 +51,41 @@ function prospectiveInput(sessionId, heartRateBpm, holdResistance = 8) {
     holdCadenceRpm: 70,
     controlAuthority: authority(sessionId, "prospective_fixed_load"),
   };
+}
+
+function compatibilityWorkInput(sessionId, heartRateBpm, overrides = {}) {
+  return {
+    sessionId,
+    activity: "bike",
+    phaseKind: "work",
+    phaseId: "sustain",
+    phaseDisplayName: "Sustain",
+    phaseElapsedSeconds: 200,
+    phaseDurationSeconds: 600,
+    workoutElapsedSeconds: 200,
+    heartRateBpm,
+    targetHeartRateMin: 120,
+    targetHeartRateMax: 130,
+    intent: "aerobic_base",
+    ...overrides,
+  };
+}
+
+function finalLegacyUpdate(bpm, explicit) {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  const sessionId = `legacy-${bpm}-${explicit ? "frozen" : "compat"}`;
+  resetMachineGuidanceRuntime(sessionId);
+  let update = null;
+  for (let second = 0; second <= 100; second += 1) {
+    recordMachineHeartRateSample(sessionId, second, bpm);
+    update = updateMachineGuidanceRuntime(compatibilityWorkInput(sessionId, bpm, {
+      phaseElapsedSeconds: second,
+      workoutElapsedSeconds: second,
+      ...(explicit ? { controlAuthority: authority(sessionId, "legacy_hr_control") } : {}),
+    }), storage);
+  }
+  return update;
 }
 
 test("session control-mode v1 reader is strict", () => {
@@ -160,6 +196,35 @@ test("prospective fixed load fails closed for missing/invalid targets and mismat
   inferred.controlAuthority = authority("active", "prospective_fixed_load", "historical_compatibility");
   assert.equal(updateMachineGuidanceRuntime(inferred, storage), null);
   assert.equal(updateMachineGuidanceRuntime({ ...prospectiveInput("active", 80), controlAuthority: null }, storage), null);
+});
+
+test("explicit frozen legacy authority preserves low, in-band, and high-HR controller behavior", () => {
+  for (const bpm of [80, 125, 190]) {
+    assert.deepEqual(finalLegacyUpdate(bpm, true), finalLegacyUpdate(bpm, false));
+  }
+});
+
+test("explicit frozen VO2 authority preserves the existing fixed-hold behavior", () => {
+  const storage = memoryStorage();
+  setSelectedMachine("bike", "proform-smart-power-10", storage);
+  const evaluate = (sessionId, explicit) => {
+    resetMachineGuidanceRuntime(sessionId);
+    return updateMachineGuidanceRuntime(compatibilityWorkInput(sessionId, 190, {
+      holdResistance: 10,
+      holdCadenceRpm: 70,
+      ...(explicit ? { controlAuthority: authority(sessionId, "vo2_protocol") } : {}),
+    }), storage);
+  };
+  const frozen = evaluate("vo2-explicit", true);
+  const historical = evaluate("vo2-historical", false);
+  assert.ok(frozen);
+  assert.ok(historical);
+  assert.equal(frozen.actuationOrigin, "vo2_protocol_fixed_resistance");
+  assert.deepEqual(frozen, historical);
+  resetMachineGuidanceRuntime("vo2-no-hold");
+  assert.equal(updateMachineGuidanceRuntime(compatibilityWorkInput("vo2-no-hold", 190, {
+    controlAuthority: authority("vo2-no-hold", "vo2_protocol"),
+  }), storage), null);
 });
 
 test("origin classification follows frozen authority without widening provenance v1", () => {
