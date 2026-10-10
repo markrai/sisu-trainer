@@ -5,6 +5,7 @@ import {
   FITNESS_STATE_STORAGE_KEY,
   VO2_FITNESS_PROJECTION_V1,
   VO2_FITNESS_PROJECTION_V2,
+  VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3,
   captureAthleteFitnessSnapshot,
   isSupportedVo2FitnessEstimator,
   isSupportedVo2FitnessProtocol,
@@ -15,12 +16,28 @@ import {
   storeFitnessState,
 } from "../dist/fitnessState.js";
 import {
+  calibrationIdentityFromE1Snapshot,
+  calibrationIdentityFromMetric,
+  recordPromotedCalibrationMachineProvenance,
+  resolveWorkoutCalibrationMachine,
+} from "../dist/calibrationMachineProvenance.js";
+import {
+  PHASE_E1_SHADOW_POLICY,
+  evaluatePersonalizedPrescription,
+} from "../dist/personalizedPrescription.js";
+import {
   ATHLETE_PROFILE_STORAGE_KEY,
   PROFILE_WEIGHT_LBS_TO_KG,
   migrateLegacyProfile,
 } from "../dist/profile.js";
 import { assessVo2, assessVo2V1 } from "../dist/vo2Estimator.js";
-import { VO2_EVIDENCE_SCHEMA_VERSION, VO2_PROTOCOL_VERSION } from "../dist/types.js";
+import {
+  FITNESS_STATE_SCHEMA_VERSION,
+  VO2_EVIDENCE_SCHEMA_VERSION,
+  VO2_PROTOCOL_VERSION,
+  VO2_PROTOCOL_VERSION_V3,
+} from "../dist/types.js";
+import { resolveWorkoutPrescription } from "../dist/workoutPrescription.js";
 import {
   emitWorkoutSummary,
 } from "../dist/workoutSummary.js";
@@ -328,6 +345,114 @@ test("qualified formal assessment promotes exact VO2, extrapolated watts, and el
   assert.deepEqual(fixture.summary, originalSummary);
 });
 
+test("current protocol-v3 assessment promotes exact formal state, round-trips, and is consumable by E1", () => {
+  const fixture = assessmentFixture({
+    protocolVersion: VO2_PROTOCOL_VERSION_V3,
+    sessionId: "fitness-session-v3",
+  });
+  assert.equal(fixture.assessment.status, "estimated");
+  assert.equal(fixture.assessment.estimator_version, 2);
+  assert.equal(fixture.assessment.input_snapshot.protocol_version, VO2_PROTOCOL_VERSION_V3);
+  assert.equal(fixture.assessment.diagnostics.expected_protocol_version, VO2_PROTOCOL_VERSION);
+  assert.equal(fixture.assessment.diagnostics.observed_protocol_version, VO2_PROTOCOL_VERSION_V3);
+
+  assert.equal(VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3.fitnessStateSchemaVersion, FITNESS_STATE_SCHEMA_VERSION);
+  assert.equal(VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3.assessmentSchemaVersion, 2);
+  assert.equal(VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3.evidenceSchemaVersion, 2);
+  assert.equal(VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3.estimatorVersion, 2);
+  assert.equal(VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3.protocolVersion, VO2_PROTOCOL_VERSION_V3);
+  assert.equal(VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3.diagnosticsExpectedProtocolVersion, VO2_PROTOCOL_VERSION);
+
+  const state = promote(fixture);
+  assert.ok(state, "current protocol-v3 assessment should promote");
+  assert.equal(state.schemaVersion, FITNESS_STATE_SCHEMA_VERSION);
+  assert.equal(state.vo2Max.source, "formal_assessment");
+  assert.equal(state.predictedMaxWatts.source, "formal_assessment");
+  assert.equal(state.hrWorkloadCalibration.source, "formal_assessment");
+  assert.deepEqual(state.vo2Max.algorithm, {
+    id: fixture.assessment.estimator_id,
+    version: 2,
+  });
+  assert.deepEqual(state.vo2Max.evidenceSessionIds, [fixture.summary.external_session_id]);
+  assert.equal(state.vo2Max.observedAt, fixture.summary.endedAt);
+  assert.deepEqual(state.hrWorkloadCalibration.value.profileInputSnapshot, {
+    ageYears: fixture.assessment.input_snapshot.age_years,
+    bodyMassKg: fixture.assessment.input_snapshot.weight_kg,
+  });
+  assert.deepEqual(
+    state.hrWorkloadCalibration.value.points,
+    fixture.assessment.diagnostics.eligible_points.map((point) => ({
+      stageId: point.stage_id,
+      watts: point.watts,
+      heartRateBpm: point.steady_state_bpm,
+      workloadSource: point.workload_source,
+    }))
+  );
+  assert.equal(state.hrWorkloadCalibration.value.slopeBpmPerWatt, fixture.assessment.diagnostics.slope);
+  assert.equal(state.hrWorkloadCalibration.value.interceptBpm, fixture.assessment.diagnostics.intercept);
+  assert.equal(state.hrWorkloadCalibration.value.rSquared, fixture.assessment.diagnostics.r_squared);
+  assert.deepEqual(state.hrWorkloadCalibration.value.protocol, {
+    id: "bike-submax-70rpm",
+    version: VO2_PROTOCOL_VERSION_V3,
+  });
+
+  const parsed = parseFitnessState(deepClone(state));
+  assert.deepEqual(parsed, state);
+  assert.equal(parsed.hrWorkloadCalibration.value.protocol.version, VO2_PROTOCOL_VERSION_V3);
+
+  const calibrationIdentity = calibrationIdentityFromMetric(state.athleteId, state.hrWorkloadCalibration);
+  assert.ok(calibrationIdentity);
+  assert.equal(calibrationIdentity.protocol.version, VO2_PROTOCOL_VERSION_V3);
+  assert.equal(calibrationIdentity.algorithm.version, 2);
+  assert.deepEqual(calibrationIdentity.evidenceSessionIds, [fixture.summary.external_session_id]);
+  const provenanceStorage = memoryStorage();
+  assert.equal(recordPromotedCalibrationMachineProvenance({
+    athleteId: state.athleteId,
+    sessionId: fixture.summary.external_session_id,
+    endedAt: fixture.summary.endedAt,
+    machine: { machineId: "proform-smart-power-10", machineProfileVersion: 1 },
+    calibrationMetric: state.hrWorkloadCalibration,
+  }, provenanceStorage, "2026-09-21T12:32:00.000Z"), "recorded");
+  assert.deepEqual(resolveWorkoutCalibrationMachine(calibrationIdentity, provenanceStorage), {
+    status: "available",
+    calibration: calibrationIdentity,
+    machineId: "proform-smart-power-10",
+    machineProfileVersion: 1,
+  });
+
+  const prescription = resolveWorkoutPrescription({
+    workoutSelector: "Thursday",
+    blocks: { warm: 0, sustain: 60, cool: 0 },
+    hrTargets: {
+      main_set: "120–130",
+      main_set_intensity_id: "threshold",
+      main_set_kind: "work",
+      intervals: null,
+    },
+    resolvedAt: "2026-09-22T12:00:00.000Z",
+  });
+  const evaluation = evaluatePersonalizedPrescription({
+    legacyPrescription: prescription,
+    workoutIntent: "threshold",
+    activity: "bike",
+    athleteId: fixture.athlete.athleteId,
+    profile: fixture.athlete,
+    fitnessState: state,
+    policy: PHASE_E1_SHADOW_POLICY,
+    resolvedAt: "2026-09-22T12:00:00.000Z",
+  });
+  assert.equal(evaluation.fitnessEvidenceSnapshot.algorithm.version, 2);
+  assert.equal(evaluation.fitnessEvidenceSnapshot.calibration.protocol.version, VO2_PROTOCOL_VERSION_V3);
+  assert.deepEqual(
+    calibrationIdentityFromE1Snapshot(evaluation.athleteId, evaluation.fitnessEvidenceSnapshot),
+    calibrationIdentity
+  );
+  assert.equal(evaluation.phases.length, 1);
+  assert.notEqual(evaluation.phases[0].fallbackReason, "missing_fitness_state");
+  assert.notEqual(evaluation.phases[0].fallbackReason, "unsupported_protocol");
+  assert.equal(evaluation.phases[0].outcome, "candidate");
+});
+
 test("promotion fails closed for insufficient, unsupported, malformed, or foreign evidence", () => {
   const fixture = assessmentFixture();
   const insufficient = deepClone(fixture);
@@ -460,6 +585,44 @@ test("qualified stored promotion persists the athlete-owned current projection",
   assert.equal(stored.hrWorkloadCalibration.value.protocol.version, 2);
   assert.deepEqual(parseFitnessState(deepClone(stored)), stored);
   assert.deepEqual(stored.vo2Max.evidenceSessionIds, [fixture.summary.external_session_id]);
+});
+
+test("workout finalization promotes and persists a current protocol-v3 assessment", async () => {
+  const previousIndexedDb = globalThis.indexedDB;
+  const previousKeyRange = globalThis.IDBKeyRange;
+  const previousStorage = globalThis.localStorage;
+  globalThis.indexedDB = indexedDB;
+  globalThis.IDBKeyRange = IDBKeyRange;
+  const fixture = assessmentFixture({
+    protocolVersion: VO2_PROTOCOL_VERSION_V3,
+    sessionId: "fitness-finalization-v3",
+    endedAt: "2026-09-20T12:30:00.000Z",
+  });
+  const storage = memoryStorage({
+    [ATHLETE_PROFILE_STORAGE_KEY]: JSON.stringify(fixture.athlete),
+  });
+  globalThis.localStorage = storage;
+  try {
+    await resetWorkoutStorageForTests();
+    await emitWorkoutSummary(fixture.summary);
+    const stored = readFitnessState(fixture.athlete.athleteId, storage);
+    assert.ok(stored);
+    assert.equal(stored.schemaVersion, FITNESS_STATE_SCHEMA_VERSION);
+    assert.equal(stored.vo2Max.algorithm.version, 2);
+    assert.equal(stored.hrWorkloadCalibration.value.protocol.version, VO2_PROTOCOL_VERSION_V3);
+    assert.deepEqual(stored.hrWorkloadCalibration.evidenceSessionIds, [fixture.summary.external_session_id]);
+    assert.deepEqual(parseFitnessState(deepClone(stored)), stored);
+    const persistedSummary = (await getAllWorkoutSummaries()).find(
+      (row) => row.summary.external_session_id === fixture.summary.external_session_id
+    );
+    assert.ok(persistedSummary);
+    assert.equal(persistedSummary.summary.vo2_assessment.status, "estimated");
+  } finally {
+    await resetWorkoutStorageForTests();
+    globalThis.indexedDB = previousIndexedDb;
+    globalThis.IDBKeyRange = previousKeyRange;
+    globalThis.localStorage = previousStorage;
+  }
 });
 
 test("real finalization promotes a new formal anchor and forces post-anchor passive requalification", async () => {
@@ -650,4 +813,18 @@ test("unsupported estimator and protocol versions are rejected", () => {
   const unsupportedObservedDiagnostics = deepClone(fixture);
   unsupportedObservedDiagnostics.assessment.diagnostics.observed_protocol_version = 1;
   assert.equal(promote(unsupportedObservedDiagnostics), null, "v1 observed protocol should be rejected");
+
+  const estimatorV1ProtocolV3 = assessmentFixture({ protocolVersion: VO2_PROTOCOL_VERSION_V3 });
+  estimatorV1ProtocolV3.assessment.estimator_version = 1;
+  assert.equal(promote(estimatorV1ProtocolV3), null, "v1 estimator plus v3 protocol should be rejected");
+
+  const unknownEstimatorProtocolV3 = assessmentFixture({ protocolVersion: VO2_PROTOCOL_VERSION_V3 });
+  unknownEstimatorProtocolV3.assessment.estimator_id = "unknown-estimator";
+  assert.equal(promote(unknownEstimatorProtocolV3), null, "unknown estimator plus v3 protocol should be rejected");
+
+  const protocolV3State = promote(assessmentFixture({ protocolVersion: VO2_PROTOCOL_VERSION_V3 }));
+  assert.ok(protocolV3State);
+  const futureProtocolState = deepClone(protocolV3State);
+  futureProtocolState.hrWorkloadCalibration.value.protocol.version = 999;
+  assert.equal(parseFitnessState(futureProtocolState), null, "future formal protocols should fail closed on readback");
 });

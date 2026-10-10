@@ -1,4 +1,4 @@
-import { ATHLETE_PROFILE_SCHEMA_VERSION, ATHLETE_PROFILE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V2, FITNESS_STATE_SCHEMA_VERSION_V3, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_ASSESSMENT_SCHEMA_VERSION_V2, VO2_EVIDENCE_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V2, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, } from "./types.js";
+import { ATHLETE_PROFILE_SCHEMA_VERSION, ATHLETE_PROFILE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V1, FITNESS_STATE_SCHEMA_VERSION_V2, FITNESS_STATE_SCHEMA_VERSION_V3, LEGACY_VO2_PROTOCOL_ID, LEGACY_VO2_PROTOCOL_VERSION, VO2_ASSESSMENT_SCHEMA_VERSION_V1, VO2_ASSESSMENT_SCHEMA_VERSION_V2, VO2_EVIDENCE_SCHEMA_VERSION_V1, VO2_EVIDENCE_SCHEMA_VERSION_V2, VO2_PROTOCOL_ID, VO2_PROTOCOL_VERSION, VO2_PROTOCOL_VERSION_V3, } from "./types.js";
 import { loadAthleteProfile, parseAthleteProfile, } from "./profile.js";
 import { LEGACY_VO2_ESTIMATOR_ID, LEGACY_VO2_ESTIMATOR_VERSION, VO2_ESTIMATOR_ID, VO2_ESTIMATOR_VERSION, } from "./vo2Estimator.js";
 export const FITNESS_STATE_STORAGE_KEY = "fitness_state_v1";
@@ -46,9 +46,21 @@ export const VO2_FITNESS_PROJECTION_V2 = {
     protocolId: VO2_PROTOCOL_ID,
     protocolVersion: VO2_PROTOCOL_VERSION,
 };
+/**
+ * Adaptive protocol-v3 collection projected with the unchanged estimator-v2
+ * scientific semantics. The assessment records protocol v3 as its observed
+ * identity while estimator-v2 diagnostics retain v2 as their primary expected
+ * protocol version.
+ */
+export const VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3 = {
+    ...VO2_FITNESS_PROJECTION_V2,
+    protocolVersion: VO2_PROTOCOL_VERSION_V3,
+    diagnosticsExpectedProtocolVersion: VO2_PROTOCOL_VERSION,
+};
 export const SUPPORTED_VO2_FITNESS_PROJECTIONS = [
     VO2_FITNESS_PROJECTION_V1,
     VO2_FITNESS_PROJECTION_V2,
+    VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3,
 ];
 function isObject(value) {
     return !!value && typeof value === "object" && !Array.isArray(value);
@@ -95,6 +107,11 @@ function predictedHrMaxBpmForProjection(ageYears, projection) {
 function cycleVo2MlKgMinForProjection(predictedMaxWatts, weightKg, projection) {
     return ((projection.cycleVo2WattsCoefficient * predictedMaxWatts) / weightKg +
         projection.cycleVo2RestingValue);
+}
+function diagnosticsExpectedProtocolVersion(projection) {
+    return "diagnosticsExpectedProtocolVersion" in projection
+        ? projection.diagnosticsExpectedProtocolVersion
+        : projection.protocolVersion;
 }
 function fitHrVsWattsV1(points) {
     if (points.length < 2)
@@ -1027,7 +1044,7 @@ function assessmentCanPromote(athlete, summary, assessment) {
     if (!Array.isArray(protocol.stages))
         return null;
     if (assessment.diagnostics.expected_protocol_id !== projection.protocolId ||
-        assessment.diagnostics.expected_protocol_version !== projection.protocolVersion) {
+        assessment.diagnostics.expected_protocol_version !== diagnosticsExpectedProtocolVersion(projection)) {
         return null;
     }
     if (assessment.diagnostics.observed_protocol_id !== projection.protocolId ||

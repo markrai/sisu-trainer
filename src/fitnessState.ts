@@ -13,6 +13,7 @@ import {
   VO2_EVIDENCE_SCHEMA_VERSION_V2,
   VO2_PROTOCOL_ID,
   VO2_PROTOCOL_VERSION,
+  VO2_PROTOCOL_VERSION_V3,
   type AthleteFitnessSnapshot,
   type AthleteProfile,
   type FitnessMetric,
@@ -86,9 +87,22 @@ export const VO2_FITNESS_PROJECTION_V2 = {
   protocolVersion: VO2_PROTOCOL_VERSION,
 } as const;
 
+/**
+ * Adaptive protocol-v3 collection projected with the unchanged estimator-v2
+ * scientific semantics. The assessment records protocol v3 as its observed
+ * identity while estimator-v2 diagnostics retain v2 as their primary expected
+ * protocol version.
+ */
+export const VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3 = {
+  ...VO2_FITNESS_PROJECTION_V2,
+  protocolVersion: VO2_PROTOCOL_VERSION_V3,
+  diagnosticsExpectedProtocolVersion: VO2_PROTOCOL_VERSION,
+} as const;
+
 export const SUPPORTED_VO2_FITNESS_PROJECTIONS = [
   VO2_FITNESS_PROJECTION_V1,
   VO2_FITNESS_PROJECTION_V2,
+  VO2_FITNESS_PROJECTION_V2_PROTOCOL_V3,
 ] as const;
 
 export interface FitnessStateStorage extends ProfileStorage {
@@ -190,6 +204,12 @@ function cycleVo2MlKgMinForProjection(
     (projection.cycleVo2WattsCoefficient * predictedMaxWatts) / weightKg +
     projection.cycleVo2RestingValue
   );
+}
+
+function diagnosticsExpectedProtocolVersion(projection: SupportedVo2FitnessProjection): number {
+  return "diagnosticsExpectedProtocolVersion" in projection
+    ? projection.diagnosticsExpectedProtocolVersion
+    : projection.protocolVersion;
 }
 
 function fitHrVsWattsV1(points: readonly HrWorkloadCalibrationPoint[]): {
@@ -1157,7 +1177,7 @@ function assessmentCanPromote(
   if (!Array.isArray(protocol.stages)) return null;
   if (
     assessment.diagnostics.expected_protocol_id !== projection.protocolId ||
-    assessment.diagnostics.expected_protocol_version !== projection.protocolVersion
+    assessment.diagnostics.expected_protocol_version !== diagnosticsExpectedProtocolVersion(projection)
   ) {
     return null;
   }
