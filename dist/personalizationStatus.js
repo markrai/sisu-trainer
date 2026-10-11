@@ -4,13 +4,13 @@ import { isSupportedVo2EstimatorProtocolPair } from "./vo2Estimator.js";
 export function buildPersonalizationHistoryDetail(characterization) {
     if (!characterization)
         return null;
-    const hasCandidate = characterization.phases.some((phase) => phase.shadowOutcome === "candidate" &&
+    const hasCharacterizedCandidate = characterization.phases.some((phase) => phase.shadowOutcome === "candidate" &&
         phase.characterizationOutcome === "characterized" &&
         phase.candidatePower !== undefined);
     return {
-        kind: hasCandidate ? "candidate" : "not_candidate",
+        kind: hasCharacterizedCandidate ? "candidate" : "not_candidate",
         title: "Personalization evaluation recorded",
-        body: hasCandidate
+        body: hasCharacterizedCandidate
             ? "This workout contributed data toward validating individualized bike targets."
             : "No individualized workload target was available for this workout.",
     };
