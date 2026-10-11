@@ -22,6 +22,7 @@ import { listHrDynamics, resetHrDynamicsForMachine, } from "./machines/dynamics/
 import { listShadowPredictions, resetShadowPredictionsForMachine, shadowValidationStatusLabel, } from "./machines/prediction/index.js";
 import { buildMachineDiagnosticsSnapshot, prepareMachineDiagnosticsExport, } from "./machines/diagnostics/index.js";
 import { loadAthleteProfile } from "./profile.js";
+import { buildPersonalizationHistoryDetail } from "./personalizationStatus.js";
 import { EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS, buildPersonalizationDiagnosticsModel, extractTrustedPersonalizationAssessmentContexts, extractTrustedPersonalizationCharacterizations, extractTrustedPersonalizationPerformedLoadContexts, extractTrustedExecutionProvenanceContexts, extractTrustedPersonalizationWorkoutContexts, personalizationDiagnosticDetailHtml, personalizationDiagnosticsExportJson, personalizationDiagnosticsHtml, } from "./personalizationDiagnosticsView.js";
 import { PERFORMED_LOAD_DIAGNOSTICS_RECENT_LIMIT, buildPerformedLoadWorkoutView, } from "./performedLoad.js";
 import { performedLoadDiagnosticsHtml } from "./performedLoadDiagnosticsView.js";
@@ -1902,8 +1903,9 @@ function displayWorkoutSummaries(workouts) {
         const vo2Detail = vo2Outcome
             ? `<div class="workout-item-detail workout-item-vo2">${vo2Outcome}</div>`
             : "";
-        const personalizationDetail = summary.shadow_prescription_characterization
-            ? '<div class="workout-item-detail workout-item-personalization"><strong>Personalization evaluation recorded</strong><span>This workout contributed data toward validating individualized bike targets.</span></div>'
+        const personalizationHistory = buildPersonalizationHistoryDetail(summary.shadow_prescription_characterization);
+        const personalizationDetail = personalizationHistory
+            ? `<div class="workout-item-detail workout-item-personalization"><strong>${personalizationHistory.title}</strong><span>${personalizationHistory.body}</span></div>`
             : "";
         workoutItem.innerHTML = `
       <div class="swipe-left-indicator"></div>

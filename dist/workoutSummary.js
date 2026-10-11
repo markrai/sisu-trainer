@@ -325,11 +325,37 @@ export function recordPromotedFormalCalibrationMachine(summary, storage, recorde
     }, store, recordedAt);
 }
 async function emitWorkoutSummary(summary) {
+    var _a, _b;
     const saved = await storeWorkoutSummary(summary);
     if (saved && summary.vo2_assessment) {
         try {
-            if (promoteVo2SummaryToStoredFitnessState(summary) === "promoted") {
+            const promotion = promoteVo2SummaryToStoredFitnessState(summary);
+            if (promotion === "promoted") {
                 recordPromotedFormalCalibrationMachine(summary);
+            }
+            else {
+                const assessment = summary.vo2_assessment;
+                const inputSnapshot = assessment.input_snapshot && typeof assessment.input_snapshot === "object"
+                    ? assessment.input_snapshot
+                    : null;
+                const diagnostic = {
+                    external_session_id: summary.external_session_id,
+                    promotion_result: promotion,
+                    assessment_estimator: {
+                        id: assessment.estimator_id,
+                        version: assessment.estimator_version,
+                    },
+                    assessment_protocol: {
+                        id: (_a = inputSnapshot === null || inputSnapshot === void 0 ? void 0 : inputSnapshot.protocol_id) !== null && _a !== void 0 ? _a : null,
+                        version: (_b = inputSnapshot === null || inputSnapshot === void 0 ? void 0 : inputSnapshot.protocol_version) !== null && _b !== void 0 ? _b : null,
+                    },
+                };
+                if (promotion === "not_eligible") {
+                    console.warn("VO2 workout summary was saved, but formal FitnessState promotion was not eligible.", diagnostic);
+                }
+                else {
+                    console.error("VO2 workout summary was saved, but formal FitnessState promotion could not be persisted.", diagnostic);
+                }
             }
         }
         catch (error) {

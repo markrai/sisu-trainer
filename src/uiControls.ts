@@ -90,6 +90,7 @@ import {
   prepareMachineDiagnosticsExport,
 } from "./machines/diagnostics/index.js";
 import { loadAthleteProfile } from "./profile.js";
+import { buildPersonalizationHistoryDetail } from "./personalizationStatus.js";
 import {
   EMPTY_PERSONALIZATION_DIAGNOSTICS_FILTERS,
   buildPersonalizationDiagnosticsModel,
@@ -2105,8 +2106,11 @@ function displayWorkoutSummaries(workouts: any[]) {
     const vo2Detail = vo2Outcome
       ? `<div class="workout-item-detail workout-item-vo2">${vo2Outcome}</div>`
       : "";
-    const personalizationDetail = summary.shadow_prescription_characterization
-      ? '<div class="workout-item-detail workout-item-personalization"><strong>Personalization evaluation recorded</strong><span>This workout contributed data toward validating individualized bike targets.</span></div>'
+    const personalizationHistory = buildPersonalizationHistoryDetail(
+      summary.shadow_prescription_characterization
+    );
+    const personalizationDetail = personalizationHistory
+      ? `<div class="workout-item-detail workout-item-personalization"><strong>${personalizationHistory.title}</strong><span>${personalizationHistory.body}</span></div>`
       : "";
     workoutItem.innerHTML = `
       <div class="swipe-left-indicator"></div>

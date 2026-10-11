@@ -386,8 +386,38 @@ async function emitWorkoutSummary(summary: WorkoutSummary) {
   const saved = await storeWorkoutSummary(summary);
   if (saved && summary.vo2_assessment) {
     try {
-      if (promoteVo2SummaryToStoredFitnessState(summary) === "promoted") {
+      const promotion = promoteVo2SummaryToStoredFitnessState(summary);
+      if (promotion === "promoted") {
         recordPromotedFormalCalibrationMachine(summary);
+      } else {
+        const assessment = summary.vo2_assessment;
+        const inputSnapshot =
+          assessment.input_snapshot && typeof assessment.input_snapshot === "object"
+            ? assessment.input_snapshot
+            : null;
+        const diagnostic = {
+          external_session_id: summary.external_session_id,
+          promotion_result: promotion,
+          assessment_estimator: {
+            id: assessment.estimator_id,
+            version: assessment.estimator_version,
+          },
+          assessment_protocol: {
+            id: inputSnapshot?.protocol_id ?? null,
+            version: inputSnapshot?.protocol_version ?? null,
+          },
+        };
+        if (promotion === "not_eligible") {
+          console.warn(
+            "VO2 workout summary was saved, but formal FitnessState promotion was not eligible.",
+            diagnostic
+          );
+        } else {
+          console.error(
+            "VO2 workout summary was saved, but formal FitnessState promotion could not be persisted.",
+            diagnostic
+          );
+        }
       }
     } catch (error) {
       console.error("Error promoting VO2 assessment to fitness state:", error);

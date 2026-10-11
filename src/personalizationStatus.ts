@@ -1,5 +1,9 @@
 import { PROFILE_WEIGHT_LBS_TO_KG } from "./profile.js";
-import type { AthleteProfile, FitnessState } from "./types.js";
+import type {
+  AthleteProfile,
+  FitnessState,
+  PersonalizedPrescriptionCharacterization,
+} from "./types.js";
 import { isSupportedVo2EstimatorProtocolPair } from "./vo2Estimator.js";
 
 export type PersonalizationStatusKind = "assessment_missing" | "evaluation_available";
@@ -21,6 +25,33 @@ export interface PersonalizationStatus {
 export interface PersonalizationStatusFormatOptions {
   locale?: string;
   timeZone?: string;
+}
+
+export interface PersonalizationHistoryDetail {
+  kind: "candidate" | "not_candidate";
+  title: "Personalization evaluation recorded";
+  body:
+    | "This workout contributed data toward validating individualized bike targets."
+    | "No individualized workload target was available for this workout.";
+}
+
+/** Pure display projection from an already-parsed, persisted E2 characterization. */
+export function buildPersonalizationHistoryDetail(
+  characterization: PersonalizedPrescriptionCharacterization | null | undefined
+): PersonalizationHistoryDetail | null {
+  if (!characterization) return null;
+  const hasCandidate = characterization.phases.some((phase) =>
+    phase.shadowOutcome === "candidate" &&
+    phase.characterizationOutcome === "characterized" &&
+    phase.candidatePower !== undefined
+  );
+  return {
+    kind: hasCandidate ? "candidate" : "not_candidate",
+    title: "Personalization evaluation recorded",
+    body: hasCandidate
+      ? "This workout contributed data toward validating individualized bike targets."
+      : "No individualized workload target was available for this workout.",
+  };
 }
 
 function nearlyEqual(a: number, b: number): boolean {

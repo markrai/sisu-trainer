@@ -16,11 +16,13 @@ import {
   storeFitnessState,
 } from "../dist/fitnessState.js";
 import {
+  FORMAL_CALIBRATION_MACHINE_PROVENANCE_STORAGE_KEY,
   calibrationIdentityFromE1Snapshot,
   calibrationIdentityFromMetric,
   recordPromotedCalibrationMachineProvenance,
   resolveWorkoutCalibrationMachine,
 } from "../dist/calibrationMachineProvenance.js";
+import { createInProgressExecutionProvenance } from "../dist/executionProvenance.js";
 import {
   PHASE_E1_SHADOW_POLICY,
   evaluatePersonalizedPrescription,
@@ -66,6 +68,22 @@ function memoryStorage(initial = {}, failKey) {
 
 function deepClone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+async function captureConsoleDiagnostics(action) {
+  const warnings = [];
+  const errors = [];
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  console.warn = (...args) => warnings.push(args);
+  console.error = (...args) => errors.push(args);
+  try {
+    await action();
+  } finally {
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+  return { warnings, errors };
 }
 
 function athleteProfile(athleteId = "athlete-fitness") {
@@ -601,10 +619,21 @@ test("workout finalization promotes and persists a current protocol-v3 assessmen
   const storage = memoryStorage({
     [ATHLETE_PROFILE_STORAGE_KEY]: JSON.stringify(fixture.athlete),
   });
+  fixture.summary.execution_provenance = createInProgressExecutionProvenance(
+    fixture.summary.external_session_id,
+    {
+      status: "selected",
+      machineId: "proform-smart-power-10",
+      machineProfileVersion: 1,
+      selectionChangedDuringWorkout: false,
+    },
+    { status: "no_frozen_calibration" }
+  );
   globalThis.localStorage = storage;
   try {
     await resetWorkoutStorageForTests();
-    await emitWorkoutSummary(fixture.summary);
+    const diagnostics = await captureConsoleDiagnostics(() => emitWorkoutSummary(fixture.summary));
+    assert.deepEqual(diagnostics, { warnings: [], errors: [] });
     const stored = readFitnessState(fixture.athlete.athleteId, storage);
     assert.ok(stored);
     assert.equal(stored.schemaVersion, FITNESS_STATE_SCHEMA_VERSION);
@@ -617,6 +646,106 @@ test("workout finalization promotes and persists a current protocol-v3 assessmen
     );
     assert.ok(persistedSummary);
     assert.equal(persistedSummary.summary.vo2_assessment.status, "estimated");
+    assert.notEqual(storage.getItem(FORMAL_CALIBRATION_MACHINE_PROVENANCE_STORAGE_KEY), null);
+  } finally {
+    await resetWorkoutStorageForTests();
+    globalThis.indexedDB = previousIndexedDb;
+    globalThis.IDBKeyRange = previousKeyRange;
+    globalThis.localStorage = previousStorage;
+  }
+});
+
+test("ineligible promotion warns after saving the workout summary without creating FitnessState", async () => {
+  const previousIndexedDb = globalThis.indexedDB;
+  const previousKeyRange = globalThis.IDBKeyRange;
+  const previousStorage = globalThis.localStorage;
+  globalThis.indexedDB = indexedDB;
+  globalThis.IDBKeyRange = IDBKeyRange;
+  const fixture = assessmentFixture({
+    sessionId: "fitness-not-eligible",
+    endedAt: "2026-09-20T12:30:00.000Z",
+  });
+  fixture.summary.vo2_assessment.status = "insufficient_evidence";
+  const storage = memoryStorage({
+    [ATHLETE_PROFILE_STORAGE_KEY]: JSON.stringify(fixture.athlete),
+  });
+  globalThis.localStorage = storage;
+  try {
+    await resetWorkoutStorageForTests();
+    const diagnostics = await captureConsoleDiagnostics(() => emitWorkoutSummary(fixture.summary));
+    const storedSummary = (await getAllWorkoutSummaries()).find(
+      (row) => row.summary.external_session_id === fixture.summary.external_session_id
+    );
+    assert.ok(storedSummary);
+    assert.equal(storage.getItem(FITNESS_STATE_STORAGE_KEY), null);
+    assert.equal(diagnostics.errors.length, 0);
+    assert.deepEqual(diagnostics.warnings, [[
+      "VO2 workout summary was saved, but formal FitnessState promotion was not eligible.",
+      {
+        external_session_id: fixture.summary.external_session_id,
+        promotion_result: "not_eligible",
+        assessment_estimator: {
+          id: fixture.assessment.estimator_id,
+          version: fixture.assessment.estimator_version,
+        },
+        assessment_protocol: {
+          id: fixture.assessment.input_snapshot.protocol_id,
+          version: fixture.assessment.input_snapshot.protocol_version,
+        },
+      },
+    ]]);
+  } finally {
+    await resetWorkoutStorageForTests();
+    globalThis.indexedDB = previousIndexedDb;
+    globalThis.IDBKeyRange = previousKeyRange;
+    globalThis.localStorage = previousStorage;
+  }
+});
+
+test("ineligible promotion diagnostics tolerate a null assessment input snapshot", async () => {
+  const previousIndexedDb = globalThis.indexedDB;
+  const previousKeyRange = globalThis.IDBKeyRange;
+  const previousStorage = globalThis.localStorage;
+  globalThis.indexedDB = indexedDB;
+  globalThis.IDBKeyRange = IDBKeyRange;
+  const fixture = assessmentFixture({
+    sessionId: "fitness-not-eligible-null-input-snapshot",
+    endedAt: "2026-09-20T12:30:00.000Z",
+  });
+  fixture.summary.vo2_assessment.input_snapshot = null;
+  const original = deepClone(fixture.summary);
+  const storage = memoryStorage({
+    [ATHLETE_PROFILE_STORAGE_KEY]: JSON.stringify(fixture.athlete),
+  });
+  globalThis.localStorage = storage;
+  try {
+    await resetWorkoutStorageForTests();
+    let diagnostics;
+    await assert.doesNotReject(async () => {
+      diagnostics = await captureConsoleDiagnostics(() => emitWorkoutSummary(fixture.summary));
+    });
+    const storedSummary = (await getAllWorkoutSummaries()).find(
+      (row) => row.summary.external_session_id === fixture.summary.external_session_id
+    );
+    assert.ok(storedSummary);
+    assert.deepEqual(storedSummary.summary, original);
+    assert.equal(storage.getItem(FITNESS_STATE_STORAGE_KEY), null);
+    assert.deepEqual(diagnostics.errors, []);
+    assert.deepEqual(diagnostics.warnings, [[
+      "VO2 workout summary was saved, but formal FitnessState promotion was not eligible.",
+      {
+        external_session_id: fixture.summary.external_session_id,
+        promotion_result: "not_eligible",
+        assessment_estimator: {
+          id: fixture.assessment.estimator_id,
+          version: fixture.assessment.estimator_version,
+        },
+        assessment_protocol: {
+          id: null,
+          version: null,
+        },
+      },
+    ]]);
   } finally {
     await resetWorkoutStorageForTests();
     globalThis.indexedDB = previousIndexedDb;
@@ -704,13 +833,29 @@ test("stored promotion failure leaves an already-saved immutable workout summary
   try {
     await resetWorkoutStorageForTests();
     const original = deepClone(fixture.summary);
-    await emitWorkoutSummary(fixture.summary);
+    const diagnostics = await captureConsoleDiagnostics(() => emitWorkoutSummary(fixture.summary));
     const stored = (await getAllWorkoutSummaries()).find(
       (row) => row.summary.external_session_id === fixture.summary.external_session_id
     );
     assert.ok(stored);
     assert.deepEqual(stored.summary, original);
     assert.equal(storage.getItem(FITNESS_STATE_STORAGE_KEY), null);
+    assert.equal(diagnostics.warnings.length, 0);
+    assert.deepEqual(diagnostics.errors, [[
+      "VO2 workout summary was saved, but formal FitnessState promotion could not be persisted.",
+      {
+        external_session_id: fixture.summary.external_session_id,
+        promotion_result: "persistence_failed",
+        assessment_estimator: {
+          id: fixture.assessment.estimator_id,
+          version: fixture.assessment.estimator_version,
+        },
+        assessment_protocol: {
+          id: fixture.assessment.input_snapshot.protocol_id,
+          version: fixture.assessment.input_snapshot.protocol_version,
+        },
+      },
+    ]]);
     assert.equal(
       promoteVo2SummaryToStoredFitnessState(
         fixture.summary,

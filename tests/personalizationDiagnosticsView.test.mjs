@@ -500,12 +500,16 @@ test("E3 presentation has no import path into prescription, machine control, fit
 test("UI markup identifies diagnostics as developer-only and keeps normal history wording restrained", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const uiSource = await readFile(new URL("../src/uiControls.ts", import.meta.url), "utf8");
+  const statusSource = await readFile(new URL("../src/personalizationStatus.ts", import.meta.url), "utf8");
   assert.match(html, /Personalization diagnostics/);
   assert.match(html, /Candidate watts are experimental predictions[^<]+They did not control the workout/);
   assert.match(html, /Active prescription remains the legacy heart-rate band/);
   assert.match(html, /Observed in-band watts represent settled workload while heart rate was within the legacy target range/);
   assert.match(html, /it is not an authorization score/);
-  assert.match(uiSource, /Personalization evaluation recorded/);
+  assert.match(uiSource, /buildPersonalizationHistoryDetail/);
+  assert.match(statusSource, /Personalization evaluation recorded/);
+  assert.match(statusSource, /This workout contributed data toward validating individualized bike targets/);
+  assert.match(statusSource, /No individualized workload target was available for this workout/);
   assert.doesNotMatch(uiSource, /Your personalized target was/);
 });
 

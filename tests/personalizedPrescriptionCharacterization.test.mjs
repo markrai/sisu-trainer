@@ -7,6 +7,7 @@ import {
   PHASE_E1_SHADOW_POLICY,
   evaluatePersonalizedPrescription,
 } from "../dist/personalizedPrescription.js";
+import { buildPersonalizationHistoryDetail } from "../dist/personalizationStatus.js";
 import {
   PHASE_E2_CHARACTERIZATION_POLICY_V1,
   aggregatePersonalizedPrescriptionCharacterizations,
@@ -200,6 +201,134 @@ function fixture(options = {}) {
   });
   return { e1, response, summary, hrSamples, bikeSamples, characterization,
     phase: characterization?.phases[0] };
+}
+
+function thresholdHistoryFixture(fitnessState) {
+  const blocks = { warm: 1, sustain: 1, cool: 1 };
+  const resolvedPrescription = resolveWorkoutPrescription({
+    workoutSelector: "Thursday",
+    blocks,
+    hrTargets: {
+      main_set: "115-130",
+      main_set_intensity_id: "threshold",
+      main_set_kind: "work",
+      intervals: null,
+    },
+    resolvedAt: RESOLVED_AT,
+  });
+  const e1 = evaluatePersonalizedPrescription({
+    legacyPrescription: resolvedPrescription,
+    workoutIntent: "threshold",
+    activity: "bike",
+    athleteId: ATHLETE,
+    profile: profile(),
+    fitnessState,
+    policy: PHASE_E1_SHADOW_POLICY,
+    resolvedAt: RESOLVED_AT,
+  });
+  const response = deriveWorkoutResponse({
+    athleteId: ATHLETE,
+    sessionId: SESSION,
+    blocks,
+    resolvedPrescription,
+    completedActiveSec: 180,
+    cancelled: false,
+    hrSamples: [],
+    bikeSamples: [],
+  });
+  const characterization = characterizePersonalizedPrescription({
+    summary: {
+      external_session_id: SESSION,
+      athlete_id: ATHLETE,
+      day: "Thursday",
+      intent: "threshold",
+      activity: "bike",
+    },
+    shadowEvaluation: e1,
+    workoutResponse: response,
+    hrSamples: [],
+    bikeSamples: [],
+    policy: PHASE_E2_CHARACTERIZATION_POLICY_V1,
+    createdAt: CREATED_AT,
+  });
+  return { e1, characterization };
+}
+
+function mixedHistoryFixture() {
+  const blocks = { warm: 1, sustain: 2, cool: 1 };
+  const resolvedPrescription = resolveWorkoutPrescription({
+    workoutSelector: "Thursday",
+    blocks,
+    hrTargets: {
+      main_set_kind: "work",
+      intervals: {
+        repetitions: 1,
+        isSequence: false,
+        phases: [
+          {
+            phase: "characterized",
+            kind: "work",
+            duration: 1,
+            target_hr_bpm: "115-130",
+            intensity_id: "threshold",
+          },
+          {
+            phase: "insufficient",
+            kind: "work",
+            duration: 1,
+            target_hr_bpm: "115-130",
+            intensity_id: "threshold",
+          },
+        ],
+      },
+    },
+    resolvedAt: RESOLVED_AT,
+  });
+  const e1 = evaluatePersonalizedPrescription({
+    legacyPrescription: resolvedPrescription,
+    workoutIntent: "threshold",
+    activity: "bike",
+    athleteId: ATHLETE,
+    profile: profile(),
+    fitnessState: fitness(),
+    policy: PHASE_E1_SHADOW_POLICY,
+    resolvedAt: RESOLVED_AT,
+  });
+  const hrSamples = Array.from({ length: 240 }, (_, second) => ({
+    session_id: SESSION,
+    timestamp_sec: second,
+    hr: 120,
+  }));
+  const bikeSamples = Array.from(
+    { length: 60 },
+    (_, offset) => bikeSample(offset + 60, 125)
+  );
+  const response = deriveWorkoutResponse({
+    athleteId: ATHLETE,
+    sessionId: SESSION,
+    blocks,
+    resolvedPrescription,
+    completedActiveSec: 240,
+    cancelled: false,
+    hrSamples,
+    bikeSamples,
+  });
+  const characterization = characterizePersonalizedPrescription({
+    summary: {
+      external_session_id: SESSION,
+      athlete_id: ATHLETE,
+      day: "Thursday",
+      intent: "threshold",
+      activity: "bike",
+    },
+    shadowEvaluation: e1,
+    workoutResponse: response,
+    hrSamples,
+    bikeSamples,
+    policy: PHASE_E2_CHARACTERIZATION_POLICY_V1,
+    createdAt: CREATED_AT,
+  });
+  return { e1, characterization };
 }
 
 function clone(value) {
@@ -442,6 +571,113 @@ test("fallback E1 phases are counted as not-candidate and never receive comparis
   assert.equal(result.characterizationOutcome, "not_candidate");
   assert.equal(result.candidatePower, undefined);
   assert.equal(result.comparison, undefined);
+});
+
+test("history detail reports candidate contribution only when a candidate phase is characterized", () => {
+  const candidate = fixture().characterization;
+  assert.equal(candidate.phases[0].shadowOutcome, "candidate");
+  assert.equal(candidate.phases[0].characterizationOutcome, "characterized");
+  assert.ok(candidate.phases[0].candidatePower);
+  assert.deepEqual(buildPersonalizationHistoryDetail(candidate), {
+    kind: "candidate",
+    title: "Personalization evaluation recorded",
+    body: "This workout contributed data toward validating individualized bike targets.",
+  });
+
+  const allNonCandidate = fixture({ intent: "unsupported-intent" }).characterization;
+  assert.equal(allNonCandidate.phases.every((phase) =>
+    phase.shadowOutcome === "fallback" && phase.characterizationOutcome === "not_candidate"), true);
+  assert.deepEqual(buildPersonalizationHistoryDetail(allNonCandidate), {
+    kind: "not_candidate",
+    title: "Personalization evaluation recorded",
+    body: "No individualized workload target was available for this workout.",
+  });
+  assert.equal(buildPersonalizationHistoryDetail(undefined), null);
+});
+
+test("history detail rejects candidate phases with unusable E2 evidence", () => {
+  const cases = [
+    {
+      expectedOutcome: "insufficient_evidence",
+      characterization: fixture({
+        hrAt: (second) => second >= 30 && second < 40 ? 120 : 100,
+      }).characterization,
+    },
+    {
+      expectedOutcome: "telemetry_unavailable",
+      characterization: fixture({
+        hrSeconds: () => false,
+        powerSeconds: () => false,
+      }).characterization,
+    },
+    {
+      expectedOutcome: "unsupported_observed_provenance",
+      characterization: fixture({
+        powerSourceAt: (second) => second < 90 ? "measured_watts" : "calibrated_watts",
+      }).characterization,
+    },
+  ];
+
+  for (const { expectedOutcome, characterization } of cases) {
+    assert.equal(characterization.phases[0].shadowOutcome, "candidate");
+    assert.ok(characterization.phases[0].candidatePower);
+    assert.equal(characterization.phases[0].characterizationOutcome, expectedOutcome);
+    assert.deepEqual(buildPersonalizationHistoryDetail(characterization), {
+      kind: "not_candidate",
+      title: "Personalization evaluation recorded",
+      body: "No individualized workload target was available for this workout.",
+    });
+  }
+});
+
+test("real Threshold-style all-fallback history never claims candidate contribution", () => {
+  const { characterization } = thresholdHistoryFixture(null);
+  assert.ok(characterization);
+  assert.deepEqual(characterization.phases.map((phase) => ({
+    phaseId: phase.phaseId,
+    shadowOutcome: phase.shadowOutcome,
+    fallbackReason: phase.fallbackReason,
+    characterizationOutcome: phase.characterizationOutcome,
+  })), [
+    {
+      phaseId: "warmup",
+      shadowOutcome: "fallback",
+      fallbackReason: "unsupported_phase",
+      characterizationOutcome: "not_candidate",
+    },
+    {
+      phaseId: "sustain",
+      shadowOutcome: "fallback",
+      fallbackReason: "missing_fitness_state",
+      characterizationOutcome: "not_candidate",
+    },
+    {
+      phaseId: "cooldown",
+      shadowOutcome: "fallback",
+      fallbackReason: "unsupported_phase",
+      characterizationOutcome: "not_candidate",
+    },
+  ]);
+  assert.equal(
+    buildPersonalizationHistoryDetail(characterization).body,
+    "No individualized workload target was available for this workout."
+  );
+});
+
+test("mixed history keeps contribution wording when at least one candidate is characterized", () => {
+  const { characterization } = mixedHistoryFixture();
+  assert.ok(characterization);
+  assert.equal(characterization.phases.some((phase) =>
+    phase.shadowOutcome === "candidate" && phase.characterizationOutcome === "characterized"), true);
+  assert.equal(characterization.phases.some((phase) =>
+    phase.shadowOutcome === "candidate" && phase.characterizationOutcome === "insufficient_evidence"), true);
+  assert.equal(characterization.phases.some((phase) =>
+    phase.shadowOutcome === "fallback" && phase.characterizationOutcome === "not_candidate"), true);
+  assert.deepEqual(buildPersonalizationHistoryDetail(characterization), {
+    kind: "candidate",
+    title: "Personalization evaluation recorded",
+    body: "This workout contributed data toward validating individualized bike targets.",
+  });
 });
 
 test("strict E2 reader validates E1 linkage, ownership, phase identity, candidates, and future schemas", () => {

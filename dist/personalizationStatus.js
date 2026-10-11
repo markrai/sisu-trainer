@@ -1,5 +1,20 @@
 import { PROFILE_WEIGHT_LBS_TO_KG } from "./profile.js";
 import { isSupportedVo2EstimatorProtocolPair } from "./vo2Estimator.js";
+/** Pure display projection from an already-parsed, persisted E2 characterization. */
+export function buildPersonalizationHistoryDetail(characterization) {
+    if (!characterization)
+        return null;
+    const hasCandidate = characterization.phases.some((phase) => phase.shadowOutcome === "candidate" &&
+        phase.characterizationOutcome === "characterized" &&
+        phase.candidatePower !== undefined);
+    return {
+        kind: hasCandidate ? "candidate" : "not_candidate",
+        title: "Personalization evaluation recorded",
+        body: hasCandidate
+            ? "This workout contributed data toward validating individualized bike targets."
+            : "No individualized workload target was available for this workout.",
+    };
+}
 function nearlyEqual(a, b) {
     return Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(a), Math.abs(b));
 }
