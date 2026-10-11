@@ -36,6 +36,7 @@ import {
   advanceVo2ProtocolRuntime,
   createVo2ProtocolRuntimeV3,
   evaluateVo2PreflightV3ForUi,
+  resolveVo2PreflightPolicyOverride,
   getVo2ProtocolPhaseForRuntime,
   vo2ProtocolNeedsHrEvaluationForRuntime,
   type Vo2ProtocolRuntimeV3,
@@ -424,7 +425,7 @@ function captureWorkoutStartContext(
 function beginWorkout(activity?: Activity) {
   const day = typeof (window as any).getSelectedDay === "function" ? (window as any).getSelectedDay() : todayName();
   if (isVo2WorkoutSelector(day)) {
-    const preflight = evaluateVo2PreflightV3ForUi();
+    const preflight = evaluateVo2PreflightV3ForUi(Date.now(), resolveVo2PreflightPolicyOverride());
     if (preflight.ok === false) {
       if (typeof (window as any).showToast === "function") {
         (window as any).showToast(preflight.message, "error");

@@ -70,13 +70,21 @@ export const VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC = 30 * 60;
  * 14.31bpm of underprediction for a 15W extrapolation (~0.95 bpm/W).
  * That geometry belongs to the OLD v2 ladder: fit two low points, then
  * jump 15W past the fitted region with no re-fit, no margin, and no early
- * stop. The actual v3 sequence for the same subject diverges at stage 2
- * (bootstrap R6/86W, conservative R7/97W) and either completes at three
- * eligible stages or terminates truthfully; from the v3 stage-3 base of
- * 97W the failed 123W level is 26W away and structurally excluded by the
- * 25W maximum increment, and any prediction at or above planning is
- * refused outright. The portable part of the observation is the rate
- * (~0.95 bpm/W of unmodeled steepening), not the 14.31 total.
+ * stop. The v3 sequence for the same subject under the original 25W
+ * bootstrap diverges at stage 2 (bootstrap R6/86W, conservative R7/97W) and
+ * either completes at three eligible stages or terminates truthfully; from
+ * a stage-3 base of 97W the failed 123W level is 26W away and structurally
+ * excluded by the 25W maximum increment, and any prediction at or above
+ * planning is refused outright. (The current bootstrap starts lower; see
+ * VO2_ADAPTIVE_BOOTSTRAP_WATT_STEP.) The portable part of the observation
+ * is the rate (~0.95 bpm/W of unmodeled steepening), not the 14.31 total.
+ *
+ * A second real session (age 46, protocol v3, original bootstrap) shows
+ * the margin is not what limits acquisition: eligible R6/86W -> 120.30bpm
+ * and R7/97W -> 137.32bpm fit 1.547 bpm/W, predicting 154.33bpm at R8/108W,
+ * above the hard ceiling (149.43) as well as planning (137.43). No margin
+ * >= 0 admits R8; the session stopped with two eligible stages because the
+ * bootstrap had already skipped the lower calibrated levels.
  *
  * Why margin 12 is retained. The margin covers the observed rate for steps
  * up to ~12W, and steps are forced small exactly where a crossing is
@@ -149,10 +157,31 @@ export const VO2_ADAPTIVE_MAX_WORK_STAGES = Math.floor(
 /** One lower retry after an above-ceiling stage; prevents oscillation. */
 export const VO2_ADAPTIVE_MAX_RETRIES_AFTER_ABOVE_CEILING = 1;
 
-/** First stage bootstraps with v2's rule (no HR data yet): warmup + 25W. */
-export const VO2_ADAPTIVE_BOOTSTRAP_WATT_STEP = 25;
+/**
+ * First-stage step above warmup when no HR evidence exists yet: the smallest
+ * distinguishable calibrated step (the effective minimum increment), so the
+ * bootstrap selects the lowest unused calibrated level that is separated
+ * from warmup. Runway rationale: the ladder only ascends (the estimator
+ * requires strictly increasing workloads), so every calibrated level the
+ * first stage skips is permanently lost to the minimum eligible-stage count,
+ * and before any HR is observed a larger step is only a guess about where
+ * the athlete's eligible HR band starts. Starting low has a bounded,
+ * observed cost: a below-floor first stage is followed by the unchanged
+ * fallback step and spends at most the one spare stage
+ * (max_work_stages - VO2_MIN_ELIGIBLE_STAGES). Previously warmup + 25W
+ * (v2's rule), which on a dense low end (e.g. warmup 66W -> 86W) skipped
+ * levels that were later needed. Plans persist their policy, so a session
+ * started under the old value keeps its own bootstrap step.
+ */
+export const VO2_ADAPTIVE_BOOTSTRAP_WATT_STEP = Math.max(VO2_ADAPTIVE_MIN_WATT_INCREMENT, VO2_ADAPTIVE_MIN_WATT_SEPARATION);
 
-/** Conservative calibrated-watt step when slope is unknown (<2 eligible points). */
+/**
+ * Conservative calibrated-watt step when slope is unknown (<2 eligible
+ * points) and no eligible in-band observation anchors the step (below-floor
+ * or otherwise ineligible last stage, and lower retries). After an eligible
+ * point that still leaves further eligible stages to collect, the planner
+ * instead takes the minimum distinguishable step (see planNextVo2Stage).
+ */
 export const VO2_ADAPTIVE_FALLBACK_WATT_STEP = 15;
 
 /**
@@ -197,6 +226,29 @@ export const DEFAULT_VO2_ADAPTIVE_POLICY: Vo2AdaptivePolicy = {
   min_resistance: AUTOMATIC_RESISTANCE_MIN,
   max_resistance: VO2_PROTOCOL_MAX_RESISTANCE,
 };
+
+/**
+ * TEMPORARY developer-only acquisition experiment (single real-bike session).
+ *
+ * Isolates one question: can the athlete complete three eligible stages when
+ * the planner enters the band around R5 and tolerates the 4 W R5->R6
+ * calibrated step? All safety invariants (hard ceiling, estimator floor,
+ * planning margin, 3-stage minimum, strict progressions, steady-state and
+ * workload evidence rules, measured-watt authority, fail-closed behavior)
+ * are untouched; only acquisition spacing/entry change.
+ *
+ * NOT a default. With the flag off, the currently staged planner defaults
+ * apply unchanged (staged 5 W bootstrap — not the main-branch 25 W rule).
+ * Enabled only via `window.__VO2_ACQUISITION_EXPERIMENT__ === true` (see
+ * resolveVo2PreflightPolicyOverride). Delete this constant and its two
+ * references to remove the experiment. Persisted plans record these values
+ * in `adaptive_policy`, so experimental sessions stay auditable.
+ */
+export const VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE: Readonly<Partial<Vo2AdaptivePolicy>> = Object.freeze({
+  min_watt_increment: 1,
+  min_watt_separation: 1,
+  bootstrap_watt_step: 15,
+});
 
 export interface Vo2EligibleObservation {
   /**
@@ -688,7 +740,16 @@ export function planNextVo2Stage(rawInput: Vo2AdaptivePlannerInput): Vo2Adaptive
       last_steady_hr_bpm: headroomHr,
     });
   }
-  const targetCalibratedWatts = baseCalibratedWatts + policy.fallback_watt_step;
+  // Runway preservation. With one eligible point the athlete is inside the
+  // eligible HR band, but the slope is unknown, so any step spends band
+  // headroom at an unknown rate. While this stage is not the last eligible
+  // stage still required, take the smallest distinguishable step: the
+  // ladder only ascends, so a larger step would discard calibrated levels
+  // the remaining required stages may need. Without an in-band anchor
+  // (below-floor or otherwise ineligible history) keep the fallback step.
+  const eligibleStillNeededAfterThis = VO2_MIN_ELIGIBLE_STAGES - input.eligible.length - 1;
+  const preserveRunway = last != null && eligibleStillNeededAfterThis >= 1;
+  const targetCalibratedWatts = baseCalibratedWatts + (preserveRunway ? minIncrement : policy.fallback_watt_step);
   const aboveBase = listCandidates(input.calibration, policy, input.usedResistances).filter(
     (entry) => entry.calibratedWatts > baseCalibratedWatts + 1e-9
   );

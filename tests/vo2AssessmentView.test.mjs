@@ -197,6 +197,43 @@ test("result diagnostics surface high-HR and cadence rejection reasons per stage
   assert.match(cadence.stages[1].detail, /cadence was outside the verified 70 ± 5 RPM range/);
 });
 
+test("adaptive no-safe-workload stop is not described as a ceiling crossing or unstable data", () => {
+  // Real protocol-v3 session 4e4a6524 (age 46): two clean eligible stages,
+  // then the planner refused stage 3 (hr_safety_no_safe_target). Steady HR
+  // never approached the 149.43 bpm hard ceiling.
+  const first = acceptedStage("vo2-stage:1", 86, 120.3);
+  first.prescribed_resistance = 6;
+  const second = acceptedStage("vo2-stage:2", 97, 137.3166666667);
+  second.prescribed_resistance = 7;
+  second.workload.estimator_watts = 92;
+  second.workload.measured_watts_median = 92;
+  const record = evidence([first, second], "submax_hr_ceiling");
+  record.protocol.protocol_version = 3;
+  const result = assessVo2(record, { age_years: 46, weight_kg: 52.16312255 });
+  assert.equal(result.status, "insufficient_evidence");
+  assert.equal(result.termination_reason, "submax_hr_ceiling");
+  assert.equal(result.reason_codes.includes("hr_above_submax_ceiling"), false);
+  const view = vo2AssessmentPresentation(result);
+  assert.equal(view.title, "Not enough submaximal stages to estimate VO₂ max");
+  assert.match(view.body, /no higher workload could be selected safely while staying within the submaximal test range/);
+  assert.doesNotMatch(view.body, /heart rate reached/);
+  assert.doesNotMatch(view.body, /wasn't enough stable/);
+  assert.equal(view.detail, "Only 2 stable work stages were completed. At least 3 are required.");
+
+  // A live hard-ceiling breach leaves an incomplete stage: keep the generic
+  // wording rather than claim a planner refusal.
+  const breached = structuredClone(record);
+  breached.protocol.stages.push({ ...acceptedStage("vo2-stage:3", 108, 150), status: "incomplete" });
+  const breachView = vo2AssessmentPresentation(assessVo2(breached, { age_years: 46, weight_kg: 52.16312255 }));
+  assert.doesNotMatch(breachView.body, /no higher workload could be selected safely/);
+
+  // An observed above-ceiling stage keeps the existing ceiling wording.
+  const observed = structuredClone(record);
+  observed.protocol.stages.push(acceptedStage("vo2-stage:3", 108, 151));
+  const observedView = vo2AssessmentPresentation(assessVo2(observed, { age_years: 46, weight_kg: 52.16312255 }));
+  assert.match(observedView.body, /heart rate reached the test's submaximal limit/);
+});
+
 test("three accepted and eligible stages are not described as insufficient", () => {
   const result = assessVo2(evidence(linearThree), { age_years: 40, weight_kg: 80 });
   assert.equal(result.accepted_stage_count, 3);

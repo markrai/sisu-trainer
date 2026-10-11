@@ -20,7 +20,7 @@ import { getSelectedMachineId } from "./machines/selection.js";
 import { readExplicitVo2ProfileInputs } from "./profile.js";
 import { summarizeVo2StageWorkload } from "./vo2Workload.js";
 import { VO2_AGE_YEARS_MAX, VO2_AGE_YEARS_MIN, VO2_WEIGHT_KG_MAX, VO2_WEIGHT_KG_MIN, classifyVo2ProtocolStage, estimatorSubmaxHrCeilingBpm, predictedHrMaxBpm, } from "./vo2Estimator.js";
-import { DEFAULT_VO2_ADAPTIVE_POLICY, VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC, isValidVo2AdaptivePolicy, planNextVo2Stage, vo2AdaptiveMaxTotalDurationSec, } from "./vo2AdaptivePlanner.js";
+import { DEFAULT_VO2_ADAPTIVE_POLICY, VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE, VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC, isValidVo2AdaptivePolicy, planNextVo2Stage, vo2AdaptiveMaxTotalDurationSec, } from "./vo2AdaptivePlanner.js";
 export const VO2_PROTOCOL_V3_ID = VO2_PROTOCOL_ID;
 export const VO2_PROTOCOL_V3_VERSION = VO2_PROTOCOL_VERSION_V3;
 const VO2_V3_TERMINATION_REASONS = [
@@ -125,6 +125,30 @@ export function evaluateVo2PreflightV3(input) {
         return { ok: false, reason: "insufficient_workloads", message: "Not enough calibrated workload levels for this test" };
     }
     return { ok: true, plan, assessmentProfile: { age_years: age, weight_kg: weight } };
+}
+/**
+ * TEMPORARY developer-only experiment flag. Set
+ * `window.__VO2_ACQUISITION_EXPERIMENT__ = true` in the dev console before
+ * starting the VO2 test to run one session under
+ * VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE. Absent or any other value:
+ * the currently staged defaults apply unchanged. Delete with the override
+ * constant.
+ */
+export const VO2_ACQUISITION_EXPERIMENT_FLAG = "__VO2_ACQUISITION_EXPERIMENT__";
+export function isVo2AcquisitionExperimentEnabled() {
+    if (typeof window === "undefined")
+        return false;
+    return window[VO2_ACQUISITION_EXPERIMENT_FLAG] === true;
+}
+/**
+ * TEMPORARY experiment seam. Returns the experimental policy override only
+ * when the developer flag is explicitly enabled; otherwise undefined, which
+ * preserves production defaults exactly.
+ */
+export function resolveVo2PreflightPolicyOverride() {
+    return isVo2AcquisitionExperimentEnabled()
+        ? { ...VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE }
+        : undefined;
 }
 export function evaluateVo2PreflightV3ForUi(now = Date.now(), policy) {
     return evaluateVo2PreflightV3({

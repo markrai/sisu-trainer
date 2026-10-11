@@ -76,6 +76,7 @@ import {
 } from "./vo2Estimator.js";
 import {
   DEFAULT_VO2_ADAPTIVE_POLICY,
+  VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE,
   VO2_ADAPTIVE_ADVERTISED_MAX_TOTAL_DURATION_SEC,
   isValidVo2AdaptivePolicy,
   planNextVo2Stage,
@@ -267,6 +268,32 @@ export function evaluateVo2PreflightV3(input: {
     return { ok: false, reason: "insufficient_workloads", message: "Not enough calibrated workload levels for this test" };
   }
   return { ok: true, plan, assessmentProfile: { age_years: age, weight_kg: weight } };
+}
+
+/**
+ * TEMPORARY developer-only experiment flag. Set
+ * `window.__VO2_ACQUISITION_EXPERIMENT__ = true` in the dev console before
+ * starting the VO2 test to run one session under
+ * VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE. Absent or any other value:
+ * the currently staged defaults apply unchanged. Delete with the override
+ * constant.
+ */
+export const VO2_ACQUISITION_EXPERIMENT_FLAG = "__VO2_ACQUISITION_EXPERIMENT__" as const;
+
+export function isVo2AcquisitionExperimentEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  return (window as unknown as Record<string, unknown>)[VO2_ACQUISITION_EXPERIMENT_FLAG] === true;
+}
+
+/**
+ * TEMPORARY experiment seam. Returns the experimental policy override only
+ * when the developer flag is explicitly enabled; otherwise undefined, which
+ * preserves production defaults exactly.
+ */
+export function resolveVo2PreflightPolicyOverride(): Partial<Vo2AdaptivePolicy> | undefined {
+  return isVo2AcquisitionExperimentEnabled()
+    ? { ...VO2_ACQUISITION_EXPERIMENT_POLICY_OVERRIDE }
+    : undefined;
 }
 
 export function evaluateVo2PreflightV3ForUi(

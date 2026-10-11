@@ -5,7 +5,7 @@ import { handleWorkoutCancellation } from "./workoutLifecycle.js";
 import { resetMachineGuidanceRuntime } from "./machines/runtime.js";
 import { getActiveWorkoutActivity, requireAllowedActivity } from "./workoutActivity.js";
 import { isVo2WorkoutSelector, vo2ProtocolVoiceCues, isStaleVo2ProtocolTick, VO2_HR_FRESHNESS_MS, } from "./vo2Protocol.js";
-import { advanceVo2ProtocolRuntime, createVo2ProtocolRuntimeV3, evaluateVo2PreflightV3ForUi, getVo2ProtocolPhaseForRuntime, vo2ProtocolNeedsHrEvaluationForRuntime, } from "./vo2ProtocolV3.js";
+import { advanceVo2ProtocolRuntime, createVo2ProtocolRuntimeV3, evaluateVo2PreflightV3ForUi, resolveVo2PreflightPolicyOverride, getVo2ProtocolPhaseForRuntime, vo2ProtocolNeedsHrEvaluationForRuntime, } from "./vo2ProtocolV3.js";
 import { clearOrdinaryBikeTelemetry, getHrSamples } from "./workoutStorage.js";
 import { clearBikeTelemetrySamples, getBikeTelemetrySamples, recordBikeTelemetrySample, } from "./bikeTelemetryTrace.js";
 import { parseLegacyHeartRateTarget, resolveWorkoutPrescription } from "./workoutPrescription.js";
@@ -328,7 +328,7 @@ function beginWorkout(activity) {
     var _a, _b, _c, _d;
     const day = typeof window.getSelectedDay === "function" ? window.getSelectedDay() : todayName();
     if (isVo2WorkoutSelector(day)) {
-        const preflight = evaluateVo2PreflightV3ForUi();
+        const preflight = evaluateVo2PreflightV3ForUi(Date.now(), resolveVo2PreflightPolicyOverride());
         if (preflight.ok === false) {
             if (typeof window.showToast === "function") {
                 window.showToast(preflight.message, "error");

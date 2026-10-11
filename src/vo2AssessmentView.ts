@@ -317,6 +317,22 @@ function isHrBoundaryShortfall(
   );
 }
 
+/**
+ * Adaptive refusal: the protocol stopped under the submax HR policy without
+ * any observed crossing, i.e. no higher calibrated workload could be
+ * justified safely. A live hard-ceiling breach always leaves an incomplete
+ * (non-accepted) stage, so requiring every stage to be accepted keeps that
+ * case out of this wording.
+ */
+function isNoSafeWorkloadShortfall(result: Vo2AssessmentResult): boolean {
+  if (result.termination_reason !== "submax_hr_ceiling") return false;
+  if (result.eligible_stage_count >= VO2_MIN_ELIGIBLE_STAGES) return false;
+  if ((result.reason_codes as readonly string[]).includes("hr_above_submax_ceiling")) return false;
+  const diagnostics = result.diagnostics;
+  if (!("stage_points" in diagnostics)) return false;
+  return diagnostics.stage_points.every((point) => point.protocol_accepted);
+}
+
 export function vo2AssessmentPresentation(result: Vo2AssessmentResult | undefined): Vo2AssessmentPresentation {
   if (!result) {
     return {
@@ -350,6 +366,16 @@ export function vo2AssessmentPresentation(result: Vo2AssessmentResult | undefine
       title: "Not enough submaximal stages to estimate VO₂ max",
       valueText: "",
       body: "We recorded the assessment, but your heart rate reached the test's submaximal limit before we collected enough usable stages for a reliable estimate.",
+      detail: vo2InsufficientDetail(result),
+      estimated: false,
+      stages: vo2StageDiagnostics(result),
+    };
+  }
+  if (isNoSafeWorkloadShortfall(result)) {
+    return {
+      title: "Not enough submaximal stages to estimate VO₂ max",
+      valueText: "",
+      body: "We recorded the assessment, but the test stopped because no higher workload could be selected safely while staying within the submaximal test range, so too few usable stages were collected for a reliable estimate.",
       detail: vo2InsufficientDetail(result),
       estimated: false,
       stages: vo2StageDiagnostics(result),

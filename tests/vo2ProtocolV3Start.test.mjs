@@ -88,12 +88,13 @@ test("v3 session advances through the live tick and reports phase, guidance, and
     assert.ok(reloaded);
     assert.equal(reloaded.plan.protocol_version, VO2_PROTOCOL_VERSION_V3);
     assert.equal(reloaded.plan.workloads.length, 1);
-    // Bootstrap first stage: R6/86W with adaptive provenance.
+    // Bootstrap first stage: lowest calibrated level separated from warmup
+    // (R4/78W above R1/66W) with adaptive provenance.
     const workload = reloaded.plan.workloads[0];
-    assert.equal(workload.prescribed_resistance, 6);
-    assert.equal(workload.calibrated_watts_at_70rpm, 86);
+    assert.equal(workload.prescribed_resistance, 4);
+    assert.equal(workload.calibrated_watts_at_70rpm, 78);
     assert.equal(reloaded.stages.length, 1);
-    assert.equal(reloaded.stages[0].adaptive.selected_resistance, 6);
+    assert.equal(reloaded.stages[0].adaptive.selected_resistance, 4);
     assert.equal(reloaded.stages[0].adaptive.reason_code, "bootstrap_first_stage");
     // The live phase follows the v3 runtime.
     const phase = getPhase(300, getPlan()[VO2_WORKOUT_SELECTOR_ID], null, { day: VO2_WORKOUT_SELECTOR_ID });
@@ -101,7 +102,7 @@ test("v3 session advances through the live tick and reports phase, guidance, and
     assert.equal(phase.kind, "work");
     // Machine guidance follows the adaptive selected resistance.
     const targets = vo2ProtocolUiTargetsForRuntime(reloaded, phase.phaseId);
-    assert.equal(targets.holdResistance, 6);
+    assert.equal(targets.holdResistance, 4);
     assert.equal(targets.holdCadenceRpm, 70);
     assert.equal(targets.holdResistance, reloaded.stages[0].adaptive.selected_resistance);
     // The resulting protocol evidence reports version 3.
