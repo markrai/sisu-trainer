@@ -68,6 +68,7 @@ function observation({
     machineProfileVersion,
     workoutIntent: "threshold",
     intensityId: "threshold",
+    archetype: "steady_state",
     targetHrMin,
     targetHrMax,
     windowStartSec,

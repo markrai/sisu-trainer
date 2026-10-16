@@ -1417,6 +1417,87 @@ Oct 16, then calibrate `maxCrossSessionMadRatio` (and optionally
 `maxObservationAgeDays`) from observed cross-session dispersion before
 enabling aggregate emission.
 
+## Personalization architecture seam
+
+Workouts are **declarative consumers** of personalization. They describe intent,
+intensity, and phase semantics. They do not own evidence algorithms.
+
+Personalization sits **above** named workout definitions:
+
+```text
+                    personalization
+                          |
+              capability / semantics
+                          |
+              +-----------+-----------+
+              |                       |
+        prescription side         evidence side
+                                      |
+                              archetype strategy
+                                      |
+                           steady_state engine
+                                      |
+                        Threshold configuration
+```
+
+### Archetypes
+
+Evidence algorithms are organized by physiological/execution archetype, not by
+named workout:
+
+| Archetype | Status |
+|---|---|
+| `steady_state` | First extracted engine (`src/steadyStateSettledWorkload.ts` + aggregate) |
+| `interval` | Declared only — no algorithm yet |
+| `recovery` | Declared only — no algorithm yet |
+
+Central capability table: `src/personalizationCapability.ts`
+(`PERSONALIZATION_CAPABILITIES_V1`). Declaring an archetype **does not** enable
+an algorithm. Only rows with `completedWorkoutEvidence: true` may emit
+settled-workload observations today.
+
+### Threshold as steady_state configuration
+
+Threshold is the **first** `steady_state` configuration/adapter:
+
+- Adapter: `src/thresholdRegionSettledWorkload.ts` (+ aggregate adapter)
+- Generic kernel: `src/steadyStateSettledWorkload.ts` (+ aggregate)
+- Threshold preserves historical schema/provenance strings
+  (`threshold-region-settled-workload-observation`,
+  `ordinary_workout_settled_threshold_region`, etc.) and failure codes
+  (`intent_not_threshold` / `intensity_not_threshold`)
+- Generic default identities use `steady-state-*` /
+  `ordinary_workout_settled_steady_state_region` for non-Threshold callers
+
+Scientific admission values are unchanged (0.90 / 0.10 / 120; aggregate 3/3 with
+cross-session MAD and age still null).
+
+### Not yet enabled
+
+- **Aerobic Base** personalization / settled-workload evidence
+  (`completedWorkoutEvidence: false` despite `steady_state` archetype)
+- VO₂ short/long interval evidence
+- Recovery evidence
+- Shadow advice resolver, UI advice, active control
+
+A future steady-state intensity should need capability configuration + policy
+values if scientifically different — not a clone of the Threshold modules.
+
+### Cross-intent same-intensity evidence sharing
+
+**UNRESOLVED.** Tuesday `aerobic_base` and Saturday `aerobic_volume` may both
+carry `intensityId = aerobic_base` + `archetype = steady_state`. Whether those
+should share one athlete/intensity evidence lineage is not decided.
+Compatibility keys currently include **both** `workoutIntent` and
+`intensityId` (plus archetype) so lineages remain distinguishable until that
+product decision is made (`CROSS_INTENT_SAME_INTENSITY_EVIDENCE_SHARING_V1`).
+
+### Historical Threshold investigation
+
+Sections above on Threshold model / Oct 16 evidence / shadow-advice contract /
+multi-session aggregation remain provenance for **why** the generic
+steady-state contract exists. They are not erased by this seam.
+
 ## Provenance of claims
 
 - **Code:** all module behaviors above were read from `src/` this session
@@ -1477,3 +1558,9 @@ enabling aggregate emission.
   equality across the complete canonical single-session observation payload;
   partial fingerprints that ignored coverage/duration/cadence fields were
   fixed so contradictory pairs cannot order-select a winner.
+
+- **Steady-state architecture extraction (2026-10-16):** Threshold settled-workload
+  single-session + aggregate refactored into generic `steady_state` engines with
+  Threshold configuration adapters; capability/archetype seam added;
+  Threshold science and schema identities preserved; Aerobic Base / interval /
+  recovery evidence not enabled.
