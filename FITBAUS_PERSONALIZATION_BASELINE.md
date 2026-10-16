@@ -1127,8 +1127,8 @@ active control.
 |---|---|
 | Single qualifying settled window | yes |
 | Single-session descriptive observation | yes (descriptive only; thresholds v1 set) |
+| Multi-session aggregate | design skeleton — see aggregation contract; emission blocked until unresolved scientific fields set |
 | Provisional shadow **candidate advice** in UI | **not yet** — needs product decision |
-| Multi-session aggregate | **UNRESOLVED** — do **not** auto-reuse Phase D’s 4 sessions/dates |
 | Validated advice / active control | no (E4+) |
 
 One session establishes evidence **shape**, not multi-session confidence.
@@ -1195,6 +1195,192 @@ settledFrom 1171; 1110 is inside settling.)
 - No resolver / UI advice / active-control wiring (thresholds enable
   descriptive observation emission only)
 
+## Threshold multi-session aggregation contract
+
+Design / skeleton module:
+`src/thresholdRegionSettledWorkloadAggregate.ts`
+Tests: `tests/thresholdRegionSettledWorkloadAggregate.test.mjs`
+
+### Scientific claim
+
+Across repeated ordinary Threshold workouts on the **same athlete** and
+**compatible machine / formal-anchor / HR-band / policy lineage**, qualifying
+single-session settled observations support a **repeatable measured workload**
+associated with the workout's legacy Threshold HR region.
+
+Not FTP, lactate/ventilatory threshold, critical power, E1 inversion, Phase D
+whole-phase refinement, UI advice, or active control.
+
+### Identities (distinct)
+
+| Kind | Id |
+|---|---|
+| Aggregate schema | `threshold-region-settled-workload-aggregate@1` |
+| Aggregate policy | `threshold-region-settled-workload-aggregate-policy@1` |
+| Aggregate provenance | `ordinary_workout_settled_threshold_region_aggregate` |
+| Single-session observation | `threshold-region-settled-workload-observation@1` (unchanged) |
+| Future shadow resolver | `threshold-region-ordinary-workout-shadow-resolver@1` (still unused) |
+| E1 resolver | `personalized-prescription-resolver` (must stay distinct) |
+
+### Independence unit
+
+**One workout session → at most one observation.**
+
+- The single-session contract already emits ≤1 observation (best accepted
+  window). Aggregation consumes observations, not raw windows.
+- Duplicate `sessionId` is rejected (`duplicate_session_id`); the first
+  chronological observation is kept.
+- Do **not** weight by telemetry sample count or post-settling duration once
+  admission has cleared — a longer hold is not ten independent replications.
+
+### Compatibility key (exact match required)
+
+```text
+athleteId
+machineId
+machineProfileVersion
+formalAnchorObservedAt
+targetHrMin
+targetHrMax
+admissionPolicyId + version
+observationSchemaId + version
+observationProvenance
+```
+
+v1 is **fail-closed same-machine/profile**. Different bikes do not aggregate
+even if watt medians match. A newer formal VO₂ assessment starts a **new
+lineage** (pre/post-anchor observations do not mix). A changed Threshold HR
+band (e.g. 155–162 → other) is a new scientific claim.
+
+### Aggregate workload statistic
+
+**Unweighted median of session measured-watt medians**
+(`median_of_session_medians`).
+
+- Simplest robust central tendency matching Fitbaus median/MAD culture.
+- Equal session weight after admission (no duration/sample weighting).
+- Preferable to mean / Huber / recency-weighted blends for v1 evidence.
+
+### Evidence quantity (resolved product-policy)
+
+| Field | v1 | Rationale |
+|---|---|---|
+| `minSessions` | **3** | Replication beyond a pair; median resists one outlier; MAD estimable. Not Phase D’s 4. |
+| `minDistinctDates` | **3** | Same-day repeats do not count as independent exposures. |
+
+Support class: **product-policy judgment** with **analogical** support from
+submaximal cycling reliability studies that use ~3–6 repeated exposures
+(e.g. LSCT ICC 0.85–1.00 over repeated days; Wattbike interday CV ~3%). Not
+a direct validation of our Threshold HR band.
+
+### Cross-session stability
+
+Statistic: `MAD(sessionMedians) / median(sessionMedians)` — **distinct** from
+the single-session within-hold MAD ratio (0.10).
+
+| Field | Status |
+|---|---|
+| `maxCrossSessionMadRatio` | **UNRESOLVED (`null`)** |
+
+Why unresolved: only **one** real qualifying observation exists today (Oct 16).
+No empirical cross-session dispersion for this athlete/lineage. Day-to-day
+submaximal power CV ~2–4% in literature is only analogical.
+
+Note: with n=3, MAD resists a *single* extreme outlier by design (central
+value stays trustworthy); dispersed triangular patterns (e.g. 105/114/123)
+inflate MAD/median. Span ratio is recorded diagnostically
+(`sessionWattsSpanRatio`).
+
+### Trend rule
+
+`trendHandling: "diagnostic_only"` (resolved).
+
+Classify `rising` / `falling` / `flat` / `mixed` from chronological session
+medians. **Do not reject** solely on monotonic trend in v1 (insufficient real
+multi-session series to set a guard). Avoid building adaptive training into
+this layer.
+
+### Recency / invalidation
+
+| Change | Effect |
+|---|---|
+| New formal FitnessState anchor | new lineage (old observations incompatible) |
+| Machine id or profile version change | new lineage |
+| Target HR band change | new lineage |
+| Admission/observation schema or provenance change | new lineage |
+| `maxObservationAgeDays` | **UNRESOLVED (`null`)** — optional calendar TTL once multi-session data exists |
+
+No decay function in v1.
+
+### Output / eligibility semantics
+
+When (and only when) the aggregate policy is production-ready and gates pass:
+
+- `interpretation: "descriptive_aggregate_only"`
+- `quality: "unverified"`
+- `eligibleForPrescription: false`
+- `eligibleForShadowCandidate: true` (structural only — **not** UI advice)
+
+Pipeline:
+
+```text
+single-session descriptive observation
+  → multi-session aggregate   ← this contract
+  → shadow workload candidate (future)
+  → validated advice (future)
+  → active control (future)
+```
+
+### Real-data availability (2026-10-16 CDP inventory)
+
+Formal anchor: `2026-10-11T18:18:38.106Z`. Machine: `proform-smart-power-10` / v1.
+
+| Session | Date | Qualifying? | Notes |
+|---|---|---|---|
+| `d04a6bda-…` | 2026-09-28 | no | `pre_formal_anchor` |
+| `472d05fa-…` | 2026-10-01 | no | `pre_formal_anchor` |
+| `4da2628c-…` | 2026-10-09 | no | `pre_formal_anchor` |
+| `85c5b25f-…` | 2026-10-11 | no | short stepped holds; no settled window |
+| `01cbd92a-…` | 2026-10-13 | no | occupancy ~0.42; duration 119 s |
+| `6f4612a2-…` | 2026-10-16 | **yes** | R10, 114 W median, MAD ratio ~0.053, 246 s |
+
+**Qualifying observations available for aggregation: 1.**
+
+### Synthetic sensitivity (session medians)
+
+| Series | Median | MAD | MAD/median | Trend | Notes |
+|---|---|---|---|---|---|
+| 114 | 114 | 0 | 0 | flat | n=1 insufficient |
+| 114, 115 | 114.5 | 0.5 | ~0.004 | rising | n=2 insufficient |
+| 112, 114, 116 | 114 | 2 | ~0.018 | rising | stable prototype |
+| 105, 114, 123 | 114 | 9 | ~0.079 | rising | elevated dispersion |
+| 112, 114, 150 | 114 | 2 | ~0.018 | rising | median robust to one spike |
+| 110, 114, 118, 120 | 116 | 4 | ~0.034 | rising | |
+| 100, 105, 110, 115 | 107.5 | 5 | ~0.047 | rising | strong directional trend (diagnostic) |
+
+Numerical agreement across incompatible machines still **fails provenance**.
+
+### Resolved vs unresolved
+
+| Field | Status |
+|---|---|
+| Independence unit | resolved: session |
+| Compatibility key | resolved (above) |
+| Aggregate statistic | resolved: median of session medians |
+| minSessions / minDistinctDates | resolved: 3 / 3 |
+| Trend handling | resolved: diagnostic_only |
+| Lineage invalidation | resolved (anchor/machine/band/schema) |
+| maxCrossSessionMadRatio | **UNRESOLVED** |
+| maxObservationAgeDays | **UNRESOLVED** |
+| Production aggregate emission | blocked (`policyProductionReady=false`) |
+
+### Next blocker
+
+Collect ≥2 additional qualifying ordinary Threshold sessions on the same
+athlete / machine / formal-anchor / 155–162 lineage after Oct 16, then
+calibrate `maxCrossSessionMadRatio` (and optionally `maxObservationAgeDays`)
+from observed cross-session dispersion before enabling aggregate emission.
+
 ## Provenance of claims
 
 - **Code:** all module behaviors above were read from `src/` this session
@@ -1237,3 +1423,8 @@ settledFrom 1171; 1110 is inside settling.)
   of Oct 11 / Oct 13 / Oct 16 Threshold sessions + Oct 16 watt distribution;
   ACSM/YMCA steady-state timing and fitness-refinement MAD quality analogs;
   activated `0.90` / `0.10` / `120`; Oct 16 admits descriptive observation.
+- **Multi-session aggregation contract (2026-10-16):** read-only CDP inventory
+  of all Threshold sessions under admission v1 (1 qualifying); design skeleton
+  `thresholdRegionSettledWorkloadAggregate.ts` with 3/3 quantity floors,
+  median-of-medians, diagnostic trend, unresolved cross-session MAD/age;
+  no workout finalization / UI / control wiring.
