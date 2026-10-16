@@ -46,7 +46,11 @@ export const THRESHOLD_REGION_ORDINARY_WORKOUT_SHADOW_RESOLVER_ID_V1 = "threshol
 export const THRESHOLD_REGION_ORDINARY_WORKOUT_SHADOW_RESOLVER_VERSION_V1 = 1;
 /** Provenance label for the scientific claim. */
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1 = "ordinary_workout_settled_threshold_region";
-/** Design-default policy: resolved gates only; unresolved fields stay null. */
+/**
+ * Single-session admission policy (v1 scientific thresholds resolved).
+ * Completeness here means observation emission is structurally allowed; it
+ * does NOT enable the shadow resolver, UI advice, or active control.
+ */
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1 = {
     id: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
     version: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
@@ -58,9 +62,18 @@ export const THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1 = {
     minMeasuredWattsCoverageRatio: FITNESS_REFINEMENT_ALGORITHM_V2.minimumMeasuredWattsCoverage,
     minCadenceCoverageRatio: FITNESS_REFINEMENT_ALGORITHM_V2.minimumCadenceCoverage,
     requireTargetHoldCorroboration: true,
-    minInBandFraction: null,
-    maxMeasuredWattsMadRatio: null,
-    minAdviceGradeDurationSec: null,
+    /** Strong majority of measured HR inside the product control band. */
+    minInBandFraction: 0.9,
+    /**
+     * Aligns with fitness-refinement moderate MAD/baseline quality (≤0.10);
+     * rejects unstable workload without Phase D span sensitivity to outliers.
+     */
+    maxMeasuredWattsMadRatio: 0.1,
+    /**
+     * Two minutes of post-settling elapsed evidence after the 120 s settling
+     * floor (effective hold ≈ 4 min). Distinct from the 30-sample joint floor.
+     */
+    minAdviceGradeDurationSec: 120,
 };
 function isNonAcceptedActuationOutcome(outcome) {
     return (outcome === "failed" ||

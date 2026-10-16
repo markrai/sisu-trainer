@@ -300,10 +300,13 @@ test("policy reuses E2 held-workload settling/gap floors and stays distinct from
     PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1
   );
   assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1, "ordinary_workout_settled_threshold_region");
-  assert.equal(thresholdRegionSettledPolicyIsProductionReady(), false);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.minInBandFraction, 0.9);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.maxMeasuredWattsMadRatio, 0.1);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.minAdviceGradeDurationSec, 120);
+  assert.equal(thresholdRegionSettledPolicyIsProductionReady(), true);
   assert.deepEqual(
-    evaluateThresholdRegionSettledWorkloadContract(syntheticDenseHoldFixture()).unresolvedPolicyFields.sort(),
-    ["maxMeasuredWattsMadRatio", "minAdviceGradeDurationSec", "minInBandFraction"].sort()
+    evaluateThresholdRegionSettledWorkloadContract(syntheticDenseHoldFixture()).unresolvedPolicyFields,
+    []
   );
 });
 
@@ -319,8 +322,11 @@ test("synthetic dense fixture accepts settled hold under resolved gates and reje
   assert.ok((result.acceptedWindow.hrInBandFraction ?? 0) >= 0.9);
   assert.ok((result.acceptedWindow.measuredWattsMedian ?? 0) > 100);
   assert.ok((result.acceptedWindow.measuredWattsMedian ?? 0) < 130);
-  assert.equal(result.observation, null);
-  assert.equal(result.policyProductionReady, false);
+  assert.ok(result.observation);
+  assert.equal(result.observation.eligibleForPrescription, false);
+  assert.equal(result.observation.quality, "unverified");
+  assert.equal(result.observation.interpretation, "descriptive_observation_only");
+  assert.equal(result.policyProductionReady, true);
 
   const rampish = result.windows.filter((w) => w.windowStartSec < 1050);
   for (const window of rampish) {
@@ -342,7 +348,8 @@ test("actual-gap-shaped sustained hold qualifies under resolved gates", () => {
   assert.ok(result.acceptedWindow.hasTargetHoldCorroboration);
   // 1170 is before settledFrom (1171); corroboration uses post-settle holds only.
   assert.ok(result.acceptedWindow.matchingHoldAuditElapsedSeconds.includes(1230));
-  assert.equal(result.observation, null);
+  assert.ok(result.observation);
+  assert.equal(result.observation.eligibleForPrescription, false);
 });
 
 test("telemetry gaps alone do not masquerade as resistance changes", () => {
@@ -513,12 +520,7 @@ test("rejects missing target-hold corroboration and mostly out-of-band HR when o
     noHold.windows.some((w) => w.resolvedGateFailures.includes("missing_target_hold_corroboration"))
   );
 
-  const outOfBand = syntheticDenseHoldFixture({
-    policy: {
-      ...THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1,
-      minInBandFraction: 0.8,
-    },
-  });
+  const outOfBand = syntheticDenseHoldFixture();
   for (const [sec, _hr] of outOfBand.hrByActiveSec) {
     if (sec >= 1170) outOfBand.hrByActiveSec.set(sec, 140);
   }
@@ -656,10 +658,6 @@ test("rejects unstable settled workload when MAD ratio gate is set", () => {
     hrByActiveSec,
     bikeSamples,
     machineDecisionAudit: [holdAudit(780, 9, 158), holdAudit(840, 9, 158)],
-    policy: {
-      ...THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1,
-      maxMeasuredWattsMadRatio: 0.1,
-    },
   });
   const window = result.windows.find((w) => w.heldResistance === 9);
   assert.ok(window);
@@ -669,20 +667,13 @@ test("rejects unstable settled workload when MAD ratio gate is set", () => {
 });
 
 test("production observation requires complete policy; schema identity is set when emitted", () => {
-  const completePolicy = {
-    ...THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1,
-    minInBandFraction: 0.8,
-    maxMeasuredWattsMadRatio: 0.25,
-    minAdviceGradeDurationSec: 60,
-  };
-  assert.equal(thresholdRegionSettledPolicyIsProductionReady(completePolicy), true);
-  const result = evaluateThresholdRegionSettledWorkloadContract(
-    syntheticDenseHoldFixture({ policy: completePolicy })
-  );
+  assert.equal(thresholdRegionSettledPolicyIsProductionReady(), true);
+  const result = evaluateThresholdRegionSettledWorkloadContract(syntheticDenseHoldFixture());
   assert.ok(result.acceptedWindow);
   assert.ok(result.observation);
   assert.equal(result.observation.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1);
   assert.equal(result.observation.eligibleForPrescription, false);
+  assert.equal(result.observation.quality, "unverified");
   assert.equal(result.observation.interpretation, "descriptive_observation_only");
   assert.equal(result.observation.provenance, THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1);
   assert.equal(result.observation.heldResistance, 10);
@@ -1198,4 +1189,203 @@ test("evidence after accepted re-establishment may qualify if otherwise valid", 
   assert.equal(result.acceptedWindow.heldResistance, 10);
   assert.equal(result.acceptedWindow.windowStartSec, 720);
   assert.ok(!result.acceptedWindow.resolvedGateFailures.includes("ambiguous_actuation_provenance"));
+});
+
+function controllableSettledHoldFixture({
+  holdStart = 600,
+  holdEndExclusive = 900,
+  hrInBandFraction = 0.95,
+  wattsStable = true,
+  wattsMedian = 114,
+  zeroMedianWatts = false,
+  policyOverrides = {},
+} = {}) {
+  const hrByActiveSec = new Map();
+  const bikeSamples = [];
+  const settledFrom = holdStart + THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.settlingSeconds;
+  const settledSecs = [];
+  for (let sec = settledFrom; sec < holdEndExclusive; sec++) settledSecs.push(sec);
+  const inBandTarget = Math.round(hrInBandFraction * settledSecs.length);
+  for (let sec = holdStart; sec < holdEndExclusive; sec++) {
+    let hr = 158;
+    if (sec >= settledFrom) {
+      const idx = sec - settledFrom;
+      hr = idx < inBandTarget ? 158 : 140;
+    }
+    hrByActiveSec.set(sec, hr);
+    let watts = wattsMedian;
+    if (zeroMedianWatts) {
+      watts = 0;
+    } else if (!wattsStable) {
+      watts = sec % 2 === 0 ? wattsMedian * 0.5 : wattsMedian * 1.5;
+    } else {
+      // Mild ordinary variability (~5% MAD) without approaching the 0.10 gate.
+      watts = wattsMedian + ((sec % 5) - 2);
+    }
+    bikeSamples.push(bikeSample(sec, { resistance: 10, watts, cadence: 67 }));
+  }
+  const holds = [];
+  for (let t = settledFrom + 30; t < holdEndExclusive; t += 60) {
+    holds.push(holdAudit(t, 10, 158));
+  }
+  return {
+    ...syntheticDenseHoldFixture(),
+    workActiveStartSec: holdStart,
+    workActiveEndSecExclusive: holdEndExclusive,
+    hrByActiveSec,
+    bikeSamples,
+    machineDecisionAudit: holds,
+    resistanceActuationEvents: [actuationEvent(holdStart, 10, 1, "accepted")],
+    actuationCoverage: "complete",
+    policy: {
+      ...THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1,
+      ...policyOverrides,
+    },
+  };
+}
+
+test("scientific v1: occupancy exactly at threshold passes; just below fails", () => {
+  const at = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ hrInBandFraction: 0.9 })
+  );
+  assert.ok(at.acceptedWindow);
+  assert.ok(Math.abs((at.acceptedWindow.hrInBandFraction ?? 0) - 0.9) < 0.01);
+  assert.ok(!at.acceptedWindow.resolvedGateFailures.includes("insufficient_in_band_occupancy"));
+
+  const below = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ hrInBandFraction: 0.89 })
+  );
+  assert.equal(below.acceptedWindow, null);
+  assert.ok(
+    below.windows.some((w) => w.resolvedGateFailures.includes("insufficient_in_band_occupancy"))
+  );
+});
+
+test("scientific v1: MAD ratio exactly at threshold passes; just above fails", () => {
+  // Force MAD/median via policy override near a known unstable fixture.
+  const stable = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ wattsStable: true })
+  );
+  assert.ok(stable.acceptedWindow);
+  assert.ok((stable.acceptedWindow.measuredWattsMadRatio ?? 1) <= 0.1);
+
+  const unstable = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ wattsStable: false })
+  );
+  assert.equal(unstable.acceptedWindow, null);
+  const uw = unstable.windows.find((w) => w.heldResistance === 10);
+  assert.ok(uw);
+  assert.ok((uw.measuredWattsMadRatio ?? 0) > 0.1);
+  assert.ok(uw.resolvedGateFailures.includes("unstable_measured_workload"));
+
+  // Exact-at-threshold: set policy max equal to the stable window's observed ratio.
+  const ratio = stable.acceptedWindow.measuredWattsMadRatio;
+  const exact = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({
+      wattsStable: true,
+      policyOverrides: { maxMeasuredWattsMadRatio: ratio },
+    })
+  );
+  assert.ok(exact.acceptedWindow);
+  assert.ok(!exact.acceptedWindow.resolvedGateFailures.includes("unstable_measured_workload"));
+
+  const justAbove = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({
+      wattsStable: true,
+      policyOverrides: { maxMeasuredWattsMadRatio: ratio * 0.999 },
+    })
+  );
+  assert.equal(justAbove.acceptedWindow, null);
+  assert.ok(
+    justAbove.windows.some((w) => w.resolvedGateFailures.includes("unstable_measured_workload"))
+  );
+});
+
+test("scientific v1: duration exactly at threshold passes; one second below fails", () => {
+  // settling 120 + 120 settled = hold length 240 ? endExclusive = start+240
+  const at = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ holdStart: 600, holdEndExclusive: 840 })
+  );
+  assert.ok(at.acceptedWindow);
+  assert.equal(at.acceptedWindow.postSettlingDurationSec, 120);
+
+  const below = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ holdStart: 600, holdEndExclusive: 839 })
+  );
+  assert.equal(below.acceptedWindow, null);
+  assert.ok(
+    below.windows.some((w) => w.resolvedGateFailures.includes("insufficient_post_settling_duration"))
+  );
+  assert.equal(
+    below.windows.find((w) => w.heldResistance === 10)?.postSettlingDurationSec,
+    119
+  );
+});
+
+test("scientific v1: good occupancy + bad MAD fails; good MAD + bad occupancy fails; short duration fails", () => {
+  const badMad = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ hrInBandFraction: 0.95, wattsStable: false })
+  );
+  assert.equal(badMad.acceptedWindow, null);
+  assert.ok(badMad.windows.some((w) => w.resolvedGateFailures.includes("unstable_measured_workload")));
+
+  const badOcc = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ hrInBandFraction: 0.7, wattsStable: true })
+  );
+  assert.equal(badOcc.acceptedWindow, null);
+  assert.ok(badOcc.windows.some((w) => w.resolvedGateFailures.includes("insufficient_in_band_occupancy")));
+
+  const short = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({
+      holdStart: 600,
+      holdEndExclusive: 750,
+      hrInBandFraction: 0.95,
+      wattsStable: true,
+    })
+  );
+  assert.equal(short.acceptedWindow, null);
+  assert.ok(
+    short.windows.some((w) => w.resolvedGateFailures.includes("insufficient_post_settling_duration"))
+  );
+});
+
+test("scientific v1: clear high-quality window passes all three gates and emits descriptive observation", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({
+      holdStart: 600,
+      holdEndExclusive: 960,
+      hrInBandFraction: 0.96,
+      wattsStable: true,
+    })
+  );
+  assert.ok(result.acceptedWindow);
+  assert.equal(result.acceptedWindow.resolvedGateFailures.length, 0);
+  assert.ok(result.acceptedWindow.hrInBandFraction >= 0.9);
+  assert.ok(result.acceptedWindow.measuredWattsMadRatio <= 0.1);
+  assert.ok(result.acceptedWindow.postSettlingDurationSec >= 120);
+  assert.ok(result.observation);
+  assert.equal(result.observation.eligibleForPrescription, false);
+  assert.equal(result.observation.quality, "unverified");
+  assert.equal(result.observation.interpretation, "descriptive_observation_only");
+});
+
+test("scientific v1: Oct 16-shaped gap fixture qualifies under chosen thresholds", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(oct16RealGapShapedFixture());
+  assert.ok(result.acceptedWindow);
+  assert.ok(result.acceptedWindow.hrInBandFraction >= 0.9);
+  assert.ok(result.acceptedWindow.measuredWattsMadRatio <= 0.1);
+  assert.ok(result.acceptedWindow.postSettlingDurationSec >= 120);
+  assert.ok(result.observation);
+  assert.equal(result.observation.eligibleForPrescription, false);
+});
+
+test("scientific v1: MAD ratio fail-closed for non-positive median watts", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(
+    controllableSettledHoldFixture({ zeroMedianWatts: true })
+  );
+  assert.equal(result.acceptedWindow, null);
+  const window = result.windows.find((w) => w.heldResistance === 10);
+  assert.ok(window);
+  assert.equal(window.measuredWattsMadRatio, null);
+  assert.ok(window.resolvedGateFailures.includes("unstable_measured_workload"));
 });

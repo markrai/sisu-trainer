@@ -118,7 +118,7 @@ export interface ThresholdRegionSettledWorkloadPolicyV1 {
    * Minimum count of post-settling seconds that jointly have usable HR and
    * fresh measured watts. Matches E2 held-workload `minQualifyingSeconds`
    * (characterization) — a sample count, not merely elapsed wall/active span.
-   * Advice-grade elapsed duration remains UNRESOLVED (`minAdviceGradeDurationSec`).
+   * Advice-grade elapsed duration is `minAdviceGradeDurationSec` (separate gate).
    */
   minQualifyingSeconds: number;
   /** Reused from E2 characterization / Phase D phase HR coverage. */
@@ -133,15 +133,30 @@ export interface ThresholdRegionSettledWorkloadPolicyV1 {
    * held resistance (and work-phase / HR-target semantics).
    */
   requireTargetHoldCorroboration: boolean;
-  /** UNRESOLVED: minimum fraction of post-settling HR seconds inside target band. */
+  /**
+   * Minimum fraction of post-settling **valid HR samples** inside the legacy
+   * target band (`inBandCount / hrSampleCount`). Denominator is HR evidence,
+   * not elapsed seconds or joint watt seconds.
+   */
   minInBandFraction: number | null;
-  /** UNRESOLVED: maximum MAD(watts) / median(watts) in the settled window. */
+  /**
+   * Maximum MAD(measured watts) / median(measured watts) in the settled
+   * window. Fail-closed when median ≤ 0 or MAD/ratio is non-finite.
+   */
   maxMeasuredWattsMadRatio: number | null;
-  /** UNRESOLVED: advice-grade elapsed post-settling duration beyond characterization floor. */
+  /**
+   * Minimum elapsed post-settling active seconds for advice-grade admission.
+   * Distinct from `minQualifyingSeconds` (joint sample count). Effective
+   * minimum hold ≈ settlingSeconds + this value.
+   */
   minAdviceGradeDurationSec: number | null;
 }
 
-/** Design-default policy: resolved gates only; unresolved fields stay null. */
+/**
+ * Single-session admission policy (v1 scientific thresholds resolved).
+ * Completeness here means observation emission is structurally allowed; it
+ * does NOT enable the shadow resolver, UI advice, or active control.
+ */
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1: ThresholdRegionSettledWorkloadPolicyV1 = {
   id: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
   version: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
@@ -153,9 +168,18 @@ export const THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1: ThresholdRegionSettled
   minMeasuredWattsCoverageRatio: FITNESS_REFINEMENT_ALGORITHM_V2.minimumMeasuredWattsCoverage,
   minCadenceCoverageRatio: FITNESS_REFINEMENT_ALGORITHM_V2.minimumCadenceCoverage,
   requireTargetHoldCorroboration: true,
-  minInBandFraction: null,
-  maxMeasuredWattsMadRatio: null,
-  minAdviceGradeDurationSec: null,
+  /** Strong majority of measured HR inside the product control band. */
+  minInBandFraction: 0.9,
+  /**
+   * Aligns with fitness-refinement moderate MAD/baseline quality (≤0.10);
+   * rejects unstable workload without Phase D span sensitivity to outliers.
+   */
+  maxMeasuredWattsMadRatio: 0.1,
+  /**
+   * Two minutes of post-settling elapsed evidence after the 120 s settling
+   * floor (effective hold ≈ 4 min). Distinct from the 30-sample joint floor.
+   */
+  minAdviceGradeDurationSec: 120,
 };
 
 export interface ThresholdRegionSettledWorkloadObservationV1 {

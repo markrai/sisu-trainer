@@ -814,7 +814,7 @@ Contract design + pure admission module + tests only.
 No workout-control, E1, Phase D, or advice-emission wiring.
 
 Executable contract: `src/thresholdRegionSettledWorkload.ts`
-Tests: `tests/thresholdRegionSettledWorkload.test.mjs` (56/56 pass).
+Tests: `tests/thresholdRegionSettledWorkload.test.mjs` (focused contract suite).
 
 ### Evidence-window definition
 
@@ -876,8 +876,8 @@ splitter. Do not widen the 2 s gap to “make Oct 16 pass.”
 
 ### Final continuity / freshness semantics
 
-Added in the integrity harden pass (still design/shadow-only; thresholds
-UNRESOLVED).
+Added in the integrity harden pass (still design/shadow-only). Scientific
+admission thresholds were selected later in v1 (see subsection below).
 
 **Controller continuity source (authoritative order):**
 
@@ -925,8 +925,106 @@ precedence.
   R10 continuity — sparse telemetry must not erase known controller changes.
 - Same-resistance reconciliation resends are not transitions.
 
-Scientific admission thresholds remain **UNRESOLVED** (`null`):
-`minInBandFraction`, `maxMeasuredWattsMadRatio`, `minAdviceGradeDurationSec`.
+### Scientific admission thresholds v1
+
+Selected and activated in `THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1`
+(2026-10-16 selection pass). Completeness means single-session descriptive
+observation emission is structurally allowed
+(`thresholdRegionSettledPolicyIsProductionReady === true`). It does **not**
+enable the shadow-advice resolver, UI advice, multi-session aggregation, or
+active control.
+
+| Field | v1 value | Denominator / statistic |
+|---|---|---|
+| `minInBandFraction` | **0.90** | `inBandCount / hrSampleCount` (valid post-settling HR samples only — not elapsed seconds, not joint watt seconds) |
+| `maxMeasuredWattsMadRatio` | **0.10** | `MAD(fresh measured watts) / median(fresh measured watts)`; fail-closed if median ≤ 0 or ratio non-finite |
+| `minAdviceGradeDurationSec` | **120** | Elapsed post-settling active seconds (`postSettlingDurationSec`); distinct from joint sample-count floor `minQualifyingSeconds=30` |
+
+**Effective minimum hold:** ≈ `settlingSeconds` (120) + `minAdviceGradeDurationSec` (120) = **~240 s** of continuous controller-held resistance, plus coverage / joint / hold-corroboration gates.
+
+#### Rationale (per gate)
+
+**`minInBandFraction = 0.90`**
+
+- *Scientific:* Requires a strong majority of measured HR evidence inside the
+  legacy product control band before calling the held workload representative
+  of that region. Rejects brief crossings, mostly-below / mostly-above holds,
+  and oscillation through the band, while tolerating ordinary second-to-second
+  HR noise. Does **not** treat 155–162 as measured lactate threshold or FTP.
+- *Existing-system:* Complements resistance-matched `within_target_policy`
+  hold corroboration (decision presence) with quantitative occupancy of the
+  same band. Analogous in spirit to E2 `minSettledInBandSeconds`, but as a
+  fraction of HR samples rather than a raw second count.
+- *Empirical:* Oct 16 accepted window ~0.967 passes with margin. Oct 13
+  resolved-gate window ~0.42 (HR median 163, mostly above band) fails
+  occupancy — correctly classified *clearly poor* before thresholds.
+- *Conservatism:* Intentionally rejects 0.80–0.89 occupancy that could still
+  clear a looser majority.
+- *Limitation:* Band width is product-specific; literature supports steady-state
+  HR concepts, not this exact fraction.
+- *Support class:* product-policy judgment, analogically constrained by
+  submaximal steady-state HR practice (ACSM/YMCA: HR reaches steady state in
+  ~2–3 min; consecutive-minute agreement ≤5 bpm is a different metric).
+
+**`maxMeasuredWattsMadRatio = 0.10`**
+
+- *Scientific:* Caps robust relative workload dispersion so the held interval
+  is a stable workload observation. MAD/median resists isolated spikes better
+  than (max−min)/mean.
+- *Existing-system:* Reuses the same MAD/baseline ≤0.10 boundary used as
+  **moderate** quality in `FITNESS_REFINEMENT_ALGORITHM_V2.projectionQuality`.
+  Preferable here to Phase D’s whole-phase span gate (`(max−min)/mean > 0.35`).
+- *Empirical:* Oct 16 MAD/median ≈ 0.053 (median 114 W, MAD 6 W) passes.
+  Fresh measured-watt distribution (n=205): IQR 11, p10–p90 ≈ 100–122, min 57 /
+  max 140; MAD remained representative despite low/high outliers
+  (13 below median−3·MAD, 1 above median+3·MAD). Statistic retained.
+  Oct 13 had very stable watts (MAD ratio ≈ 0.026) but fails occupancy — gates
+  separate correctly.
+- *Conservatism:* Rejects MAD/median > 0.10 (e.g. alternating 0.5×/1.5× median).
+- *Limitation:* Indoor constant-load CV literature (~3% feedback-controlled
+  pacing) is analogical; 0.10 is deliberately looser than “high” refinement
+  quality (0.05) for ordinary-workout controller holds.
+- *Support class:* existing-system reuse + analogically supported robust CV
+  (MAD/median as robust relative dispersion).
+
+**`minAdviceGradeDurationSec = 120`**
+
+- *Scientific:* After the existing 120 s settling (HR/VO₂ kinetics to
+  near-steady under constant load in ~2–3 min per ACSM-style guidance), require
+  two additional minutes of elapsed settled evidence before the observation is
+  sustained enough for future shadow-advice candidacy.
+- *Existing-system:* Distinct from E2 `minQualifyingSeconds=30` (joint sample
+  **count**) and from characterization-phase `minSettledInBandSeconds=15`.
+  Symmetric with `settlingSeconds=120`.
+- *Empirical:* Oct 16 post-settling 246 s passes. Oct 13’s 119 s would fail
+  duration, but that window is already *clearly poor* on occupancy (~0.42) —
+  duration was **not** chosen to reject Oct 13’s 119. Oct 11 sustain ≈ 302 s
+  with ~60 s resistance steps never cleared settling on any hold (structurally
+  no advice-grade window) — hunting workouts correctly fail closed.
+- *Conservatism:* Rejects 30–119 s post-settling windows that may clear the
+  joint-sample floor but are too brief for advice-grade sustainment.
+- *Limitation:* Ordinary Threshold sustains that never hold one resistance for
+  ≥~4 min cannot qualify; that matches the intended evidence class.
+- *Support class:* analogically supported (ACSM/YMCA 3-min stages + 2–3 min
+  steady-state onset) with product-policy judgment for the post-settling floor.
+
+#### Real-session sensitivity (chosen combo 0.90 / 0.10 / 120)
+
+| Session / case | Occupancy | MAD ratio | Duration | Result |
+|---|---|---|---|---|
+| Oct 16 `6f4612a2-…` | ~0.967 | ~0.053 | 246 s | **PASS** → observation emitted (descriptive only) |
+| Oct 13 `01cbd92a-…` | ~0.42 | ~0.026 | 119 s | **FAIL occupancy** (also duration) |
+| Oct 11 `85c5b25f-…` | n/a | n/a | 0 post-settle | no settled candidate (short stepped holds) |
+| Brief pass-through | 0.55 | 0.04 | 200 s | FAIL occupancy |
+| Mostly-outside stable | 0.72 | 0.05 | 200 s | FAIL occupancy |
+| Stable HR, unstable watts | 0.95 | 0.22 | 200 s | FAIL workload stability |
+| Stable watts, short duration | 0.95 | 0.05 | 45 s | FAIL duration |
+
+#### Still unresolved (out of scope for this pass)
+
+- Multi-session aggregation threshold
+- Shadow-advice resolver behavior / UI wording
+- Active-control authority
 
 **Cadence freshness:** admission counts only
 `availability === "fresh"` + `cadenceRpm.source === "measured"`.
@@ -965,10 +1063,10 @@ watt cov 0.833, cadence 67 / 0.833, holds 1230/1290/1350/1410.
 - **`minQualifyingSeconds`:** matches E2 held-workload meaning — minimum
   **count of joint HR + fresh measured-watt seconds** in the post-settling
   window (≥30), not merely elapsed span length. Elapsed post-settling
-  duration remains the coverage denominator and the unresolved
+  duration remains the coverage denominator and the
   `minAdviceGradeDurationSec` basis.
 
-### Required evidence (resolved vs UNRESOLVED)
+### Required evidence
 
 | Requirement | Source / threshold | Failure code |
 |---|---|---|
@@ -987,14 +1085,13 @@ watt cov 0.833, cadence 67 / 0.833, holds 1230/1290/1350/1410.
 | Measured watts only | telemetry `source` | `non_measured_watt_provenance` |
 | Fresh measured cadence coverage ≥0.75 | Phase D + fresh/measured gate | `insufficient_cadence_coverage` |
 | Resistance-matched target-hold audit | machine decision audit | `missing_target_hold_corroboration` |
-| Min in-band HR fraction | **UNRESOLVED** (`null`) | `insufficient_in_band_occupancy` when set |
-| Max MAD(watts)/median | **UNRESOLVED** (`null`) | `unstable_measured_workload` when set |
-| Advice-grade elapsed duration | **UNRESOLVED** (`null`) beyond characterization floor | `insufficient_post_settling_duration` when set |
+| Min in-band HR fraction ≥0.90 | scientific admission v1 | `insufficient_in_band_occupancy` |
+| Max MAD(watts)/median ≤0.10 | scientific admission v1 (refinement moderate MAD) | `unstable_measured_workload` |
+| Advice-grade elapsed duration ≥120 s | scientific admission v1 (post-settling elapsed) | `insufficient_post_settling_duration` |
 
-Unresolved fields block **production observation emission**
-(`policyProductionReady=false`); design/fixture evaluation may still accept
-windows under resolved gates only. The three UNRESOLVED thresholds were
-**not** chosen in this harden pass.
+With all three scientific thresholds set, `policyProductionReady=true` and a
+qualifying window may emit a **descriptive** observation
+(`eligibleForPrescription=false`, `quality=unverified`).
 
 ### Robust workload statistic
 
@@ -1028,8 +1125,8 @@ active control.
 
 | Stage | Allowed now? |
 |---|---|
-| Single qualifying settled window | yes (fixture / design) |
-| Single-session descriptive observation | yes only after unresolved thresholds are set |
+| Single qualifying settled window | yes |
+| Single-session descriptive observation | yes (descriptive only; thresholds v1 set) |
 | Provisional shadow **candidate advice** in UI | **not yet** — needs product decision |
 | Multi-session aggregate | **UNRESOLVED** — do **not** auto-reuse Phase D’s 4 sessions/dates |
 | Validated advice / active control | no (E4+) |
@@ -1059,9 +1156,8 @@ Synthetic dense fixtures had falsely suggested acceptance.
 
 ### Real Oct 16 result
 
-After the continuity correction, the same real session accepts **one**
-window under resolved gates (UNRESOLVED thresholds still null; no
-observation emission):
+After the continuity correction and scientific-threshold activation, the same
+real session accepts **one** window and emits a descriptive observation:
 
 | Field | Value |
 |---|---|
@@ -1070,11 +1166,13 @@ observation emission):
 | Settled from | 1171 |
 | Post-settle elapsed | 246 s |
 | Qualifying joint HR+watt samples | 205 |
-| HR median / in-band | 158 bpm / ~0.967 |
-| Measured watts median / MAD | 114 W / 6 (MAD/median ≈ 0.053) |
+| HR median / in-band | 158 bpm / ~0.967 (≥ 0.90) |
+| Measured watts median / MAD | 114 W / 6 (MAD/median ≈ 0.053 ≤ 0.10) |
 | Measured-watt coverage | 0.833 |
 | Cadence median / coverage | 67 / 0.833 |
 | Matching controller holds | 1230, 1290, 1350, 1410 |
+| Admission vs scientific v1 | **PASS** (all three gates) |
+| Observation | emitted; `descriptive_observation_only`; `eligibleForPrescription=false`; `quality=unverified` |
 
 (Hold audits at 1110 and 1170 are correctly excluded: 1170 is before
 settledFrom 1171; 1110 is inside settling.)
@@ -1094,7 +1192,8 @@ settledFrom 1171; 1110 is inside settling.)
 - No hardcoded resistance/watt/athlete/machine-table constants
 - No runtime controller authority
 - No physiological Threshold naming
-- No resolver implementation; three policy thresholds remain UNRESOLVED
+- No resolver / UI advice / active-control wiring (thresholds enable
+  descriptive observation emission only)
 
 ## Provenance of claims
 
@@ -1130,8 +1229,11 @@ settledFrom 1171; 1110 is inside settling.)
 - **Contract harden (2026-10-16):** read-only CDP replay of session
   `6f4612a2-…` against the evaluator before/after continuity correction;
   hold-resistance matching, timestamp fail-closed, and E2 joint-sample
-  `minQualifyingSeconds` semantics verified; three UNRESOLVED thresholds
-  left untouched.
+  `minQualifyingSeconds` semantics verified.
 - **Integrity pass (2026-10-16):** cadence/observed freshness aligned with
   ordinary telemetry producer; actuation+audit transitions fail-closed across
   telemetry gaps; `heldResistance` rename; Oct 16 CDP replay unchanged.
+- **Scientific admission thresholds v1 (2026-10-16):** read-only CDP analysis
+  of Oct 11 / Oct 13 / Oct 16 Threshold sessions + Oct 16 watt distribution;
+  ACSM/YMCA steady-state timing and fitness-refinement MAD quality analogs;
+  activated `0.90` / `0.10` / `120`; Oct 16 admits descriptive observation.
