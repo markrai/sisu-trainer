@@ -837,6 +837,7 @@ test("E2 v3 has no runtime, control, E1, or FitnessState feedback path", () => {
     "../src/personalizationScientificAssessment.ts",
     "../src/personalizedPrescriptionCharacterization.ts",
     "../src/scientificSessionEvidence.ts",
+    "../src/thresholdRegionSettledWorkload.ts",
     "../src/types.ts",
     "../src/workoutSummary.ts",
   ]);

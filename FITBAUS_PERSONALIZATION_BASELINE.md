@@ -421,6 +421,602 @@ runtime.
   session the owner must rebuild `dist/` (see run instructions) so the
   experiment seam reaches the running app.
 
+## Threshold personalization model investigation
+
+Added 2026-10-11. Investigation only; no production code changed.
+Concepts kept separate: generic HR workout target ≠ formal submax
+HR/workload calibration ≠ predicted maximal workload ≠ physiological
+threshold ≠ training workload prescription ≠ runtime HR control.
+
+### Proven current state
+
+Real protocol-v3 assessment promoted on-device into `fitness_state_v1`
+(athlete `afa677b3-9682-4fb9-8f7d-af77375975d7`): VO₂ ≈ 37.09, predicted
+max watts ≈ 145.35, three measured calibration points
+(78 W@118.53, 87 W@126.25, 96 W@133.83), slope ≈ 0.85 bpm/W,
+intercept ≈ 52.26, R² ≈ 0.99997, protocol `bike-submax-70rpm` v3, quality
+`high`. Machine provenance `proform-smart-power-10` v1 also persisted.
+Thursday Threshold template remains `155–162` bpm. E1
+(`extrapolationPolicy: "none"`) falls back with
+`outside_observed_hr_range` because observed HR domain is only
+≈118.5–133.8 bpm.
+
+### Semantic problem
+
+| Concept | What code actually says |
+|---|---|
+| Thursday `155–162` | Legacy template string in `data.json`, resolved by `resolveWorkoutPrescription` as `source: "legacy_fallback"`, `quality: "unverified"`, `explanationCode: "legacy_target_hr_bpm"`. Live runtime HR control authority. |
+| `intensity_id: "threshold"` | Semantic phase label only — **not** lactate/ventilatory/FTP evidence. E4A names the E1 modality `legacy_hr_region_workload` and states it is not a personal physiological threshold. |
+| E1 candidate watts | Read-only shadow: invert formal HR/workload line at the legacy HR band; “athlete-specific watts associated with that physiological region” for shadow evaluation — **not** active prescription. |
+| Why in-domain only | Policy + docs: no extrapolation/clamping; assessment does not support equal confidence outside observed stages; estimator itself is submax-only. |
+| `predictedMaxWatts` | Formal metric with derivation `demographic_hrmax_extrapolation`. Used for FitnessState/display; **not** consumed by E1 or ordinary-workout prescription. |
+| Closest athlete-relative intensity | Phase D `descriptive_workload_trend_in_fixed_hr_window` (ordinary `aerobic_base`/`threshold` work) — explicitly descriptive, not prescription. |
+
+Structural mismatch for this athlete: Tanaka 85% hard ceiling ≈ **149.4 bpm**,
+so the formal assessment **cannot observe** the 155–162 band by design.
+`outside_observed_hr_range` is therefore not a temporary acquisition gap; it
+is the correct refusal of joining a submax calibration to a supra-ceiling
+legacy HR band. Architecture review already separates these: use calibration
+**inside its defensible range**; for hard intervals, resolve workload from an
+**approved training-intensity policy** with HR as response/guardrail — and
+explicitly lists “mapping `intensity_id` → % of predicted max” and “whether
+predicted max watts is valid for prescription” as **unresolved open
+questions** (must not be hidden in code).
+
+Illustrative unrestricted linear inversion of the real fit (label only;
+not a recommendation): 155 bpm → ≈121 W; 162 bpm → ≈129 W
+(≈21–28 bpm / ≈25–33 W beyond observed max; >1× the observed HR span;
+≈83–89% of predictedMaxWatts). Same arithmetic family as
+`predictedMaxWatts` itself (line to demographic HRmax).
+
+E1 model soundness:
+
+1. **Aerobic-base:** conceptually sound **when** the legacy HR band lies
+   inside the observed formal domain (local interpolation of measured
+   steady-state points). Even Tuesday `115–130` slightly misses this
+   athlete’s domain (115 < 118.5), so template/domain overlap is not
+   automatic.
+2. **Threshold:** not conceptually sound as “invert submax line at
+   155–162.” That claims steady HR↔watt behavior above the protocol’s own
+   validity ceiling and above all observed stages.
+3. **Refusal:** protecting against an invalid extrapolation, not merely
+   blocking a useful estimate.
+4. **Defensibility of extrapolating to 155–162:** **No** under current
+   evidence and repo policy. High R² on three submax points does not
+   authorize supra-ceiling prescription.
+
+### Candidate models
+
+| | A. HR-calibration extrapolation | B. Predicted-max-relative intensity | C. Separate Threshold calibration / learning |
+|---|---|---|---|
+| Claim | Watts at legacy Threshold HR via formal line beyond observed domain | Ordinary workloads as fractions of `predictedMaxWatts` | Threshold watts learned/validated from ordinary Threshold work (or a dedicated threshold-oriented assessment), not derived from VO₂ submax inversion |
+| Benefit | Reuses E1 math; would immediately fill the UI for Thursday | Anchors to existing athlete-relative max-power metric | Matches architecture hierarchy for hard work; uses Phase C/E2 held-workload evidence where the athlete actually trains; keeps submax calibration honest |
+| Risk | Silent physiological overclaim; same family as demographic HRmax extrapolation; no open-loop Threshold evidence | Repo has **no** approved `% of predictedMaxWatts` mapping; docs call this an open physiology question; metric already marked `demographic_hrmax_extrapolation` | Advice unavailable until ordinary Threshold sessions accumulate; needs new provenance/resolver identity so it is not mislabeled as formal-calibration inversion |
+| Scientific support in repo | Explicitly refused (`extrapolationPolicy: "none"`; assessment “does not support extrapolation with equal confidence”) | Explicitly unresolved; E1 docs say predicted max watts do **not** drive candidate math | Phase D already observes workload in fixed HR windows for `threshold`; E2/E3/E4A validate transfer of candidates but currently starve without E1 candidates; held-workload forward-response exists for descriptive open-loop-ish evidence |
+
+If A or B shipped as “E1,” that would be a **materially different scientific
+claim** and would need a **new resolver version**, **new provenance**,
+**new quality/policy identifier** — not a silent flip of
+`extrapolationPolicy`.
+
+### Recommendation
+
+**Choose model C for the next engineering experiment.**
+
+Smallest defensible next step (not “allow extrapolation”): run ordinary
+Thursday Threshold workouts under current legacy HR control, capture settled
+measured watts while HR is in the legacy Threshold region (Phase C response +
+held-workload / E2-style coverage gates), and design a **new** shadow advice
+path — distinct resolver/provenance from E1 formal-calibration inversion —
+that surfaces provisional athlete-specific Threshold watt advice only from
+that ordinary-workout evidence. Keep formal VO₂ calibration for in-domain
+interpolation (when template bands overlap) and for VO₂ / predicted-max
+display. Treat initial advice / validated advice / active control as separate
+gates (E4A remains scientific-only; no runtime authority).
+
+### Non-goals (do not change yet)
+
+- Do not enable E1 HR-line extrapolation or weaken `extrapolationPolicy`.
+- Do not invent `% of predictedMaxWatts` intensity tables.
+- Do not redefine `155–162` as a measured physiological threshold.
+- Do not give shadow advice runtime/controller authority.
+- Do not relax formal-assessment provenance, athlete/machine matching,
+  measured-watt authority, quality gating, or fail-closed readers.
+- Do not retarget the VO₂ protocol to reach Threshold HR (would abandon
+  submax validity).
+
+## Real Threshold evidence probe
+
+Added 2026-10-11. Feasibility/evidence probe only; no resolver, E1, or
+workout-control changes. On-device read via ADB WebView CDP into IndexedDB
+`vo2_workout_db` + `fitness_state_v1` localStorage (read-only).
+
+### Existing capture path
+
+Ordinary Thursday Threshold finalization already persists enough structure
+for Model C **if** a session reaches the legacy HR region:
+
+| Need | Where stored today |
+|---|---|
+| workout intent `threshold` | `WorkoutSummary.intent` (+ day `Thursday`) |
+| phase intensity `threshold` | `workout_response.phases[].intensityId` / `kind: work` |
+| expected HR 155–162 | `phases[].expectedHeartRate` from legacy resolver |
+| phase duration / coverage | `plannedDurationSec`, `completedDurationSec`, `hr`/`watts`/`cadenceRpm` summaries |
+| measured watts | phase `watts.provenance: measured_watts` + raw `ordinary_bike_telemetry` |
+| per-second HR | `hr_samples` |
+| cadence quality | phase cadence summary + telemetry `cadenceRpm` |
+| athlete / session | `athlete_id`, `external_session_id` |
+| machine id + profile | `machine_id`, `machine_profile_version`; newer rows also `execution_provenance.machine` |
+| E1/E2 shadow | optional; E1 Threshold was `fallback` / `missing_fitness_state` on historical rows |
+
+Settled-window / held-workload math exists in E2 v3, but only for E1
+**candidate** phases — historical Threshold E1 was fallback, so no usable
+held-workload Threshold transfer evidence. Phase D
+(`descriptive_workload_trend_in_fixed_hr_window`) can accept `threshold`
+work after its gates (≥480 s planned/completed, ≥90% phase completion,
+session completion ≥80%, HR/bike coverage, measured-watt coverage ≥80%,
+cadence/stability, ≥4 measured sessions / ≥4 dates, and **after** the
+formal FitnessState anchor). It is descriptive-only
+(`eligibleForPrescription: false`); profile UI may show it; no runtime
+prescription/control path consumes it.
+
+**Verdict on capture:** telemetry/evidence capture is already sufficient to
+*design* a new shadow resolver later. The gap is real-world Threshold HR
+occupancy, not missing stores.
+
+### Real device evidence
+
+Athlete `afa677b3-9682-4fb9-8f7d-af77375975d7`, machine
+`proform-smart-power-10` v1. Formal anchor
+`2026-10-11T18:18:38.106Z`. `passiveAerobicObservation` / trend: **absent**.
+
+**3** ordinary Thursday `intent=threshold` bike sessions (plus other workouts
+that only touch `threshold` as Friday warmup subsections — not counted here):
+
+| Session | Date | Outcome | Threshold work | HR in work | 155–162 occupancy | Phase D-style blockers |
+|---|---|---|---|---|---|---|
+| `d04a6bda-…` | 2026-09-28 | cancelled (~1 min) | 0 s | n/a | 0 s | cancelled, too short, no watts |
+| `472d05fa-…` | 2026-10-01 | early cooldown (~19 min) | 25 s | median 117 (116–118) | **0 s** | low completion, fresh bike 0.68, phase_too_short |
+| `4da2628c-…` | 2026-10-09 | early cooldown (~20 min) | 319 s | median 136 (119–157), end 155 | **23 s**; 15 fresh measured-watt samples in band (median **139 W**, 136–146) | low completion (0.58), phase_too_short (<480 s), watts coverage 0.77, unstable_workload |
+
+All three ended **before** the formal VO₂ anchor, so Phase D would also
+reject them with `not_after_formal_anchor` even if gates otherwise passed.
+No session has phase-median HR inside 155–162. No defensible descriptive
+Threshold workload aggregate exists.
+
+### Sufficiency verdict
+
+**Insufficient** to design/populate a new Model C shadow-advice resolver from
+existing sessions. Capture path is ready; usable settled 155–162
+measured-watt evidence is not. The Oct 9 fragment (≈23 s / 15 watt samples
+@ ~139 W median) is illustrative only — not a prescription and not enough
+for Phase D or a fail-closed shadow signal.
+
+Next step is **not** “existing evidence → new resolver”; it is **one more
+real Threshold workout that actually occupies the legacy HR band**.
+
+### Next experiment
+
+Run **one normal Thursday Threshold workout** under existing legacy HR
+control, current telemetry unchanged (no E1/control/resolver changes).
+
+Count as **usable evidence** only if all of the following hold (repo
+thresholds, not new inventions):
+
+1. Same athlete; bike; `intent=threshold`; ProForm machine identity recorded.
+2. Session not cancelled; completion fraction ≥ **0.8**
+   (`FITNESS_REFINEMENT_ALGORITHM_V2.minimumSessionCompletionFraction`).
+3. Session HR coverage ≥ **0.75**; fresh bike coverage ≥ **0.75**.
+4. Threshold **work** phase: planned and completed duration ≥ **480 s**,
+   completion ≥ **0.9**, HR coverage ≥ **0.8**, measured-watt coverage ≥ **0.8**,
+   cadence coverage ≥ **0.75**, and Phase D stability checks pass
+   (or document the exact failing reason).
+5. Phase median HR lands in/near the legacy band so a Phase D 2-bpm window
+   can represent Threshold (target: median ∈ **155–162**), **and** raw
+   join shows sustained time-in-band with fresh `measured_watts` (not
+   calibrated-only) — avoid early cooldown before the band is reached.
+6. Session ends **after** the current formal anchor so Phase D will not
+   discard it as `not_after_formal_anchor`.
+
+Record: session id, completed work seconds, time in 155–162, in-band
+measured-watt median/min/max, cadence, coverage ratios, whether
+`passiveAerobicObservation` appears after rebuild. Do **not** treat a single
+qualifying session as multi-session Phase D readiness (still needs ≥4
+sessions/dates for the aggregate). One good session is enough to prove the
+evidence shape for designing the separate shadow resolver.
+
+## First post-anchor Threshold evidence session
+
+Added 2026-10-11; updated after the real post-anchor workout. Evidence
+experiment only; no production code changed.
+
+### Session identity
+
+| Field | Value |
+|---|---|
+| Session | `85c5b25f-da21-43a5-9b02-592d9a3d8140` |
+| Start / end | `2026-10-11T18:56:53.341Z` → `2026-10-11T19:17:01.295Z` |
+| Athlete | `afa677b3-9682-4fb9-8f7d-af77375975d7` |
+| Day / intent / activity | Thursday / `threshold` / bike |
+| Machine | `proform-smart-power-10` profile v1 (execution provenance selected, unchanged) |
+| vs formal anchor | after `2026-10-11T18:18:38.106Z` ✓ |
+| Outcome | early cooldown; not cancelled; ~20 min wall |
+
+### Qualification metrics
+
+| Gate | Observed | Pass? |
+|---|---|---|
+| Session completion ≥ 0.80 | **0.572** (1202 / 2100 s) | no → `low_completion` |
+| Session HR coverage ≥ 0.75 | 1.0 | yes |
+| Fresh bike coverage ≥ 0.75 | 0.779 | yes |
+| Work planned / completed ≥ 480 s | **302 / 302** | no → `phase_too_short` |
+| Phase completion ≥ 0.90 | 1.0 | yes |
+| Phase HR coverage ≥ 0.80 | 1.0 | yes |
+| Measured-watt coverage ≥ 0.80 | **0.798** | no → `low_phase_workload_coverage` |
+| Cadence coverage ≥ 0.75 | 0.798 | yes |
+| Workload stability | (max−min)/mean = 0.577 | no → `unstable_workload` |
+| Cadence stability | median 70, span 64–77 | yes |
+| Phase median HR in 155–162 | **median 147** (128–159, end 159) | no |
+
+E1 Threshold phase: `fallback` / `outside_observed_hr_range` (unchanged policy).
+
+### 155–162 occupancy (work window)
+
+- Seconds in band: **41** (longest consecutive **29**)
+- Fresh measured watts in band: **n=39**, median **137 W**, range 127–153
+- In-band cadence: n=39, median 71 rpm
+
+### Phase D eligibility
+
+Individually **not eligible** (`low_completion`, `phase_too_short`,
+`low_phase_workload_coverage`, `unstable_workload`).
+`passiveAerobicObservation` still **absent** (no aggregate change; ≥4
+sessions would still be required even after one success).
+
+### Conclusion: B — Capture succeeded, physiological occupancy insufficient
+
+Telemetry/identity/provenance are healthy (athlete, ProForm, measured watts,
+HR + fresh bike coverage). The athlete did not sustain the legacy Threshold
+HR region long enough: early cooldown cut work to ~5 min, phase median stayed
+at 147 bpm, and only ~41 s occupied 155–162. Do **not** treat the 137 W
+in-band fragment as a descriptive Threshold workload signal or design input
+for a shadow resolver yet.
+
+### Next action
+
+Repeat one normal Thursday Threshold under legacy HR control, avoid early
+cooldown if safe/comfortable, and stay in 155–162 long enough to clear the
+existing ≥480 s work + ≥0.80 completion gates with phase-median HR in band.
+
+## Oct 16 Threshold evidence result
+
+Added 2026-10-16. Analysis only; no production code changed.
+
+### Session
+
+| Field | Value |
+|---|---|
+| Session | `6f4612a2-fe0e-4976-9444-8dc1df81c141` |
+| Start / end | `2026-10-16T14:29:48.416Z` → `2026-10-16T14:59:14.030Z` |
+| Athlete | `afa677b3-9682-4fb9-8f7d-af77375975d7` |
+| Day / intent / activity | Thursday / `threshold` / bike |
+| Machine | `proform-smart-power-10` v1 (execution provenance selected) |
+| vs formal anchor | after `2026-10-11T18:18:38.106Z` ✓ |
+| Outcome | early cooldown; not cancelled; completion **0.818** |
+
+### Work phase & 155–162 occupancy
+
+Work window `sustain@600–1417` = **817 s** planned/completed (phase completion 1.0).
+
+| Occupancy (per-second HR) | Value |
+|---|---|
+| Seconds HR ∈ [155,162] | **359** (44% of work) |
+| Longest continuous streak | **189 s** |
+| First / last in-band | 730 / 1410 |
+| Phase HR median / min–max | **157** / 109–168 |
+
+### In-band measured watts
+
+Fresh `measured_watts` joined on in-band seconds only:
+
+| Metric | Value |
+|---|---|
+| Sample count | **293** |
+| Coverage of in-band seconds | **0.816** |
+| Median / mean | **114 W** / 116 W |
+| Min–max / MAD | 57–153 / 6 |
+| In-band cadence median | 67 rpm (45–76) |
+| In-band observed R | mostly R10 (251), some R12 (40) |
+
+### Stable R10 interval
+
+Controller path confirmed via decision audit: climb to R12 → decrease →
+**six consecutive R10 `hold` evaluations** at 1110, 1170, 1230, 1290, 1350,
+1410 (rep HR 162→157). Raw contiguous observed-R10 runs are short (**34 s**)
+because bike telemetry has gaps, not because resistance left 10.
+
+Audit-defined R10 hold region **1110–1417 (307 s)** with desired/commanded/
+observed = 10 when present:
+
+| Metric | Value |
+|---|---|
+| HR median / range | **159** / 148–164 (94% in-band) |
+| Fresh measured watts | n=253, coverage 0.824, median **114 W**, 57–140 |
+| Cadence median | 67 rpm |
+| HR drift early→late | 160 → 157 (−3 bpm) |
+| Whole-region watt stability ratio | 0.74 (fails Phase D ≤0.35) |
+
+This is a **sustained settled Threshold-region response at R10**, not a brief
+pass-through — HR occupancy and audit holds prove it; watt outliers still
+spoil whole-window Phase D stability.
+
+### Evidence gates (Phase D v2 / pre-registered)
+
+| Gate | Observed | Pass |
+|---|---|---|
+| Athlete / bike / threshold intent | match | ✓ |
+| Machine provenance | proform-smart-power-10@v1 | ✓ |
+| Post-formal-anchor | ended 2026-10-16 | ✓ |
+| Session completion ≥ 0.80 | 0.818 | ✓ |
+| Session HR coverage ≥ 0.75 | 1.0 | ✓ |
+| Fresh bike coverage ≥ 0.75 | **0.745** | ✗ `low_fresh_workload_coverage` |
+| Work planned/completed ≥ 480 s | 817 / 817 | ✓ |
+| Phase completion ≥ 0.90 | 1.0 | ✓ |
+| Phase HR coverage ≥ 0.80 | 1.0 | ✓ |
+| Phase measured-watt coverage ≥ 0.80 | **0.787** | ✗ `low_phase_workload_coverage` |
+| Phase cadence coverage ≥ 0.75 | 0.787 | ✓ |
+| Workload stability ≤ 0.35 | **0.829** | ✗ `unstable_workload` |
+| Cadence span ≤ 25 | **34** (42–76) | ✗ `missing_or_unstable_cadence` |
+| HR span ≤ 45 / \|end−median\|≤20 | span **59** | ✗ `unstable_hr` |
+| Not cancelled | false | ✓ |
+
+E1 Threshold: still `fallback` / `outside_observed_hr_range` (unchanged).
+
+### Phase D eligibility
+
+Individually **not eligible**. Exclusion reasons:
+`low_fresh_workload_coverage`, `low_phase_workload_coverage`,
+`unstable_hr`, `unstable_workload`, `missing_or_unstable_cadence`.
+
+If it were eligible, Phase D would place phase median 157 into fixed window
+**[156, 158)** with session watts median 116 — but no observation is written.
+`passiveAerobicObservation` remains **absent** (this session rejected; aggregate
+still needs ≥4 qualifying sessions/dates anyway).
+
+### Conclusion: B — Occupancy proven, evidence quality still insufficient
+
+Raw HR now establishes sustained 155–162 occupancy (359 s, streak 189,
+median 157) with substantial in-band measured watts (~114 W). Existing
+**whole-phase** Phase D quality gates still fail (fresh bike slightly under
+0.75; phase watt coverage 0.787; ramp+settle inflates HR/watt/cadence spans).
+
+### Resolver-design implication
+
+**Yes — enough evidence *shape* to design** the separate Threshold shadow
+resolver. This session proves ordinary Threshold workouts can occupy the
+legacy HR band with measured watts under legacy control. Do **not** treat
+Phase D whole-phase eligibility as the acceptance function for that resolver;
+design settled in-band / R10-hold window provenance instead. Still only
+one-session descriptive shape — not multi-session aggregate, not advice, not
+control.
+
+### Single next engineering step
+
+Draft the Threshold shadow-advice evidence contract around **settled
+in-band / post-overshoot R10-hold windows** (using this session as the
+occupancy reference), separate from Phase D and from E1 inversion — without
+implementing production advice yet.
+
+## Threshold shadow-advice evidence contract
+
+Added 2026-10-16; hardened 2026-10-16 against real session replay.
+Contract design + pure admission module + tests only.
+No workout-control, E1, Phase D, or advice-emission wiring.
+
+Executable contract: `src/thresholdRegionSettledWorkload.ts`
+Tests: `tests/thresholdRegionSettledWorkload.test.mjs` (20/20 pass).
+
+### Evidence-window definition
+
+A qualifying window is **not** “resistance == 10” and **not** the whole
+Threshold work phase.
+
+It is:
+
+1. Ordinary bike `intent=threshold` / `intensityId=threshold` work phase;
+2. same athlete; known machine id + profile version; session ended **after**
+   the formal FitnessState anchor (malformed timestamps fail closed as
+   `invalid_session_or_anchor_timestamp`);
+3. legacy numeric HR target present;
+4. a **controller-held resistance window**: maximal span of constant
+   `commandedResistance` (else `desiredResistance`) whose present
+   `observedResistance` samples do not contradict that held value —
+   telemetry row gaps do **not** split the hold;
+5. **post-settling** elapsed active seconds after
+   `settlingSeconds=120` (reused from `PHASE_E2_HELD_WORKLOAD_POLICY_V1` —
+   HR steady-state lag under held load);
+6. controller corroboration: ≥1 machine audit `decision=hold` +
+   `decisionReason=within_target_policy` in the post-settling span that
+   **matches the window’s held resistance** (`resistanceBefore ==
+   resistanceAfter == held`), `phaseKind=work`, and matching HR target
+   bounds when present on the audit;
+7. independent telemetry evidence on post-settling seconds: fresh
+   **measured** watts + HR + cadence coverage ratios, plus E2-style
+   joint HR+measured-watt qualifying sample count.
+
+Ramp / overshoot / correction segments either fail settling / qualifying
+duration, lack matching target-hold corroboration, or are separate shorter
+held-resistance windows — they are not merged into the settled hold window.
+
+### Continuity correction
+
+**Controller/load continuity** and **telemetry sampling continuity** are
+separate:
+
+| Concept | Meaning | Splits hold? |
+|---|---|---|
+| Controller hold | Same commanded/desired resistance over an elapsed interval | Only when controller resistance changes |
+| Observed contradiction | Present `observedResistance ≠ held` | Yes — trim/split that span (fail-closed) |
+| Telemetry gaps | Missing bike rows inside a hold | **No** — reduces coverage only |
+
+Fail-closed join used by the contract:
+
+```text
+audit/commanded sustained hold interval
++ no contradictory observed-resistance samples
++ sufficient fresh measured-watt coverage
++ sufficient cadence coverage
++ sufficient HR coverage
++ matching resistance-scoped target-hold audit
+```
+
+`maxObservationGapSec=2` remains on the policy for E2 identity/compatibility
+and `observationsAreContinuousForPolicy`, but it is **not** the hold-window
+splitter. Do not widen the 2 s gap to “make Oct 16 pass.”
+
+### Contract corrections
+
+- **Hold-audit resistance matching:** a hold at resistance X cannot
+  corroborate a window held at Y. Also require `phaseKind=work` and
+  matching `targetHeartRateMin/Max` when present. `phaseId` is not required
+  (work-phase ids vary; `phaseKind` already scopes to work).
+- **Timestamps:** invalid `sessionEndedAt` / `formalAnchorObservedAt` fail
+  closed via `invalid_session_or_anchor_timestamp` (previously `Date.parse`
+  → `NaN` could silently skip `pre_formal_anchor`).
+- **`minQualifyingSeconds`:** matches E2 held-workload meaning — minimum
+  **count of joint HR + fresh measured-watt seconds** in the post-settling
+  window (≥30), not merely elapsed span length. Elapsed post-settling
+  duration remains the coverage denominator and the unresolved
+  `minAdviceGradeDurationSec` basis.
+
+### Required evidence (resolved vs UNRESOLVED)
+
+| Requirement | Source / threshold | Failure code |
+|---|---|---|
+| Athlete match | identity | `athlete_mismatch` |
+| Activity bike | summary | `activity_not_bike` |
+| Intent/intensity threshold | summary / phase | `intent_not_threshold` / `intensity_not_threshold` |
+| Machine id + profile version | summary / execution provenance | `missing_machine_provenance` |
+| Valid timestamps | `Date.parse` finite | `invalid_session_or_anchor_timestamp` |
+| Post-formal-anchor | `endedAt` > formal `observedAt` | `pre_formal_anchor` |
+| Numeric legacy HR target | resolved prescription | `missing_numeric_hr_target` |
+| Controller-held resistance window | commanded/desired + non-contradictory observed | `no_stable_resistance_window` |
+| Settling 120 s | E2 held-workload policy | (consumed into duration) |
+| Min joint HR+watt qualifying samples ≥30 | E2 `minQualifyingSeconds` (sample count) | `insufficient_post_settling_duration` |
+| HR coverage ≥0.80 | E2 / Phase D | `insufficient_hr_coverage` |
+| Measured-watt coverage ≥0.80 | E2 / Phase D measured | `insufficient_measured_watt_coverage` |
+| Measured watts only | telemetry `source` | `non_measured_watt_provenance` |
+| Cadence coverage ≥0.75 | Phase D | `insufficient_cadence_coverage` |
+| Resistance-matched target-hold audit | machine decision audit | `missing_target_hold_corroboration` |
+| Min in-band HR fraction | **UNRESOLVED** (`null`) | `insufficient_in_band_occupancy` when set |
+| Max MAD(watts)/median | **UNRESOLVED** (`null`) | `unstable_measured_workload` when set |
+| Advice-grade elapsed duration | **UNRESOLVED** (`null`) beyond characterization floor | `insufficient_post_settling_duration` when set |
+
+Unresolved fields block **production observation emission**
+(`policyProductionReady=false`); design/fixture evaluation may still accept
+windows under resolved gates only. The three UNRESOLVED thresholds were
+**not** chosen in this harden pass.
+
+### Robust workload statistic
+
+Primary descriptive workload: **median fresh measured watts** in the
+post-settling window (`canonicalMedian`).
+Dispersion: **MAD** (`medianAbsoluteDeviation` from `performedLoad`) — already
+used descriptively in Phase D aggregates. Prefer MAD/median over Phase D’s
+whole-phase (max−min)/mean span, which punishes ramp+settle phases and rare
+outliers (Oct 16 lesson).
+
+### Output semantics (single qualifying session)
+
+Schema: `threshold-region-settled-workload-observation@1`
+Provenance: `ordinary_workout_settled_threshold_region`
+Resolver id (future): `threshold-region-ordinary-workout-shadow-resolver@1`
+(not `personalized-prescription-resolver`).
+
+One accepted window may become a **descriptive** observation:
+
+- `interpretation: "descriptive_observation_only"`
+- `eligibleForPrescription: false`
+- `quality: "unverified"` until multi-session policy exists
+- records window bounds, resistance actually held (fact, not constant),
+  HR median / in-band fraction, measured-watt median+MAD, cadence, machine,
+  formal anchor
+
+This is **not** a physiological Threshold / FTP / lactate claim and **not**
+active control.
+
+### Single-session vs multi-session
+
+| Stage | Allowed now? |
+|---|---|
+| Single qualifying settled window | yes (fixture / design) |
+| Single-session descriptive observation | yes only after unresolved thresholds are set |
+| Provisional shadow **candidate advice** in UI | **not yet** — needs product decision |
+| Multi-session aggregate | **UNRESOLVED** — do **not** auto-reuse Phase D’s 4 sessions/dates |
+| Validated advice / active control | no (E4+) |
+
+One session establishes evidence **shape**, not multi-session confidence.
+
+### Resolver boundary
+
+| Path | Claim |
+|---|---|
+| E1 | Invert formal submax HR/watt calibration at legacy HR (in-domain only) |
+| Phase D | Whole-phase descriptive trend in a fixed 2-bpm HR window |
+| This contract | Settled ordinary-workout measured watts while controller holds in Threshold HR region |
+
+### Real-session replay
+
+First implementation (observed-resistance `segmentStableResistance` +
+`maxObservationGapSec=2`) was replayed against real on-device session
+`6f4612a2-fe0e-4976-9444-8dc1df81c141` via read-only ADB/WebView CDP.
+
+**Result: rejected.** Identity passed, but the sustained R10 controller hold
+(~1051–1417) fragmented into many short observed-resistance runs (largest
+contiguous observed-R10 fragment ≪ 120 s), so every window had
+`postSettlingDurationSec=0` and failed
+`insufficient_post_settling_duration` (and related coverage / hold gates).
+Synthetic dense fixtures had falsely suggested acceptance.
+
+### Real Oct 16 result
+
+After the continuity correction, the same real session accepts **one**
+window under resolved gates (UNRESOLVED thresholds still null; no
+observation emission):
+
+| Field | Value |
+|---|---|
+| Window | 1051–1417 (exclusive end) |
+| Held resistance | 10 |
+| Settled from | 1171 |
+| Post-settle elapsed | 246 s |
+| Qualifying joint HR+watt samples | 205 |
+| HR median / in-band | 158 bpm / ~0.967 |
+| Measured watts median / MAD | 114 W / 6 (MAD/median ≈ 0.053) |
+| Measured-watt coverage | 0.833 |
+| Cadence median / coverage | 67 / 0.833 |
+| Matching controller holds | 1230, 1290, 1350, 1410 |
+
+(Hold audits at 1110 and 1170 are correctly excluded: 1170 is before
+settledFrom 1171; 1110 is inside settling.)
+
+### Fixtures
+
+- **Synthetic dense fixture:** every-second telemetry; labeled synthetic —
+  useful for gate logic, not an Oct 16 replay.
+- **Real-gap-shaped fixture:** sustained controller hold + intermittent
+  2–4 s bike gaps + consistent observed resistance when present; preserves
+  the fragmentation bug pattern without dumping every raw session row.
+
+### Non-goals
+
+- No E1 extrapolation / `% predictedMaxWatts` / VO₂-line to 155–162
+- No Phase D gate reuse as acceptance function
+- No hardcoded resistance/watt/athlete/machine-table constants
+- No runtime controller authority
+- No physiological Threshold naming
+- No resolver implementation; three policy thresholds remain UNRESOLVED
+
 ## Provenance of claims
 
 - **Code:** all module behaviors above were read from `src/` this session
@@ -435,3 +1031,25 @@ runtime.
   `dist/` imports; synthetic HR curves and session loop modeled as described.
   Harness was throwaway, kept outside the repo; no production code executed
   beyond the planner/classifier pure functions.
+- **On-device (2026-10-11 Threshold model section):** live WebView
+  `localStorage` read of promoted `fitness_state_v1` / machine provenance
+  after the successful v3 session; Threshold model conclusions are from
+  code + that persisted calibration, not from a Thursday workout run.
+- **On-device (2026-10-11 Threshold evidence probe):** read-only CDP into
+  IndexedDB `vo2_workout_db` (`workouts`, `hr_samples`,
+  `ordinary_bike_telemetry`) for the three Thursday Threshold sessions
+  above; app was restarted once only to restore a wedged WebView DevTools
+  socket (no data writes).
+- **On-device (2026-10-16 Threshold session):** read-only CDP into the same
+  IndexedDB stores + `machine_decision_audit` for session
+  `6f4612a2-fe0e-4976-9444-8dc1df81c141`; app restarted only to restore a
+  wedged DevTools socket (no data writes).
+- **Contract (2026-10-16):** pure module
+  `src/thresholdRegionSettledWorkload.ts` + focused tests; reuses E2
+  held-workload settling and existing median/MAD helpers; no
+  resolver wiring into workout start/UI/control.
+- **Contract harden (2026-10-16):** read-only CDP replay of session
+  `6f4612a2-…` against the evaluator before/after continuity correction;
+  hold-resistance matching, timestamp fail-closed, and E2 joint-sample
+  `minQualifyingSeconds` semantics verified; three UNRESOLVED thresholds
+  left untouched.
