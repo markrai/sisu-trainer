@@ -46,6 +46,7 @@ import { canonicalMedian } from "./stats.js";
 import { medianAbsoluteDeviation } from "./performedLoad.js";
 import { PHASE_E2_HELD_WORKLOAD_POLICY_V1 } from "./personalizedPrescriptionCharacterization.js";
 import { FITNESS_REFINEMENT_ALGORITHM_V2 } from "./fitnessRefinement.js";
+import { isIsoTimestamp } from "./utils/dateTime.js";
 
 /** Evidence observation schema identity. */
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1 =
@@ -186,6 +187,12 @@ export interface ThresholdRegionSettledWorkloadObservationV1 {
   schemaId: typeof THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1;
   schemaVersion: typeof THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1;
   provenance: typeof THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1;
+  /**
+   * Admission policy that evaluated/emitted this observation. Intrinsic
+   * provenance for multi-session aggregation — never reconstructed later.
+   */
+  admissionPolicyId: string;
+  admissionPolicyVersion: number;
   athleteId: string;
   sessionId: string;
   machineId: string;
@@ -214,6 +221,12 @@ export interface ThresholdRegionSettledWorkloadObservationV1 {
   cadenceCoverageRatio: number;
   controllerSettledProvenance: "controller_held_resistance_plus_target_hold_audit";
   formalAnchorObservedAt: string;
+  /**
+   * Authoritative session-end timestamp from the contract input. Aggregate
+   * calendar dates derive from this (UTC YYYY-MM-DD); callers must not spoof
+   * a separate workoutDate.
+   */
+  sessionEndedAt: string;
   quality: "unverified";
   /** Always false at this design stage. */
   eligibleForPrescription: false;
@@ -801,11 +814,11 @@ export function evaluateThresholdRegionSettledWorkloadContract(
     identityFailures.push("missing_machine_provenance");
   }
 
-  const sessionEndedMs = Date.parse(input.sessionEndedAt);
-  const formalAnchorMs = Date.parse(input.formalAnchorObservedAt);
-  if (!Number.isFinite(sessionEndedMs) || !Number.isFinite(formalAnchorMs)) {
+  // Absolute UTC timestamps only (toISOString round-trip). Offsetless /
+  // locale / date-only strings fail closed — UTC day must not depend on host TZ.
+  if (!isIsoTimestamp(input.sessionEndedAt) || !isIsoTimestamp(input.formalAnchorObservedAt)) {
     identityFailures.push("invalid_session_or_anchor_timestamp");
-  } else if (sessionEndedMs <= formalAnchorMs) {
+  } else if (Date.parse(input.sessionEndedAt) <= Date.parse(input.formalAnchorObservedAt)) {
     identityFailures.push("pre_formal_anchor");
   }
 
@@ -1007,6 +1020,8 @@ export function evaluateThresholdRegionSettledWorkloadContract(
       schemaId: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
       schemaVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
       provenance: THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+      admissionPolicyId: policy.id,
+      admissionPolicyVersion: policy.version,
       athleteId: input.athleteId,
       sessionId: input.sessionId,
       machineId: input.machineId as string,
@@ -1032,6 +1047,7 @@ export function evaluateThresholdRegionSettledWorkloadContract(
       cadenceCoverageRatio: acceptedWindow.cadenceCoverageRatio,
       controllerSettledProvenance: "controller_held_resistance_plus_target_hold_audit",
       formalAnchorObservedAt: input.formalAnchorObservedAt,
+      sessionEndedAt: input.sessionEndedAt,
       quality: "unverified",
       eligibleForPrescription: false,
       interpretation: "descriptive_observation_only",

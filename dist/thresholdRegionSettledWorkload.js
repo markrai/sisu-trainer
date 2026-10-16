@@ -32,6 +32,7 @@ import { canonicalMedian } from "./stats.js";
 import { medianAbsoluteDeviation } from "./performedLoad.js";
 import { PHASE_E2_HELD_WORKLOAD_POLICY_V1 } from "./personalizedPrescriptionCharacterization.js";
 import { FITNESS_REFINEMENT_ALGORITHM_V2 } from "./fitnessRefinement.js";
+import { isIsoTimestamp } from "./utils/dateTime.js";
 /** Evidence observation schema identity. */
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1 = "threshold-region-settled-workload-observation";
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1 = 1;
@@ -482,12 +483,12 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
         input.machineProfileVersion <= 0) {
         identityFailures.push("missing_machine_provenance");
     }
-    const sessionEndedMs = Date.parse(input.sessionEndedAt);
-    const formalAnchorMs = Date.parse(input.formalAnchorObservedAt);
-    if (!Number.isFinite(sessionEndedMs) || !Number.isFinite(formalAnchorMs)) {
+    // Absolute UTC timestamps only (toISOString round-trip). Offsetless /
+    // locale / date-only strings fail closed — UTC day must not depend on host TZ.
+    if (!isIsoTimestamp(input.sessionEndedAt) || !isIsoTimestamp(input.formalAnchorObservedAt)) {
         identityFailures.push("invalid_session_or_anchor_timestamp");
     }
-    else if (sessionEndedMs <= formalAnchorMs) {
+    else if (Date.parse(input.sessionEndedAt) <= Date.parse(input.formalAnchorObservedAt)) {
         identityFailures.push("pre_formal_anchor");
     }
     if (!Number.isFinite(input.targetHrMin) ||
@@ -655,6 +656,8 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
             schemaId: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
             schemaVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
             provenance: THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+            admissionPolicyId: policy.id,
+            admissionPolicyVersion: policy.version,
             athleteId: input.athleteId,
             sessionId: input.sessionId,
             machineId: input.machineId,
@@ -680,6 +683,7 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
             cadenceCoverageRatio: acceptedWindow.cadenceCoverageRatio,
             controllerSettledProvenance: "controller_held_resistance_plus_target_hold_audit",
             formalAnchorObservedAt: input.formalAnchorObservedAt,
+            sessionEndedAt: input.sessionEndedAt,
             quality: "unverified",
             eligibleForPrescription: false,
             interpretation: "descriptive_observation_only",

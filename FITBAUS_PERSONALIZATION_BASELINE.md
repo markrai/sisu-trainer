@@ -1228,8 +1228,14 @@ whole-phase refinement, UI advice, or active control.
 
 - The single-session contract already emits ≤1 observation (best accepted
   window). Aggregation consumes observations, not raw windows.
-- Duplicate `sessionId` is rejected (`duplicate_session_id`); the first
-  chronological observation is kept.
+- Identical means equality across the **complete canonical** single-session
+  observation payload; any differing canonical field makes the duplicate
+  contradictory. Exact duplicates collapse to one (`duplicate_session_id`
+  noted); pick is chronological by `sessionEndedAt` then `sessionId` —
+  **not** caller array order.
+- Contradictory duplicates (same `sessionId`, any disagreeing canonical
+  observation field) fail the session entirely
+  (`contradictory_duplicate_session`); neither value counts.
 - Do **not** weight by telemetry sample count or post-settling duration once
   admission has cleared — a longer hold is not ten independent replications.
 
@@ -1242,15 +1248,42 @@ machineProfileVersion
 formalAnchorObservedAt
 targetHrMin
 targetHrMax
-admissionPolicyId + version
+admissionPolicyId + version   ← from each observation payload
 observationSchemaId + version
 observationProvenance
 ```
+
+**Admission-policy provenance is intrinsic:** each single-session observation
+records the `admissionPolicyId` / `admissionPolicyVersion` of the policy that
+evaluated/emitted it. Aggregation reads those fields and never reconstructs
+them from whatever module constants are current at aggregate time.
+
+**Canonical time/date:** `sessionEndedAt` is authoritative on the observation;
+aggregate `workoutDate` is the deterministic UTC `YYYY-MM-DD` derivation.
+Caller-supplied `workoutDate` that disagrees with `sessionEndedAt` is
+rejected (`invalid_observation_payload`). Malformed timestamps fail closed.
+
+Session and formal-anchor timestamps are **absolute timezone-bearing**
+`toISOString()` values (`YYYY-MM-DDTHH:mm:ss.sssZ`, matching
+`formatISO8601UTC` / ordinary `WorkoutSummary.endedAt`). Validation uses the
+shared `isIsoTimestamp` round-trip (`Date.parse` finite and
+`new Date(ms).toISOString() === value`). Offsetless / date-only / locale /
+numeric-offset forms fail closed so UTC workout-date derivation cannot depend
+on host timezone.
+
+**Lineage selection:** if `expectedCompatibility` is provided, filter to that
+key. If omitted, all valid inputs must share one homogeneous compatibility
+key (order-independent fingerprint). Mixed lineages fail closed
+(`mixed_compatibility_lineage`) — no “first input wins.”
 
 v1 is **fail-closed same-machine/profile**. Different bikes do not aggregate
 even if watt medians match. A newer formal VO₂ assessment starts a **new
 lineage** (pre/post-anchor observations do not mix). A changed Threshold HR
 band (e.g. 155–162 → other) is a new scientific claim.
+
+Single-session observation shape remains schema **v1** (unshipped design
+extension: added `admissionPolicyId`, `admissionPolicyVersion`,
+`sessionEndedAt`; not persisted to disk yet — no schema version bump).
 
 ### Aggregate workload statistic
 
@@ -1369,7 +1402,9 @@ Numerical agreement across incompatible machines still **fails provenance**.
 | Aggregate statistic | resolved: median of session medians |
 | minSessions / minDistinctDates | resolved: 3 / 3 |
 | Trend handling | resolved: diagnostic_only |
-| Lineage invalidation | resolved (anchor/machine/band/schema) |
+| Lineage invalidation | resolved (anchor/machine/band/schema/admission policy) |
+| Observation admission-policy + sessionEndedAt provenance | resolved |
+| Deterministic lineage / duplicate-session rules | resolved |
 | maxCrossSessionMadRatio | **UNRESOLVED** |
 | maxObservationAgeDays | **UNRESOLVED** |
 | Production aggregate emission | blocked (`policyProductionReady=false`) |
@@ -1377,9 +1412,10 @@ Numerical agreement across incompatible machines still **fails provenance**.
 ### Next blocker
 
 Collect ≥2 additional qualifying ordinary Threshold sessions on the same
-athlete / machine / formal-anchor / 155–162 lineage after Oct 16, then
-calibrate `maxCrossSessionMadRatio` (and optionally `maxObservationAgeDays`)
-from observed cross-session dispersion before enabling aggregate emission.
+athlete / machine / formal-anchor / 155–162 / admission-policy lineage after
+Oct 16, then calibrate `maxCrossSessionMadRatio` (and optionally
+`maxObservationAgeDays`) from observed cross-session dispersion before
+enabling aggregate emission.
 
 ## Provenance of claims
 
@@ -1428,3 +1464,16 @@ from observed cross-session dispersion before enabling aggregate emission.
   `thresholdRegionSettledWorkloadAggregate.ts` with 3/3 quantity floors,
   median-of-medians, diagnostic trend, unresolved cross-session MAD/age;
   no workout finalization / UI / control wiring.
+- **Aggregate lineage provenance harden (2026-10-16):** single-session
+  observation records evaluating admission policy + `sessionEndedAt`;
+  aggregate reads those fields; date derived from timestamp; mixed lineage
+  and contradictory duplicates fail closed order-independently; scientific
+  thresholds remain unresolved.
+- **Absolute timestamp determinism (2026-10-16):** session/anchor times must
+  round-trip `toISOString()` (`utils/dateTime.isIsoTimestamp`); UTC date
+  derivation host-TZ-independent; offsetless forms rejected at single-session
+  admission and aggregate validation.
+- **Duplicate observation equality (2026-10-16):** identical duplicates require
+  equality across the complete canonical single-session observation payload;
+  partial fingerprints that ignored coverage/duration/cadence fields were
+  fixed so contradictory pairs cannot order-select a winner.

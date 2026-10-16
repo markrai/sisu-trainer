@@ -9,12 +9,15 @@ import {
   thresholdRegionAggregatePolicyIsProductionReady,
   summarizeSessionMedianSeries,
   classifyCrossSessionTrend,
+  workoutDateFromSessionEndedAt,
+  compatibilityKeyFromObservation,
 } from "../dist/thresholdRegionSettledWorkloadAggregate.js";
 import {
   THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
+  THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
   THRESHOLD_REGION_ORDINARY_WORKOUT_SHADOW_RESOLVER_ID_V1,
 } from "../dist/thresholdRegionSettledWorkload.js";
 import { PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1 } from "../dist/types.js";
@@ -38,12 +41,27 @@ function observation({
   hrInBandFraction = 0.96,
   heldResistance = 10,
   postSettlingDurationSec = 246,
+  settledFromSec,
+  qualifyingDurationSec,
+  windowStartSec = 1051,
+  windowEndSecExclusive,
+  hrCoverageRatio = 1,
+  measuredWattsSampleCount = 180,
+  measuredWattsCoverageRatio = 0.83,
+  cadenceMedian = 67,
+  cadenceCoverageRatio = 0.83,
   sessionEndedAt,
+  admissionPolicyId = THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
+  admissionPolicyVersion = THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
+  workoutDateSpoof,
 } = {}) {
-  return {
+  const ended = sessionEndedAt ?? `${workoutDate}T15:00:00.000Z`;
+  const row = {
     schemaId: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
     schemaVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
     provenance: THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+    admissionPolicyId,
+    admissionPolicyVersion,
     athleteId,
     sessionId,
     machineId,
@@ -52,29 +70,30 @@ function observation({
     intensityId: "threshold",
     targetHrMin,
     targetHrMax,
-    windowStartSec: 1051,
-    windowEndSecExclusive: 1051 + postSettlingDurationSec + 120,
-    settledFromSec: 1051 + 120,
-    qualifyingDurationSec: Math.min(postSettlingDurationSec, 200),
+    windowStartSec,
+    windowEndSecExclusive: windowEndSecExclusive ?? windowStartSec + postSettlingDurationSec + 120,
+    settledFromSec: settledFromSec ?? windowStartSec + 120,
+    qualifyingDurationSec: qualifyingDurationSec ?? Math.min(postSettlingDurationSec, 200),
     postSettlingDurationSec,
     heldResistance,
     hrMedian,
     hrInBandFraction,
-    hrCoverageRatio: 1,
+    hrCoverageRatio,
     measuredWattsMedian,
     measuredWattsMad,
-    measuredWattsSampleCount: 180,
-    measuredWattsCoverageRatio: 0.83,
-    cadenceMedian: 67,
-    cadenceCoverageRatio: 0.83,
+    measuredWattsSampleCount,
+    measuredWattsCoverageRatio,
+    cadenceMedian,
+    cadenceCoverageRatio,
     controllerSettledProvenance: "controller_held_resistance_plus_target_hold_audit",
     formalAnchorObservedAt,
+    sessionEndedAt: ended,
     quality: "unverified",
     eligibleForPrescription: false,
     interpretation: "descriptive_observation_only",
-    workoutDate,
-    sessionEndedAt: sessionEndedAt ?? `${workoutDate}T15:00:00.000Z`,
   };
+  if (workoutDateSpoof !== undefined) row.workoutDate = workoutDateSpoof;
+  return row;
 }
 
 function completePolicy(overrides = {}) {
@@ -130,6 +149,48 @@ test("default policy remains non-emitting until unresolved scientific fields are
   assert.equal(result.diagnostics.aggregateMeasuredWattsMedian, 114);
 });
 
+test("compatibility key reads admission policy from observation payload, not module constants", () => {
+  const obs = observation({
+    admissionPolicyId: "threshold-region-settled-workload-policy",
+    admissionPolicyVersion: 1,
+  });
+  const key = compatibilityKeyFromObservation(obs);
+  assert.equal(key.admissionPolicyId, obs.admissionPolicyId);
+  assert.equal(key.admissionPolicyVersion, obs.admissionPolicyVersion);
+});
+
+test("different admission policy version rejects from observation payload itself", () => {
+  const result = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: [
+      observation({
+        sessionId: "s1",
+        workoutDate: "2026-10-12",
+        measuredWattsMedian: 114,
+        admissionPolicyVersion: 1,
+      }),
+      observation({
+        sessionId: "s2",
+        workoutDate: "2026-10-14",
+        measuredWattsMedian: 114,
+        admissionPolicyVersion: 1,
+      }),
+      observation({
+        sessionId: "s3",
+        workoutDate: "2026-10-16",
+        measuredWattsMedian: 114,
+        admissionPolicyVersion: 2,
+      }),
+    ],
+    policy: completePolicy(),
+  });
+  assert.ok(result.failures.includes("mixed_compatibility_lineage"));
+  assert.ok(
+    result.rejected.every((r) => r.failures.includes("mixed_compatibility_lineage"))
+  );
+  assert.equal(result.aggregate, null);
+  assert.equal(result.compatibility, null);
+});
+
 test("wrong athlete rejects", () => {
   const result = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: [
@@ -138,8 +199,7 @@ test("wrong athlete rejects", () => {
     ],
     policy: completePolicy(),
   });
-  assert.ok(result.rejected.some((r) => r.failures.includes("incompatible_athlete")));
-  assert.ok(result.failures.includes("insufficient_observations"));
+  assert.ok(result.failures.includes("mixed_compatibility_lineage"));
   assert.equal(result.aggregate, null);
 });
 
@@ -151,13 +211,14 @@ test("wrong machine / profile rejects", () => {
     ],
     policy: completePolicy(),
   });
-  assert.ok(machine.rejected.some((r) => r.failures.includes("incompatible_machine")));
+  assert.ok(machine.failures.includes("mixed_compatibility_lineage"));
 
   const profile = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: [
       ...threeStable().slice(0, 2),
       observation({ sessionId: "s3", workoutDate: "2026-10-16", machineProfileVersion: 2 }),
     ],
+    expectedCompatibility: compatibilityKeyFromObservation(threeStable()[0]),
     policy: completePolicy(),
   });
   assert.ok(profile.rejected.some((r) => r.failures.includes("incompatible_machine_profile")));
@@ -174,6 +235,7 @@ test("different target HR band rejects", () => {
         targetHrMax: 157,
       }),
     ],
+    expectedCompatibility: compatibilityKeyFromObservation(threeStable()[0]),
     policy: completePolicy(),
   });
   assert.ok(result.rejected.some((r) => r.failures.includes("incompatible_target_hr_band")));
@@ -189,28 +251,182 @@ test("new formal anchor starts a new lineage", () => {
         formalAnchorObservedAt: "2026-10-15T12:00:00.000Z",
       }),
     ],
+    expectedCompatibility: compatibilityKeyFromObservation(threeStable()[0]),
     policy: completePolicy(),
   });
   assert.ok(result.rejected.some((r) => r.failures.includes("incompatible_formal_anchor")));
   assert.equal(result.acceptedObservations.length, 2);
 });
 
-test("same session cannot count twice; multiple windows cannot inflate session count", () => {
-  const dup = evaluateThresholdRegionSettledWorkloadAggregate({
+function summarizeDuplicateResult(result) {
+  return {
+    accepted: result.acceptedObservations.map((o) => ({
+      sessionId: o.sessionId,
+      measuredWattsMedian: o.measuredWattsMedian,
+      postSettlingDurationSec: o.postSettlingDurationSec,
+      qualifyingDurationSec: o.qualifyingDurationSec,
+      settledFromSec: o.settledFromSec,
+      hrCoverageRatio: o.hrCoverageRatio,
+      measuredWattsCoverageRatio: o.measuredWattsCoverageRatio,
+      cadenceMedian: o.cadenceMedian,
+      cadenceCoverageRatio: o.cadenceCoverageRatio,
+    })),
+    rejected: [...result.rejected]
+      .map((r) => ({ sessionId: r.sessionId, failures: [...r.failures].sort() }))
+      .sort((a, b) => a.sessionId.localeCompare(b.sessionId)),
+    diagnostics: {
+      sessionMeasuredWattsMedians: result.diagnostics.sessionMeasuredWattsMedians,
+      aggregateMeasuredWattsMedian: result.diagnostics.aggregateMeasuredWattsMedian,
+      distinctDateCount: result.diagnostics.distinctDateCount,
+    },
+    aggregate: result.aggregate,
+    failures: [...result.failures].sort(),
+  };
+}
+
+test("identical duplicate session collapses; contradictory duplicate fails session", () => {
+  const identical = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: [
       observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 112 }),
-      observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 130 }),
+      observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 112 }),
       observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
       observation({ sessionId: "s3", workoutDate: "2026-10-16", measuredWattsMedian: 116 }),
     ],
     policy: completePolicy(),
   });
-  assert.ok(dup.rejected.some((r) => r.failures.includes("duplicate_session_id")));
-  assert.equal(dup.acceptedObservations.length, 3);
+  assert.ok(identical.rejected.some((r) => r.failures.includes("duplicate_session_id")));
+  assert.equal(identical.acceptedObservations.length, 3);
   assert.deepEqual(
-    dup.acceptedObservations.map((o) => o.measuredWattsMedian),
+    identical.acceptedObservations.map((o) => o.measuredWattsMedian),
     [112, 114, 116]
   );
+
+  const contradictoryA = [
+    observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 112 }),
+    observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 130 }),
+    observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
+    observation({ sessionId: "s3", workoutDate: "2026-10-16", measuredWattsMedian: 116 }),
+  ];
+  const contradictoryB = [...contradictoryA].reverse();
+  const left = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: contradictoryA,
+    policy: completePolicy(),
+  });
+  const right = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: contradictoryB,
+    policy: completePolicy(),
+  });
+  assert.ok(left.rejected.some((r) => r.failures.includes("contradictory_duplicate_session")));
+  assert.ok(right.rejected.some((r) => r.failures.includes("contradictory_duplicate_session")));
+  assert.deepEqual(summarizeDuplicateResult(left), summarizeDuplicateResult(right));
+  assert.equal(left.aggregate, null);
+});
+
+test("canonical-field-only contradictions fail session regardless of input order", () => {
+  const companions = [
+    observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
+    observation({ sessionId: "s3", workoutDate: "2026-10-16", measuredWattsMedian: 116 }),
+  ];
+  const baseS1 = {
+    sessionId: "s1",
+    workoutDate: "2026-10-12",
+    measuredWattsMedian: 112,
+    sessionEndedAt: "2026-10-12T15:00:00.000Z",
+    windowStartSec: 1051,
+    settledFromSec: 1171,
+    postSettlingDurationSec: 246,
+    qualifyingDurationSec: 200,
+    hrCoverageRatio: 1,
+    measuredWattsCoverageRatio: 0.83,
+    cadenceMedian: 67,
+    cadenceCoverageRatio: 0.83,
+  };
+  const fieldCases = [
+    ["postSettlingDurationSec", { postSettlingDurationSec: 200 }],
+    ["qualifyingDurationSec", { qualifyingDurationSec: 150 }],
+    ["hrCoverageRatio", { hrCoverageRatio: 0.9 }],
+    ["measuredWattsCoverageRatio", { measuredWattsCoverageRatio: 0.75 }],
+    ["cadenceMedian", { cadenceMedian: 70 }],
+    ["cadenceCoverageRatio", { cadenceCoverageRatio: 0.75 }],
+    ["settledFromSec", { settledFromSec: 1180 }],
+  ];
+
+  for (const [label, delta] of fieldCases) {
+    const a = observation(baseS1);
+    const b = observation({ ...baseS1, ...delta });
+    const forward = evaluateThresholdRegionSettledWorkloadAggregate({
+      observations: [a, b, ...companions],
+      policy: completePolicy(),
+    });
+    const reverse = evaluateThresholdRegionSettledWorkloadAggregate({
+      observations: [b, a, ...companions],
+      policy: completePolicy(),
+    });
+    assert.ok(
+      forward.rejected.some(
+        (r) => r.sessionId === "s1" && r.failures.includes("contradictory_duplicate_session")
+      ),
+      `${label}: should be contradictory`
+    );
+    assert.ok(
+      !forward.acceptedObservations.some((o) => o.sessionId === "s1"),
+      `${label}: s1 must contribute zero`
+    );
+    assert.deepEqual(
+      summarizeDuplicateResult(forward),
+      summarizeDuplicateResult(reverse),
+      `${label}: reversed input must match`
+    );
+  }
+});
+
+test("field-equivalent duplicate still collapses to one contribution", () => {
+  const twinA = observation({
+    sessionId: "s1",
+    workoutDate: "2026-10-12",
+    measuredWattsMedian: 112,
+    postSettlingDurationSec: 246,
+    qualifyingDurationSec: 200,
+    settledFromSec: 1171,
+    hrCoverageRatio: 1,
+    measuredWattsCoverageRatio: 0.83,
+    cadenceMedian: 67,
+    cadenceCoverageRatio: 0.83,
+  });
+  const twinB = observation({
+    sessionId: "s1",
+    workoutDate: "2026-10-12",
+    measuredWattsMedian: 112,
+    postSettlingDurationSec: 246,
+    qualifyingDurationSec: 200,
+    settledFromSec: 1171,
+    hrCoverageRatio: 1,
+    measuredWattsCoverageRatio: 0.83,
+    cadenceMedian: 67,
+    cadenceCoverageRatio: 0.83,
+  });
+  const forward = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: [
+      twinA,
+      twinB,
+      observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
+      observation({ sessionId: "s3", workoutDate: "2026-10-16", measuredWattsMedian: 116 }),
+    ],
+    policy: completePolicy(),
+  });
+  const reverse = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: [
+      twinB,
+      twinA,
+      observation({ sessionId: "s3", workoutDate: "2026-10-16", measuredWattsMedian: 116 }),
+      observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
+    ],
+    policy: completePolicy(),
+  });
+  assert.ok(forward.rejected.some((r) => r.failures.includes("duplicate_session_id")));
+  assert.equal(forward.acceptedObservations.filter((o) => o.sessionId === "s1").length, 1);
+  assert.ok(forward.aggregate);
+  assert.deepEqual(summarizeDuplicateResult(forward), summarizeDuplicateResult(reverse));
 });
 
 test("minimum-session and minimum-date boundaries", () => {
@@ -255,12 +471,13 @@ test("stable repeated watts pass under complete policy and are shadow-candidate 
   assert.equal(result.aggregate.quality, "unverified");
   assert.equal(result.aggregate.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1);
   assert.ok(result.aggregate.crossSessionWattsMadRatio <= 0.08);
+  assert.equal(
+    result.aggregate.admissionPolicyId,
+    THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1
+  );
 });
 
 test("single outlier handling via median; unstable cross-session watts fail", () => {
-  // One extreme outlier: median stays 114; MAD with n=3 resists a single spike
-  // (abs deviations 2,0,36 → MAD=2), which is intentional robustness — the
-  // aggregate central value is not pulled to 150.
   const withOutlier = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: [
       observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 112 }),
@@ -273,7 +490,6 @@ test("single outlier handling via median; unstable cross-session watts fail", ()
   assert.ok((withOutlier.diagnostics.crossSessionWattsMadRatio ?? 1) < 0.05);
   assert.ok(withOutlier.aggregate);
 
-  // Dispersed triangular pattern: MAD/median exceeds a tight gate.
   const unstable = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: [
       observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 105 }),
@@ -291,7 +507,6 @@ test("single outlier handling via median; unstable cross-session watts fail", ()
     observations: threeStable(),
     policy: completePolicy({ maxCrossSessionMadRatio: 0.05 }),
   });
-  // 112,114,116 → MAD=2, median=114, ratio≈0.0175 → pass
   assert.ok(mild.aggregate);
 });
 
@@ -313,7 +528,6 @@ test("trend is diagnostic only under v1 policy", () => {
   assert.equal(rising.diagnostics.trendDirection, "rising");
   assert.ok(rising.aggregate);
   assert.equal(rising.aggregate.trendDirection, "rising");
-  assert.ok(!rising.failures.includes("unstable_cross_session_workload"));
 });
 
 test("same watts across incompatible machines still reject on provenance", () => {
@@ -330,8 +544,118 @@ test("same watts across incompatible machines still reject on provenance", () =>
     ],
     policy: completePolicy(),
   });
-  assert.ok(result.rejected.some((r) => r.failures.includes("incompatible_machine")));
+  assert.ok(result.failures.includes("mixed_compatibility_lineage"));
   assert.equal(result.aggregate, null);
+});
+
+test("mixed-lineage input order cannot change selected lineage", () => {
+  const mixed = [
+    observation({
+      sessionId: "s1",
+      workoutDate: "2026-10-12",
+      measuredWattsMedian: 112,
+      admissionPolicyVersion: 1,
+    }),
+    observation({
+      sessionId: "s2",
+      workoutDate: "2026-10-14",
+      measuredWattsMedian: 114,
+      admissionPolicyVersion: 2,
+    }),
+    observation({
+      sessionId: "s3",
+      workoutDate: "2026-10-16",
+      measuredWattsMedian: 116,
+      admissionPolicyVersion: 1,
+    }),
+  ];
+  const forward = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: mixed,
+    policy: completePolicy(),
+  });
+  const reverse = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: [...mixed].reverse(),
+    policy: completePolicy(),
+  });
+  assert.equal(forward.compatibility, null);
+  assert.equal(reverse.compatibility, null);
+  assert.deepEqual(forward.failures.sort(), reverse.failures.sort());
+  assert.equal(forward.aggregate, null);
+  assert.equal(reverse.aggregate, null);
+  assert.equal(forward.acceptedObservations.length, 0);
+  assert.equal(reverse.acceptedObservations.length, 0);
+});
+
+test("date is derived deterministically from absolute sessionEndedAt; non-absolute and spoofed dates reject", () => {
+  assert.equal(
+    workoutDateFromSessionEndedAt("2026-10-16T14:59:14.030Z"),
+    "2026-10-16"
+  );
+  assert.equal(
+    workoutDateFromSessionEndedAt("2026-10-17T03:30:00.000Z"),
+    "2026-10-17"
+  );
+  assert.equal(workoutDateFromSessionEndedAt("not-a-date"), null);
+  assert.equal(workoutDateFromSessionEndedAt("2026-10-16T23:30:00"), null);
+  assert.equal(workoutDateFromSessionEndedAt("2026-10-16"), null);
+  assert.equal(workoutDateFromSessionEndedAt("10/16/2026 23:30"), null);
+  assert.equal(workoutDateFromSessionEndedAt("2026-10-16T23:30:00-04:00"), null);
+  assert.equal(workoutDateFromSessionEndedAt("2026-10-16T23:30:00Z"), null);
+  assert.equal(workoutDateFromSessionEndedAt(""), null);
+
+  const rejects = [
+    ["yesterday", "yesterday"],
+    ["offsetless", "2026-10-16T23:30:00"],
+    ["date-only", "2026-10-16"],
+    ["locale", "10/16/2026 23:30"],
+    ["offset", "2026-10-16T23:30:00-04:00"],
+  ];
+  for (const [label, sessionEndedAt] of rejects) {
+    const malformed = evaluateThresholdRegionSettledWorkloadAggregate({
+      observations: [
+        observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 112 }),
+        observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
+        observation({
+          sessionId: "s3",
+          workoutDate: "2026-10-16",
+          measuredWattsMedian: 116,
+          sessionEndedAt,
+        }),
+      ],
+      policy: completePolicy(),
+    });
+    assert.ok(
+      malformed.rejected.some(
+        (r) => r.sessionId === "s3" && r.failures.includes("invalid_observation_payload")
+      ),
+      `${label} should reject`
+    );
+  }
+
+  const spoofed = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: [
+      observation({ sessionId: "s1", workoutDate: "2026-10-12", measuredWattsMedian: 112 }),
+      observation({ sessionId: "s2", workoutDate: "2026-10-14", measuredWattsMedian: 114 }),
+      observation({
+        sessionId: "s3",
+        workoutDate: "2026-10-16",
+        measuredWattsMedian: 116,
+        workoutDateSpoof: "2026-10-01",
+      }),
+    ],
+    policy: completePolicy(),
+  });
+  assert.ok(
+    spoofed.rejected.some(
+      (r) => r.sessionId === "s3" && r.failures.includes("invalid_observation_payload")
+    )
+  );
+
+  const ok = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: threeStable(),
+    policy: completePolicy(),
+  });
+  assert.deepEqual(ok.aggregate.workoutDates, ["2026-10-12", "2026-10-14", "2026-10-16"]);
 });
 
 test("sensitivity helper matches design matrix medians", () => {
@@ -348,9 +672,6 @@ test("sensitivity helper matches design matrix medians", () => {
     const summary = summarizeSessionMedianSeries(c.watts);
     assert.equal(summary.median, c.expectMedian, `watts=${c.watts}`);
   }
-  const trending = summarizeSessionMedianSeries([100, 105, 110, 115]);
-  assert.equal(trending.trendDirection, "rising");
-  assert.ok((trending.spanRatio ?? 0) > 0.1);
 });
 
 test("stale observation fails when age gate is set", () => {
@@ -367,11 +688,14 @@ test("stale observation fails when age gate is set", () => {
   assert.equal(result.aggregate, null);
 });
 
-test("admission policy lineage identity is recorded on emitted aggregate", () => {
+test("same valid lineage still computes median/MAD diagnostics under default unresolved policy", () => {
   const result = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: threeStable(),
-    policy: completePolicy(),
   });
-  assert.equal(result.aggregate.admissionPolicyId, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1);
-  assert.equal(result.compatibility.observationProvenance, THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1);
+  assert.equal(result.diagnostics.aggregateMeasuredWattsMedian, 114);
+  assert.ok(result.diagnostics.crossSessionWattsMad != null);
+  assert.ok(result.diagnostics.crossSessionWattsMadRatio != null);
+  assert.equal(result.aggregate, null);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.maxCrossSessionMadRatio, null);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.maxObservationAgeDays, null);
 });

@@ -4,6 +4,8 @@ import assert from "node:assert/strict";
 import {
   THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
+  THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
+  THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
   THRESHOLD_REGION_ORDINARY_WORKOUT_SHADOW_RESOLVER_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
   evaluateThresholdRegionSettledWorkloadContract,
@@ -511,6 +513,52 @@ test("malformed formal-anchor timestamp fails closed", () => {
   assert.equal(result.acceptedWindow, null);
 });
 
+test("absolute toISOString timestamps pass; offsetless and non-absolute forms fail closed", () => {
+  const ok = evaluateThresholdRegionSettledWorkloadContract(
+    syntheticDenseHoldFixture({
+      sessionEndedAt: "2026-10-16T14:59:14.030Z",
+      formalAnchorObservedAt: "2026-10-11T18:18:38.106Z",
+    })
+  );
+  assert.ok(ok.observation);
+  assert.equal(ok.observation.sessionEndedAt, "2026-10-16T14:59:14.030Z");
+  assert.equal(ok.observation.formalAnchorObservedAt, "2026-10-11T18:18:38.106Z");
+
+  for (const [label, sessionEndedAt] of [
+    ["offsetless datetime", "2026-10-16T23:30:00"],
+    ["date-only", "2026-10-16"],
+    ["locale-style", "10/16/2026 23:30"],
+    ["offset timestamp", "2026-10-16T23:30:00-04:00"],
+    ["Z without fractional ms", "2026-10-16T23:30:00Z"],
+    ["empty", ""],
+  ]) {
+    const result = evaluateThresholdRegionSettledWorkloadContract(
+      syntheticDenseHoldFixture({ sessionEndedAt })
+    );
+    assert.ok(
+      result.identityFailures.includes("invalid_session_or_anchor_timestamp"),
+      `${label} should fail identity`
+    );
+    assert.equal(result.observation, null, `${label} must not emit observation`);
+    assert.equal(result.acceptedWindow, null, `${label} must not accept window`);
+  }
+
+  for (const [label, formalAnchorObservedAt] of [
+    ["offsetless anchor", "2026-10-11T18:18:38"],
+    ["date-only anchor", "2026-10-11"],
+    ["offset anchor", "2026-10-11T18:18:38-04:00"],
+  ]) {
+    const result = evaluateThresholdRegionSettledWorkloadContract(
+      syntheticDenseHoldFixture({ formalAnchorObservedAt })
+    );
+    assert.ok(
+      result.identityFailures.includes("invalid_session_or_anchor_timestamp"),
+      `${label} should fail identity`
+    );
+    assert.equal(result.observation, null, `${label} must not emit observation`);
+  }
+});
+
 test("rejects missing target-hold corroboration and mostly out-of-band HR when occupancy gate is set", () => {
   const noHold = evaluateThresholdRegionSettledWorkloadContract(
     syntheticDenseHoldFixture({ machineDecisionAudit: [] })
@@ -681,6 +729,26 @@ test("production observation requires complete policy; schema identity is set wh
     result.observation.controllerSettledProvenance,
     "controller_held_resistance_plus_target_hold_audit"
   );
+  assert.equal(result.observation.admissionPolicyId, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1);
+  assert.equal(
+    result.observation.admissionPolicyVersion,
+    THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1
+  );
+  assert.equal(result.observation.sessionEndedAt, ENDED);
+});
+
+test("observation records the evaluating admission policy id/version and sessionEndedAt", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(syntheticDenseHoldFixture());
+  assert.ok(result.observation);
+  assert.equal(result.observation.admissionPolicyId, result.policy.id);
+  assert.equal(result.observation.admissionPolicyVersion, result.policy.version);
+  assert.equal(result.observation.admissionPolicyId, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1);
+  assert.equal(
+    result.observation.admissionPolicyVersion,
+    THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1
+  );
+  assert.equal(result.observation.sessionEndedAt, ENDED);
+  assert.match(result.observation.sessionEndedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test("stale row with cadence must not inflate cadence coverage", () => {

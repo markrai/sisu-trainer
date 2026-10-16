@@ -13,11 +13,18 @@
  * Independence unit: one workout session → at most one observation.
  * Aggregate statistic: unweighted median of session measured-watt medians.
  *
+ * Provenance invariants:
+ * - Admission-policy id/version come from each observation payload.
+ * - sessionEndedAt is authoritative; workoutDate is derived (UTC YYYY-MM-DD).
+ * - Lineage is either explicit (`expectedCompatibility`) or requires a single
+ *   homogeneous key across inputs (order-independent).
+ *
  * Production emission requires unresolved scientific fields to be set.
  */
 import { canonicalMedian } from "./stats.js";
 import { medianAbsoluteDeviation } from "./performedLoad.js";
-import { THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1, THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1, } from "./thresholdRegionSettledWorkload.js";
+import { isIsoTimestamp } from "./utils/dateTime.js";
+import { THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1, } from "./thresholdRegionSettledWorkload.js";
 /** Aggregate evidence schema identity (distinct from single-session observation). */
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1 = "threshold-region-settled-workload-aggregate";
 export const THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_VERSION_V1 = 1;
@@ -49,28 +56,70 @@ function unresolvedAggregateFields(policy) {
 export function thresholdRegionAggregatePolicyIsProductionReady(policy = THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1) {
     return unresolvedAggregateFields(policy).length === 0;
 }
-function isValidObservationPayload(observation) {
-    return (observation.schemaId === THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1 &&
-        observation.schemaVersion === THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1 &&
-        observation.provenance === THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1 &&
-        observation.workoutIntent === "threshold" &&
-        observation.intensityId === "threshold" &&
-        observation.eligibleForPrescription === false &&
-        observation.interpretation === "descriptive_observation_only" &&
-        typeof observation.athleteId === "string" &&
-        typeof observation.sessionId === "string" &&
-        typeof observation.machineId === "string" &&
-        typeof observation.machineProfileVersion === "number" &&
-        Number.isFinite(observation.machineProfileVersion) &&
-        typeof observation.formalAnchorObservedAt === "string" &&
-        Number.isFinite(observation.targetHrMin) &&
-        Number.isFinite(observation.targetHrMax) &&
-        Number.isFinite(observation.measuredWattsMedian) &&
-        observation.measuredWattsMedian > 0 &&
-        typeof observation.workoutDate === "string" &&
-        /^\d{4}-\d{2}-\d{2}$/.test(observation.workoutDate));
+/**
+ * Derive UTC calendar date from canonical absolute `sessionEndedAt`.
+ * Requires `isIsoTimestamp` (toISOString round-trip); host timezone cannot
+ * change the result.
+ */
+export function workoutDateFromSessionEndedAt(sessionEndedAt) {
+    if (!isIsoTimestamp(sessionEndedAt))
+        return null;
+    return new Date(Date.parse(sessionEndedAt)).toISOString().slice(0, 10);
 }
-function compatibilityKeyFrom(observation) {
+function isValidObservationPayload(observation) {
+    if (!observation || typeof observation !== "object")
+        return false;
+    if (observation.schemaId !== THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1)
+        return false;
+    if (observation.schemaVersion !== THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1)
+        return false;
+    if (observation.provenance !== THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1)
+        return false;
+    if (observation.workoutIntent !== "threshold" || observation.intensityId !== "threshold")
+        return false;
+    if (observation.eligibleForPrescription !== false)
+        return false;
+    if (observation.interpretation !== "descriptive_observation_only")
+        return false;
+    if (typeof observation.athleteId !== "string" || observation.athleteId.length === 0)
+        return false;
+    if (typeof observation.sessionId !== "string" || observation.sessionId.length === 0)
+        return false;
+    if (typeof observation.machineId !== "string" || observation.machineId.length === 0)
+        return false;
+    if (typeof observation.machineProfileVersion !== "number" ||
+        !Number.isFinite(observation.machineProfileVersion)) {
+        return false;
+    }
+    if (!isIsoTimestamp(observation.formalAnchorObservedAt))
+        return false;
+    if (typeof observation.admissionPolicyId !== "string" || observation.admissionPolicyId.length === 0) {
+        return false;
+    }
+    if (typeof observation.admissionPolicyVersion !== "number" ||
+        !Number.isFinite(observation.admissionPolicyVersion) ||
+        !Number.isInteger(observation.admissionPolicyVersion)) {
+        return false;
+    }
+    if (!Number.isFinite(observation.targetHrMin) || !Number.isFinite(observation.targetHrMax))
+        return false;
+    if (!Number.isFinite(observation.measuredWattsMedian) || observation.measuredWattsMedian <= 0) {
+        return false;
+    }
+    if (!isIsoTimestamp(observation.sessionEndedAt))
+        return false;
+    if (workoutDateFromSessionEndedAt(observation.sessionEndedAt) == null)
+        return false;
+    // Caller-supplied workoutDate (if present on a malformed payload) must not disagree.
+    const spoof = observation.workoutDate;
+    if (spoof !== undefined) {
+        const derived = workoutDateFromSessionEndedAt(observation.sessionEndedAt);
+        if (typeof spoof !== "string" || spoof !== derived)
+            return false;
+    }
+    return true;
+}
+export function compatibilityKeyFromObservation(observation) {
     return {
         athleteId: observation.athleteId,
         machineId: observation.machineId,
@@ -78,11 +127,11 @@ function compatibilityKeyFrom(observation) {
         formalAnchorObservedAt: observation.formalAnchorObservedAt,
         targetHrMin: observation.targetHrMin,
         targetHrMax: observation.targetHrMax,
-        admissionPolicyId: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
-        admissionPolicyVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
-        observationSchemaId: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
-        observationSchemaVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
-        observationProvenance: THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+        admissionPolicyId: observation.admissionPolicyId,
+        admissionPolicyVersion: observation.admissionPolicyVersion,
+        observationSchemaId: observation.schemaId,
+        observationSchemaVersion: observation.schemaVersion,
+        observationProvenance: observation.provenance,
     };
 }
 function keysEqual(a, b) {
@@ -97,6 +146,21 @@ function keysEqual(a, b) {
         a.observationSchemaId === b.observationSchemaId &&
         a.observationSchemaVersion === b.observationSchemaVersion &&
         a.observationProvenance === b.observationProvenance);
+}
+function compatibilityKeyFingerprint(key) {
+    return [
+        key.athleteId,
+        key.machineId,
+        String(key.machineProfileVersion),
+        key.formalAnchorObservedAt,
+        String(key.targetHrMin),
+        String(key.targetHrMax),
+        key.admissionPolicyId,
+        String(key.admissionPolicyVersion),
+        key.observationSchemaId,
+        String(key.observationSchemaVersion),
+        key.observationProvenance,
+    ].join("\u001f");
 }
 function compatibilityFailures(expected, actual) {
     const failures = [];
@@ -126,9 +190,60 @@ function compatibilityFailures(expected, actual) {
     }
     return failures;
 }
-/** Chronological by workoutDate then sessionId. */
+/**
+ * Exact-duplicate fingerprint over the complete canonical single-session
+ * observation schema. Any differing field → contradictory duplicate.
+ * Caller extras (e.g. spoofed `workoutDate`) are ignored.
+ */
+export function canonicalObservationDuplicateFingerprint(observation) {
+    // Field order mirrors ThresholdRegionSettledWorkloadObservationV1.
+    return [
+        observation.schemaId,
+        String(observation.schemaVersion),
+        observation.provenance,
+        observation.admissionPolicyId,
+        String(observation.admissionPolicyVersion),
+        observation.athleteId,
+        observation.sessionId,
+        observation.machineId,
+        String(observation.machineProfileVersion),
+        observation.workoutIntent,
+        observation.intensityId,
+        String(observation.targetHrMin),
+        String(observation.targetHrMax),
+        String(observation.windowStartSec),
+        String(observation.windowEndSecExclusive),
+        String(observation.settledFromSec),
+        String(observation.qualifyingDurationSec),
+        String(observation.postSettlingDurationSec),
+        String(observation.heldResistance),
+        String(observation.hrMedian),
+        String(observation.hrInBandFraction),
+        String(observation.hrCoverageRatio),
+        String(observation.measuredWattsMedian),
+        String(observation.measuredWattsMad),
+        String(observation.measuredWattsSampleCount),
+        String(observation.measuredWattsCoverageRatio),
+        String(observation.cadenceMedian),
+        String(observation.cadenceCoverageRatio),
+        observation.controllerSettledProvenance,
+        observation.formalAnchorObservedAt,
+        observation.sessionEndedAt,
+        observation.quality,
+        String(observation.eligibleForPrescription),
+        observation.interpretation,
+    ].join("\u001f");
+}
+/** Chronological by derived workoutDate then sessionId (order-independent of input). */
 function chronological(observations) {
-    return [...observations].sort((a, b) => a.workoutDate.localeCompare(b.workoutDate) || a.sessionId.localeCompare(b.sessionId));
+    return [...observations].sort((a, b) => {
+        var _a, _b;
+        const da = (_a = workoutDateFromSessionEndedAt(a.sessionEndedAt)) !== null && _a !== void 0 ? _a : "";
+        const db = (_b = workoutDateFromSessionEndedAt(b.sessionEndedAt)) !== null && _b !== void 0 ? _b : "";
+        return (da.localeCompare(db) ||
+            a.sessionEndedAt.localeCompare(b.sessionEndedAt) ||
+            a.sessionId.localeCompare(b.sessionId));
+    });
 }
 export function classifyCrossSessionTrend(sessionMediansChronological) {
     if (sessionMediansChronological.length < 2)
@@ -158,6 +273,36 @@ function ageDays(newerIsoDate, olderIsoDate) {
     return Math.round((a - b) / (24 * 3600 * 1000));
 }
 /**
+ * Deduplicate by sessionId. Identical duplicates collapse to one (deterministic
+ * chronological pick). Contradictory duplicates fail the session entirely.
+ */
+function resolveSessionIndependence(observations) {
+    var _a;
+    const bySession = new Map();
+    for (const observation of chronological(observations)) {
+        const group = (_a = bySession.get(observation.sessionId)) !== null && _a !== void 0 ? _a : [];
+        group.push(observation);
+        bySession.set(observation.sessionId, group);
+    }
+    const accepted = [];
+    const rejected = [];
+    // Deterministic session order: by sessionId.
+    for (const sessionId of [...bySession.keys()].sort()) {
+        const group = bySession.get(sessionId);
+        const fingerprints = new Set(group.map(canonicalObservationDuplicateFingerprint));
+        if (fingerprints.size > 1) {
+            rejected.push({ sessionId, failures: ["contradictory_duplicate_session"] });
+            continue;
+        }
+        if (group.length > 1) {
+            rejected.push({ sessionId, failures: ["duplicate_session_id"] });
+        }
+        // Identical payloads: any member is equivalent; pick is chronological then sessionId.
+        accepted.push(group[0]);
+    }
+    return { accepted: chronological(accepted), rejected };
+}
+/**
  * Evaluate multi-session aggregation over qualifying single-session
  * observations. Fail-closed when scientific policy fields remain unresolved.
  */
@@ -166,41 +311,64 @@ export function evaluateThresholdRegionSettledWorkloadAggregate(args) {
     const policy = (_a = args.policy) !== null && _a !== void 0 ? _a : THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1;
     const unresolved = unresolvedAggregateFields(policy);
     const rejected = [];
-    const accepted = [];
-    const seenSessions = new Set();
-    const valid = args.observations.filter((observation) => {
-        var _a;
+    const valid = [];
+    for (const observation of args.observations) {
         if (!isValidObservationPayload(observation)) {
             rejected.push({
-                sessionId: (_a = observation === null || observation === void 0 ? void 0 : observation.sessionId) !== null && _a !== void 0 ? _a : "unknown",
+                sessionId: (_b = observation === null || observation === void 0 ? void 0 : observation.sessionId) !== null && _b !== void 0 ? _b : "unknown",
                 failures: ["invalid_observation_payload"],
             });
-            return false;
-        }
-        return true;
-    });
-    const expected = (_b = args.expectedCompatibility) !== null && _b !== void 0 ? _b : (valid[0] ? compatibilityKeyFrom(valid[0]) : null);
-    for (const observation of chronological(valid)) {
-        if (!expected)
-            break;
-        if (seenSessions.has(observation.sessionId)) {
-            rejected.push({ sessionId: observation.sessionId, failures: ["duplicate_session_id"] });
             continue;
         }
-        const key = compatibilityKeyFrom(observation);
-        const incompat = compatibilityFailures(expected, key);
-        if (incompat.length > 0) {
-            rejected.push({ sessionId: observation.sessionId, failures: incompat });
-            continue;
-        }
-        seenSessions.add(observation.sessionId);
-        accepted.push(observation);
+        valid.push(observation);
     }
-    const ordered = chronological(accepted);
+    let expected = (_c = args.expectedCompatibility) !== null && _c !== void 0 ? _c : null;
+    let lineageReady = true;
+    if (!expected) {
+        if (valid.length === 0) {
+            expected = null;
+        }
+        else {
+            const fingerprints = new Set(valid.map((observation) => compatibilityKeyFingerprint(compatibilityKeyFromObservation(observation))));
+            if (fingerprints.size > 1) {
+                lineageReady = false;
+                expected = null;
+                for (const observation of valid) {
+                    rejected.push({
+                        sessionId: observation.sessionId,
+                        failures: ["mixed_compatibility_lineage"],
+                    });
+                }
+            }
+            else {
+                expected = compatibilityKeyFromObservation(valid[0]);
+            }
+        }
+    }
+    const lineageMembers = [];
+    if (lineageReady && expected) {
+        for (const observation of chronological(valid)) {
+            const key = compatibilityKeyFromObservation(observation);
+            const incompat = compatibilityFailures(expected, key);
+            if (incompat.length > 0) {
+                rejected.push({ sessionId: observation.sessionId, failures: incompat });
+                continue;
+            }
+            lineageMembers.push(observation);
+        }
+    }
+    const { accepted: ordered, rejected: duplicateRejected } = lineageReady
+        ? resolveSessionIndependence(lineageMembers)
+        : { accepted: [], rejected: [] };
+    rejected.push(...duplicateRejected);
     const sessionMedians = ordered.map((o) => o.measuredWattsMedian);
-    const dates = [...new Set(ordered.map((o) => o.workoutDate))].sort();
-    const aggregateMedian = (_c = canonicalMedian(sessionMedians)) !== null && _c !== void 0 ? _c : null;
-    const crossMad = sessionMedians.length > 0 ? (_d = medianAbsoluteDeviation(sessionMedians)) !== null && _d !== void 0 ? _d : null : null;
+    const dates = [
+        ...new Set(ordered
+            .map((o) => workoutDateFromSessionEndedAt(o.sessionEndedAt))
+            .filter((d) => d != null)),
+    ].sort();
+    const aggregateMedian = (_d = canonicalMedian(sessionMedians)) !== null && _d !== void 0 ? _d : null;
+    const crossMad = sessionMedians.length > 0 ? (_e = medianAbsoluteDeviation(sessionMedians)) !== null && _e !== void 0 ? _e : null : null;
     const crossMadRatio = aggregateMedian != null && aggregateMedian > 0 && crossMad != null
         ? crossMad / aggregateMedian
         : null;
@@ -209,7 +377,10 @@ export function evaluateThresholdRegionSettledWorkloadAggregate(args) {
         ? (Math.max(...sessionMedians) - Math.min(...sessionMedians)) / aggregateMedian
         : null;
     const failures = [];
-    if (!expected) {
+    if (!lineageReady) {
+        failures.push("mixed_compatibility_lineage");
+    }
+    else if (!expected) {
         failures.push("insufficient_observations");
     }
     else {
@@ -227,9 +398,10 @@ export function evaluateThresholdRegionSettledWorkloadAggregate(args) {
         }
         if (policy.maxObservationAgeDays !== null && ordered.length > 0) {
             const newest = dates[dates.length - 1];
-            const asOf = (_e = args.asOfDate) !== null && _e !== void 0 ? _e : newest;
+            const asOf = (_f = args.asOfDate) !== null && _f !== void 0 ? _f : newest;
             for (const observation of ordered) {
-                const age = ageDays(asOf, observation.workoutDate);
+                const date = workoutDateFromSessionEndedAt(observation.sessionEndedAt);
+                const age = date == null ? null : ageDays(asOf, date);
                 if (age == null || age > policy.maxObservationAgeDays) {
                     failures.push("stale_observation");
                     break;
@@ -279,9 +451,9 @@ export function evaluateThresholdRegionSettledWorkloadAggregate(args) {
             interpretation: "descriptive_aggregate_only",
             eligibleForPrescription: false,
             eligibleForShadowCandidate: policy.allowShadowCandidateEligibility,
-            observedAt: (_f = newest.sessionEndedAt) !== null && _f !== void 0 ? _f : `${newest.workoutDate}T00:00:00.000Z`,
-            admissionPolicyId: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
-            admissionPolicyVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
+            observedAt: newest.sessionEndedAt,
+            admissionPolicyId: expected.admissionPolicyId,
+            admissionPolicyVersion: expected.admissionPolicyVersion,
             aggregatePolicyId: THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_ID_V1,
             aggregatePolicyVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_VERSION_V1,
         };
