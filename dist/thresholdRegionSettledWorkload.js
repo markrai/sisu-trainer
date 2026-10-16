@@ -8,12 +8,16 @@
  * runtime control authority.
  *
  * Continuity model (fail-closed join):
- * - Controller/load continuity: same commanded (else desired) resistance held
- *   over an elapsed interval. Telemetry row gaps do NOT split the hold.
- * - Observed-resistance consistency: any present observedResistance that
- *   disagrees with the held controller resistance rejects/splits that span.
- * - Telemetry evidence: independent HR / measured-watt / cadence coverage and
- *   freshness over the post-settling elapsed seconds of that hold.
+ * - Controller/load continuity: authoritative resistance-transition timeline
+ *   from accepted actuation events (preferred) and/or machine decision audit,
+ *   with telemetry commanded/desired as fallback only when no transitions are
+ *   known. Telemetry row gaps do NOT split a hold; known controller transitions
+ *   DO, even inside a telemetry gap.
+ * - Observed-resistance consistency: only fresh observedResistance may
+ *   contradict the held controller resistance (producer/parser: metrics exist
+ *   only on fresh rows).
+ * - Telemetry evidence: independent HR / fresh measured-watt / fresh measured
+ *   cadence coverage over the post-settling elapsed seconds of that hold.
  *
  * Reuses existing primitives:
  * - `settledActiveSeconds` with E2 held-workload settling (120 s)
@@ -58,8 +62,17 @@ export const THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1 = {
     maxMeasuredWattsMadRatio: null,
     minAdviceGradeDurationSec: null,
 };
+function isNonAcceptedActuationOutcome(outcome) {
+    return (outcome === "failed" ||
+        outcome === "unavailable" ||
+        outcome === "timeout" ||
+        outcome === "pending");
+}
 function isEvaluation(entry) {
     return entry.kind === "evaluation";
+}
+function isWorkPhaseStarted(entry) {
+    return entry.kind === "work_phase_started";
 }
 function continuityPolicy(policy) {
     return {
@@ -86,12 +99,206 @@ function controllerResistance(sample) {
     }
     return undefined;
 }
-/**
- * Build held-load windows from controller resistance continuity.
- * Telemetry gaps do not split a hold. Contradictory observedResistance does.
- */
-export function segmentControllerHeldResistance(samples, workStart, workEndExclusive) {
+function isFreshMeasuredCadence(sample) {
     var _a;
+    return (!!sample &&
+        sample.availability === "fresh" &&
+        ((_a = sample.cadenceRpm) === null || _a === void 0 ? void 0 : _a.source) === "measured" &&
+        typeof sample.cadenceRpm.value === "number" &&
+        Number.isFinite(sample.cadenceRpm.value));
+}
+/**
+ * Fresh observed resistance may contradict held load. Stale/unavailable rows
+ * never carry observedResistance under the ordinary telemetry producer/parser;
+ * if malformed data presents them, they are ignored (rule B).
+ */
+function freshObservedResistance(sample) {
+    var _a;
+    if (sample.availability !== "fresh")
+        return undefined;
+    const value = (_a = sample.observedResistance) === null || _a === void 0 ? void 0 : _a.value;
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+/**
+ * Collect the controller timeline inside the work phase.
+ *
+ * Preference order:
+ * 1. Actuation events at a second (any outcome) own that second:
+ *    - last event by ascending `commandId` decides the mark
+ *    - accepted → known resistance
+ *    - failed | unavailable | timeout | pending → uncertain
+ *      (physical effect not established; matches PhaseActuationMode "unknown")
+ * 2. Audit fills only seconds with no actuation event of any outcome, and
+ *    only while not awaiting accepted re-establishment after uncertainty
+ * 3. Telemetry commanded/desired only when the timeline is empty (caller)
+ *
+ * Same-second: numeric resistance never decides provenance precedence.
+ * Uncertain marks are hard boundaries; later accepted actuation may
+ * re-establish a known hold (Option C). Audit/telemetry must not.
+ */
+export function collectControllerTimeline(args) {
+    const { workActiveStartSec, workActiveEndSecExclusive } = args;
+    const actuationBySec = new Map();
+    if (args.resistanceActuationEvents) {
+        const inWork = args.resistanceActuationEvents
+            .filter((event) => event.activeSec >= workActiveStartSec && event.activeSec < workActiveEndSecExclusive)
+            .slice()
+            .sort((a, b) => a.commandId - b.commandId);
+        for (const event of inWork) {
+            if (event.outcome === "accepted") {
+                actuationBySec.set(event.activeSec, {
+                    kind: "known",
+                    resistance: event.requestedResistance,
+                });
+            }
+            else if (isNonAcceptedActuationOutcome(event.outcome)) {
+                actuationBySec.set(event.activeSec, { kind: "uncertain" });
+            }
+        }
+    }
+    const auditBySec = new Map();
+    if (args.machineDecisionAudit) {
+        for (const entry of args.machineDecisionAudit) {
+            let activeSec;
+            let resistance;
+            if (isWorkPhaseStarted(entry)) {
+                activeSec = entry.elapsedSeconds;
+                resistance = entry.resistance;
+            }
+            else if (isEvaluation(entry)) {
+                if (entry.resistanceBefore === entry.resistanceAfter)
+                    continue;
+                activeSec = entry.elapsedSeconds;
+                resistance = entry.resistanceAfter;
+            }
+            else {
+                continue;
+            }
+            if (activeSec === undefined ||
+                resistance === undefined ||
+                activeSec < workActiveStartSec ||
+                activeSec >= workActiveEndSecExclusive) {
+                continue;
+            }
+            // Any actuation event (accepted or not) owns the second — audit cannot fill.
+            if (actuationBySec.has(activeSec))
+                continue;
+            auditBySec.set(activeSec, resistance);
+        }
+    }
+    const seconds = [...new Set([...actuationBySec.keys(), ...auditBySec.keys()])].sort((a, b) => a - b);
+    const marks = [];
+    let lastKnownResistance;
+    // After non-accepted actuation, only a later accepted actuation may re-establish
+    // known held state. Audit must not override unresolved physical ambiguity.
+    let awaitAcceptedReestablishment = false;
+    for (const activeSec of seconds) {
+        const actuation = actuationBySec.get(activeSec);
+        if ((actuation === null || actuation === void 0 ? void 0 : actuation.kind) === "uncertain") {
+            marks.push({ kind: "uncertain", activeSec, reason: "non_accepted_actuation" });
+            lastKnownResistance = undefined;
+            awaitAcceptedReestablishment = true;
+            continue;
+        }
+        if ((actuation === null || actuation === void 0 ? void 0 : actuation.kind) === "known") {
+            awaitAcceptedReestablishment = false;
+            if (lastKnownResistance === actuation.resistance)
+                continue;
+            marks.push({ kind: "known", activeSec, resistance: actuation.resistance });
+            lastKnownResistance = actuation.resistance;
+            continue;
+        }
+        // Audit-only second: allowed only when not awaiting accepted re-establishment.
+        if (awaitAcceptedReestablishment)
+            continue;
+        const resistance = auditBySec.get(activeSec);
+        if (lastKnownResistance === resistance)
+            continue;
+        marks.push({ kind: "known", activeSec, resistance });
+        lastKnownResistance = resistance;
+    }
+    return marks;
+}
+/** Known transitions only (uncertain marks omitted). */
+export function collectControllerResistanceTransitions(args) {
+    return collectControllerTimeline(args)
+        .filter((mark) => mark.kind === "known")
+        .map((mark) => ({ activeSec: mark.activeSec, resistance: mark.resistance }));
+}
+function seedHeldResistanceBeforeFirstTransition(samples, workStart, firstTransitionSec) {
+    const ordered = samples
+        .filter((sample) => sample.activeSec >= workStart && sample.activeSec < firstTransitionSec)
+        .slice()
+        .sort((a, b) => a.activeSec - b.activeSec);
+    for (const sample of ordered) {
+        const held = controllerResistance(sample);
+        if (held !== undefined)
+            return held;
+    }
+    return undefined;
+}
+/**
+ * Build held intervals from a timeline of known + uncertain marks.
+ * Uncertain marks end the prior hold and prevent bridging until a later known.
+ */
+function intervalsFromTimeline(marks, workStart, workEndExclusive, samples) {
+    const known = marks.filter((mark) => mark.kind === "known");
+    if (known.length === 0 && marks.every((m) => m.kind === "uncertain"))
+        return [];
+    if (marks.length === 0)
+        return [];
+    // Seed initial known resistance before the first mark when telemetry shows it
+    // and the first mark is not uncertain at workStart.
+    const timeline = [...marks];
+    const first = timeline[0];
+    if (first && first.activeSec > workStart && first.kind === "known") {
+        const seed = seedHeldResistanceBeforeFirstTransition(samples, workStart, first.activeSec);
+        if (seed !== undefined && seed !== first.resistance) {
+            timeline.unshift({ kind: "known", activeSec: workStart, resistance: seed });
+        }
+        else if (seed !== undefined && seed === first.resistance) {
+            timeline[0] = { kind: "known", activeSec: workStart, resistance: seed };
+        }
+    }
+    else if (first && first.activeSec > workStart && first.kind === "uncertain") {
+        const seed = seedHeldResistanceBeforeFirstTransition(samples, workStart, first.activeSec);
+        if (seed !== undefined) {
+            timeline.unshift({ kind: "known", activeSec: workStart, resistance: seed });
+        }
+    }
+    const windows = [];
+    for (let i = 0; i < timeline.length; i++) {
+        const mark = timeline[i];
+        if (mark.kind !== "known")
+            continue;
+        const start = Math.max(mark.activeSec, workStart);
+        let endExclusive = workEndExclusive;
+        let boundedByAmbiguous = false;
+        for (let j = i + 1; j < timeline.length; j++) {
+            const next = timeline[j];
+            if (next.activeSec >= workEndExclusive)
+                break;
+            if (next.kind === "uncertain") {
+                endExclusive = Math.min(next.activeSec, workEndExclusive);
+                boundedByAmbiguous = true;
+                break;
+            }
+            // Next known mark ends this hold (resistance change or same-R collapsed already).
+            endExclusive = Math.min(next.activeSec, workEndExclusive);
+            break;
+        }
+        if (endExclusive <= start)
+            continue;
+        windows.push({
+            resistance: mark.resistance,
+            startSec: start,
+            endSecInclusive: endExclusive - 1,
+            ...(boundedByAmbiguous ? { boundedByAmbiguousActuation: true } : {}),
+        });
+    }
+    return windows;
+}
+function intervalsFromTelemetryControllerState(samples, workStart, workEndExclusive) {
     const ordered = samples
         .filter((sample) => sample.activeSec >= workStart && sample.activeSec < workEndExclusive)
         .slice()
@@ -110,35 +317,91 @@ export function segmentControllerHeldResistance(samples, workStart, workEndExclu
         }
         current.samples.push(sample);
     }
-    const windows = [];
-    for (const run of controllerRuns) {
+    return controllerRuns.map((run) => ({
+        resistance: run.resistance,
+        startSec: run.samples[0].activeSec,
+        endSecInclusive: run.samples[run.samples.length - 1].activeSec,
+    }));
+}
+/**
+ * Split/trim held intervals so fresh observedResistance contradictions cannot
+ * remain inside a candidate window. Stale/unavailable observed values ignored.
+ */
+function trimByFreshObservedResistance(intervals, samples) {
+    const ordered = samples.slice().sort((a, b) => a.activeSec - b.activeSec);
+    const out = [];
+    for (const interval of intervals) {
+        const inSpan = ordered.filter((sample) => sample.activeSec >= interval.startSec && sample.activeSec <= interval.endSecInclusive);
         let subStart;
         let subEnd;
         const flush = () => {
             if (subStart === undefined || subEnd === undefined)
                 return;
-            windows.push({
-                resistance: run.resistance,
+            out.push({
+                resistance: interval.resistance,
                 startSec: subStart,
                 endSecInclusive: subEnd,
+                ...(interval.boundedByAmbiguousActuation
+                    ? { boundedByAmbiguousActuation: true }
+                    : {}),
             });
             subStart = undefined;
             subEnd = undefined;
         };
-        for (const sample of run.samples) {
-            const observed = (_a = sample.observedResistance) === null || _a === void 0 ? void 0 : _a.value;
-            const contradicts = typeof observed === "number" && Number.isFinite(observed) && observed !== run.resistance;
+        // Walk every elapsed second of the controller interval; missing telemetry is
+        // not a contradiction. Fresh contradictory observed resistance ends the subspan.
+        let second = interval.startSec;
+        while (second <= interval.endSecInclusive) {
+            const sample = inSpan.find((row) => row.activeSec === second);
+            const observed = sample ? freshObservedResistance(sample) : undefined;
+            const contradicts = observed !== undefined && observed !== interval.resistance;
             if (contradicts) {
                 flush();
+                second += 1;
                 continue;
             }
-            if (subStart === undefined)
-                subStart = sample.activeSec;
-            subEnd = sample.activeSec;
+            if (subStart === undefined) {
+                // Prefer starting at first non-contradictory evidence second when the
+                // interval opens on a contradictory sample that was just skipped; for
+                // seconds with no sample, still allow controller-hold start.
+                subStart = second;
+            }
+            subEnd = second;
+            second += 1;
         }
         flush();
     }
-    return windows;
+    // Refine starts: if the first second(s) had no fresh corroborating observed
+    // resistance and the first fresh observation disagrees, already handled.
+    // If controller interval starts at a commanded transition second that has a
+    // fresh contradictory observation, that second was skipped above — good.
+    // Collapse: when subspans are adjacent with same resistance, keep separate
+    // only when contradiction created the hole (already separate).
+    return out;
+}
+/**
+ * Build held-load windows.
+ *
+ * If the controller timeline has any known or uncertain mark, intervals come
+ * only from that timeline. Uncertain marks close the current hold; telemetry
+ * must not re-establish known state afterward — only later accepted actuation
+ * may. Telemetry commanded/desired fallback applies only when the timeline is
+ * empty (no actuation provenance marks and no audit transitions).
+ *
+ * Telemetry gaps do not split holds. Fresh observedResistance contradictions
+ * trim/split. Stale rows do not.
+ */
+export function segmentControllerHeldResistance(samples, workStart, workEndExclusive, options) {
+    const timeline = collectControllerTimeline({
+        workActiveStartSec: workStart,
+        workActiveEndSecExclusive: workEndExclusive,
+        machineDecisionAudit: options === null || options === void 0 ? void 0 : options.machineDecisionAudit,
+        resistanceActuationEvents: options === null || options === void 0 ? void 0 : options.resistanceActuationEvents,
+    });
+    const baseIntervals = timeline.length > 0
+        ? intervalsFromTimeline(timeline, workStart, workEndExclusive, samples)
+        : intervalsFromTelemetryControllerState(samples, workStart, workEndExclusive);
+    return trimByFreshObservedResistance(baseIntervals, samples);
 }
 /**
  * Qualifying target-hold audits for a candidate window.
@@ -219,6 +482,10 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
         input.targetHrMin > input.targetHrMax) {
         identityFailures.push("missing_numeric_hr_target");
     }
+    // Provenance present but incomplete ≠ provenance absent.
+    if (input.actuationCoverage === "incomplete") {
+        identityFailures.push("incomplete_actuation_provenance");
+    }
     const empty = {
         policy,
         policyProductionReady: unresolved.length === 0,
@@ -230,9 +497,22 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
     };
     if (identityFailures.length > 0)
         return empty;
-    const heldWindows = segmentControllerHeldResistance(input.bikeSamples, input.workActiveStartSec, input.workActiveEndSecExclusive);
+    const timeline = collectControllerTimeline({
+        workActiveStartSec: input.workActiveStartSec,
+        workActiveEndSecExclusive: input.workActiveEndSecExclusive,
+        machineDecisionAudit: input.machineDecisionAudit,
+        resistanceActuationEvents: input.resistanceActuationEvents,
+    });
+    const hasUncertainActuation = timeline.some((mark) => mark.kind === "uncertain");
+    const heldWindows = segmentControllerHeldResistance(input.bikeSamples, input.workActiveStartSec, input.workActiveEndSecExclusive, {
+        machineDecisionAudit: input.machineDecisionAudit,
+        resistanceActuationEvents: input.resistanceActuationEvents,
+    });
     if (heldWindows.length === 0) {
-        return { ...empty, identityFailures: [...identityFailures, "no_stable_resistance_window"] };
+        const code = hasUncertainActuation
+            ? "ambiguous_actuation_provenance"
+            : "no_stable_resistance_window";
+        return { ...empty, identityFailures: [...identityFailures, code] };
     }
     const bikeBySec = new Map(input.bikeSamples.map((sample) => [sample.activeSec, sample]));
     const windows = [];
@@ -257,6 +537,7 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
                 ((_b = bike.watts) === null || _b === void 0 ? void 0 : _b.source) === "measured_watts" &&
                 typeof bike.watts.value === "number" &&
                 Number.isFinite(bike.watts.value);
+            const hasFreshCadence = isFreshMeasuredCadence(bike);
             if (hasHr) {
                 hrSampleCount += 1;
                 hrs.push(bpm);
@@ -267,7 +548,7 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
             if (hasMeasuredWatts) {
                 watts.push(bike.watts.value);
             }
-            if ((bike === null || bike === void 0 ? void 0 : bike.cadenceRpm) && typeof bike.cadenceRpm.value === "number") {
+            if (hasFreshCadence) {
                 cadences.push(bike.cadenceRpm.value);
             }
             if (hasHr && hasMeasuredWatts)
@@ -320,7 +601,7 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
             }
         }
         windows.push({
-            observedResistance: segment.resistance,
+            heldResistance: segment.resistance,
             windowStartSec: first,
             windowEndSecExclusive: last + 1,
             settledFromSec: settledFrom,
@@ -374,7 +655,7 @@ export function evaluateThresholdRegionSettledWorkloadContract(input) {
             settledFromSec: acceptedWindow.settledFromSec,
             qualifyingDurationSec: acceptedWindow.qualifyingSampleCount,
             postSettlingDurationSec: acceptedWindow.postSettlingDurationSec,
-            observedResistance: acceptedWindow.observedResistance,
+            heldResistance: acceptedWindow.heldResistance,
             hrMedian: acceptedWindow.hrMedian,
             hrInBandFraction: acceptedWindow.hrInBandFraction,
             hrCoverageRatio: acceptedWindow.hrCoverageRatio,

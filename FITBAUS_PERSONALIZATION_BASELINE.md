@@ -814,7 +814,7 @@ Contract design + pure admission module + tests only.
 No workout-control, E1, Phase D, or advice-emission wiring.
 
 Executable contract: `src/thresholdRegionSettledWorkload.ts`
-Tests: `tests/thresholdRegionSettledWorkload.test.mjs` (20/20 pass).
+Tests: `tests/thresholdRegionSettledWorkload.test.mjs` (56/56 pass).
 
 ### Evidence-window definition
 
@@ -828,10 +828,10 @@ It is:
    the formal FitnessState anchor (malformed timestamps fail closed as
    `invalid_session_or_anchor_timestamp`);
 3. legacy numeric HR target present;
-4. a **controller-held resistance window**: maximal span of constant
-   `commandedResistance` (else `desiredResistance`) whose present
-   `observedResistance` samples do not contradict that held value —
-   telemetry row gaps do **not** split the hold;
+4. a **controller-held resistance window** from the authoritative transition
+   timeline (accepted actuation events + resistance-changing audit decisions;
+   telemetry commanded/desired only as fallback when no transitions are known),
+   trimmed by **fresh** contradictory `observedResistance`;
 5. **post-settling** elapsed active seconds after
    `settlingSeconds=120` (reused from `PHASE_E2_HELD_WORKLOAD_POLICY_V1` —
    HR steady-state lag under held load);
@@ -841,8 +841,8 @@ It is:
    resistanceAfter == held`), `phaseKind=work`, and matching HR target
    bounds when present on the audit;
 7. independent telemetry evidence on post-settling seconds: fresh
-   **measured** watts + HR + cadence coverage ratios, plus E2-style
-   joint HR+measured-watt qualifying sample count.
+   **measured** watts + HR + **fresh measured** cadence coverage ratios, plus
+   E2-style joint HR+measured-watt qualifying sample count.
 
 Ramp / overshoot / correction segments either fail settling / qualifying
 duration, lack matching target-hold corroboration, or are separate shorter
@@ -855,17 +855,17 @@ separate:
 
 | Concept | Meaning | Splits hold? |
 |---|---|---|
-| Controller hold | Same commanded/desired resistance over an elapsed interval | Only when controller resistance changes |
-| Observed contradiction | Present `observedResistance ≠ held` | Yes — trim/split that span (fail-closed) |
+| Controller hold | Same held resistance on the transition timeline | Only when a known controller transition changes resistance |
+| Observed contradiction | Fresh `observedResistance ≠ held` | Yes — trim/split that span (fail-closed) |
 | Telemetry gaps | Missing bike rows inside a hold | **No** — reduces coverage only |
 
 Fail-closed join used by the contract:
 
 ```text
-audit/commanded sustained hold interval
-+ no contradictory observed-resistance samples
+actuation/audit sustained hold interval
++ no fresh contradictory observed-resistance samples
 + sufficient fresh measured-watt coverage
-+ sufficient cadence coverage
++ sufficient fresh measured cadence coverage
 + sufficient HR coverage
 + matching resistance-scoped target-hold audit
 ```
@@ -873,6 +873,85 @@ audit/commanded sustained hold interval
 `maxObservationGapSec=2` remains on the policy for E2 identity/compatibility
 and `observationsAreContinuousForPolicy`, but it is **not** the hold-window
 splitter. Do not widen the 2 s gap to “make Oct 16 pass.”
+
+### Final continuity / freshness semantics
+
+Added in the integrity harden pass (still design/shadow-only; thresholds
+UNRESOLVED).
+
+**Controller continuity source (authoritative order):**
+
+1. Actuation events at a second (any outcome) own that second. Last event by
+   ascending `commandId` decides the mark:
+   - `accepted` → known held resistance
+   - `failed` | `unavailable` | `timeout` | `pending` → **uncertain**
+     (physical effect not established; aligns with PhaseActuationMode
+     `unknown` for rejected/ambiguous commands)
+2. Machine decision audit fills only seconds with **no** actuation event of
+   any outcome (`work_phase_started` + `resistanceBefore !== resistanceAfter`).
+3. Fallback only when the timeline has no known marks: sparse telemetry
+   `commandedResistance` else `desiredResistance` (still cannot bridge
+   uncertain marks).
+
+Accepted actuation wins same-second disagreement with audit. Audit must not
+manufacture a known transition at a second where execution provenance records
+a non-accepted actuation attempt. Numeric resistance never decides provenance
+precedence.
+
+**Complete vs incomplete actuation capture:**
+
+- Provenance **absent** (historical): audit/telemetry fallback allowed.
+- `coverage=complete`: actuation timeline is authoritative.
+- `coverage=incomplete`: identity fail-closed as
+  `incomplete_actuation_provenance` (missing events possible; not the same
+  claim as provenance absent).
+
+**Uncertainty / re-establishment (Option C):**
+
+- Uncertain marks are hard boundaries — R10 continuity cannot bridge through
+  them (`ambiguous_actuation_provenance` when that prevents constructing any
+  trustworthy candidate).
+- After a non-accepted actuation makes controller state uncertain, telemetry
+  and audit do not re-establish physical held state; a later accepted
+  actuation does.
+- Evidence entirely before the ambiguity, or after accepted re-establishment,
+  may still qualify; a truncated pre-ambiguity window is not failed merely
+  because ambiguity occurs later.
+
+**Known transitions vs telemetry gaps:**
+
+- Missing bike rows alone do **not** split a hold.
+- A known R10→R11 (or R10→R11→R10) inside a gap **does** split/invalidate
+  R10 continuity — sparse telemetry must not erase known controller changes.
+- Same-resistance reconciliation resends are not transitions.
+
+Scientific admission thresholds remain **UNRESOLVED** (`null`):
+`minInBandFraction`, `maxMeasuredWattsMadRatio`, `minAdviceGradeDurationSec`.
+
+**Cadence freshness:** admission counts only
+`availability === "fresh"` + `cadenceRpm.source === "measured"`.
+(Producer/parser already forbid cadence metrics on stale/unavailable rows;
+the evaluator now fail-closes against malformed rows that still carry them.)
+Previously the contract could count cadence whenever `cadenceRpm` existed.
+
+**Observed-resistance freshness (rule B):** only **fresh**
+`observedResistance` may contradict the controller-held state. Stale/
+unavailable observed values are ignored (producer never emits metrics on
+those rows).
+
+**Field naming:** output/evaluation field renamed
+`observedResistance` → `heldResistance` (controller-held claim;
+observed resistance is corroboration/contradiction only). Unshipped design
+schema — no version bump.
+
+**Oct 16 start at 1051 not 1050:** commanded/actuated R10 at 1050, but fresh
+observed resistance was still R11 that second; first non-contradictory R10
+evidence begins 1051. Locked by regression.
+
+**Integrity-harden Oct 16 replay** (with actuation transitions): unchanged
+under resolved gates — window 1051–1417, held R10, settledFrom 1171,
+post 246 s, joint 205, HR med 158 / in-band ~0.967, watts 114/MAD 6,
+watt cov 0.833, cadence 67 / 0.833, holds 1230/1290/1350/1410.
 
 ### Contract corrections
 
@@ -900,13 +979,13 @@ splitter. Do not widen the 2 s gap to “make Oct 16 pass.”
 | Valid timestamps | `Date.parse` finite | `invalid_session_or_anchor_timestamp` |
 | Post-formal-anchor | `endedAt` > formal `observedAt` | `pre_formal_anchor` |
 | Numeric legacy HR target | resolved prescription | `missing_numeric_hr_target` |
-| Controller-held resistance window | commanded/desired + non-contradictory observed | `no_stable_resistance_window` |
+| Controller-held resistance window | actuation/audit transitions (else commanded/desired) + fresh non-contradictory observed | `no_stable_resistance_window` |
 | Settling 120 s | E2 held-workload policy | (consumed into duration) |
 | Min joint HR+watt qualifying samples ≥30 | E2 `minQualifyingSeconds` (sample count) | `insufficient_post_settling_duration` |
 | HR coverage ≥0.80 | E2 / Phase D | `insufficient_hr_coverage` |
 | Measured-watt coverage ≥0.80 | E2 / Phase D measured | `insufficient_measured_watt_coverage` |
 | Measured watts only | telemetry `source` | `non_measured_watt_provenance` |
-| Cadence coverage ≥0.75 | Phase D | `insufficient_cadence_coverage` |
+| Fresh measured cadence coverage ≥0.75 | Phase D + fresh/measured gate | `insufficient_cadence_coverage` |
 | Resistance-matched target-hold audit | machine decision audit | `missing_target_hold_corroboration` |
 | Min in-band HR fraction | **UNRESOLVED** (`null`) | `insufficient_in_band_occupancy` when set |
 | Max MAD(watts)/median | **UNRESOLVED** (`null`) | `unstable_measured_workload` when set |
@@ -938,9 +1017,9 @@ One accepted window may become a **descriptive** observation:
 - `interpretation: "descriptive_observation_only"`
 - `eligibleForPrescription: false`
 - `quality: "unverified"` until multi-session policy exists
-- records window bounds, resistance actually held (fact, not constant),
-  HR median / in-band fraction, measured-watt median+MAD, cadence, machine,
-  formal anchor
+- records window bounds, `heldResistance` (controller-held fact, not a
+  constant), HR median / in-band fraction, measured-watt median+MAD, cadence,
+  machine, formal anchor
 
 This is **not** a physiological Threshold / FTP / lactate claim and **not**
 active control.
@@ -1053,3 +1132,6 @@ settledFrom 1171; 1110 is inside settling.)
   hold-resistance matching, timestamp fail-closed, and E2 joint-sample
   `minQualifyingSeconds` semantics verified; three UNRESOLVED thresholds
   left untouched.
+- **Integrity pass (2026-10-16):** cadence/observed freshness aligned with
+  ordinary telemetry producer; actuation+audit transitions fail-closed across
+  telemetry gaps; `heldResistance` rename; Oct 16 CDP replay unchanged.

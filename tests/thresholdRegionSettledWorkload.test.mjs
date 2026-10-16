@@ -7,6 +7,8 @@ import {
   THRESHOLD_REGION_ORDINARY_WORKOUT_SHADOW_RESOLVER_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
   evaluateThresholdRegionSettledWorkloadContract,
+  collectControllerResistanceTransitions,
+  collectControllerTimeline,
   segmentControllerHeldResistance,
   thresholdRegionSettledPolicyIsProductionReady,
 } from "../dist/thresholdRegionSettledWorkload.js";
@@ -32,6 +34,8 @@ function bikeSample(activeSec, {
   observedResistance,
   desiredResistance,
   commandedResistance,
+  /** Test-only: attach metrics even on stale/unavailable rows (malformed vs producer). */
+  forceMetrics = false,
 } = {}) {
   const held = resistance;
   const sample = {
@@ -42,21 +46,64 @@ function bikeSample(activeSec, {
     observedAt: isoAtActiveSec(activeSec),
     availability,
   };
+  const allowMetrics = availability === "fresh" || forceMetrics;
   const obs = observedResistance ?? held;
-  if (obs != null) {
+  if (allowMetrics && obs != null) {
     sample.observedResistance = { value: obs, source: "observed", freshnessMs: 0 };
   }
   const desired = desiredResistance ?? held;
   if (desired != null) sample.desiredResistance = desired;
   const commanded = commandedResistance ?? held;
   if (commanded != null) sample.commandedResistance = commanded;
-  if (watts != null) {
+  if (allowMetrics && watts != null) {
     sample.watts = { value: watts, source: wattsSource, freshnessMs: 0 };
   }
-  if (cadence != null) {
+  if (allowMetrics && cadence != null) {
     sample.cadenceRpm = { value: cadence, source: "measured", freshnessMs: 0 };
   }
+  if (availability === "fresh") {
+    sample.sourceSampleId = `synth-${activeSec}`;
+    sample.freshnessMs = 0;
+  } else if (availability === "stale") {
+    sample.sourceSampleId = `stale-${activeSec}`;
+    sample.freshnessMs = 5000;
+  }
   return sample;
+}
+
+function changeAudit(elapsedSeconds, resistanceBefore, resistanceAfter, extras = {}) {
+  return {
+    version: 1,
+    kind: "evaluation",
+    elapsedSeconds,
+    phaseKind: "work",
+    phaseId: "sustain",
+    phaseElapsedSeconds: elapsedSeconds - 600,
+    phaseDurationSeconds: 1200,
+    representativeHeartRate: 160,
+    resistanceBefore,
+    resistanceAfter,
+    heartRateAssessment: resistanceAfter > resistanceBefore ? "low" : "high",
+    decision: resistanceAfter > resistanceBefore ? "increase" : "decrease",
+    decisionReason: resistanceAfter > resistanceBefore ? "below_target" : "above_target",
+    evaluationKind: "after_hold",
+    targetHeartRateMin: 155,
+    targetHeartRateMax: 162,
+    ...extras,
+  };
+}
+
+function actuationEvent(activeSec, requestedResistance, commandId = 1, outcome = "accepted") {
+  return {
+    commandId,
+    decisionId: `dec-${commandId}`,
+    origin: "automatic_hr_control",
+    trigger: "decision",
+    requestedResistance,
+    activeSec,
+    observedAt: isoAtActiveSec(activeSec),
+    outcome,
+  };
 }
 
 function holdAudit(elapsedSeconds, resistance = 10, representativeHeartRate = 159, extras = {}) {
@@ -286,7 +333,7 @@ test("actual-gap-shaped sustained hold qualifies under resolved gates", () => {
   assert.equal(result.identityFailures.length, 0);
   assert.ok(result.acceptedWindow, "gap-shaped hold should qualify under resolved gates");
   // Contaminated commanded-10 sample at 1050 (observed 11) is trimmed away.
-  assert.equal(result.acceptedWindow.observedResistance, 10);
+  assert.equal(result.acceptedWindow.heldResistance, 10);
   assert.equal(result.acceptedWindow.windowStartSec, 1051);
   assert.equal(result.acceptedWindow.settledFromSec, 1171);
   assert.ok(result.acceptedWindow.postSettlingDurationSec >= 200);
@@ -338,7 +385,7 @@ test("wrong-resistance audit hold cannot corroborate a window", () => {
     ],
   });
   const result = evaluateThresholdRegionSettledWorkloadContract(input);
-  const holdWindow = result.windows.find((w) => w.observedResistance === 10 && w.windowStartSec === 1051);
+  const holdWindow = result.windows.find((w) => w.heldResistance === 10 && w.windowStartSec === 1051);
   assert.ok(holdWindow);
   assert.equal(holdWindow.hasTargetHoldCorroboration, false);
   assert.ok(holdWindow.resolvedGateFailures.includes("missing_target_hold_corroboration"));
@@ -371,7 +418,7 @@ test("contract does not hard-code resistance 10 — another held resistance can 
   }));
   const result = evaluateThresholdRegionSettledWorkloadContract(input);
   assert.ok(result.acceptedWindow);
-  assert.equal(result.acceptedWindow.observedResistance, 7);
+  assert.equal(result.acceptedWindow.heldResistance, 7);
 });
 
 test("rejects brief target pass-through (short post-settling)", () => {
@@ -493,7 +540,7 @@ test("insufficient measured-watt coverage still rejects", () => {
   assert.equal(result.acceptedWindow, null);
   assert.ok(
     result.windows.some((w) =>
-      w.observedResistance === 10 &&
+      w.heldResistance === 10 &&
       w.resolvedGateFailures.includes("insufficient_measured_watt_coverage")
     )
   );
@@ -524,7 +571,7 @@ test("large unsupported telemetry gap still rejects where evidence becomes inade
     machineDecisionAudit: [holdAudit(780, 10, 158), holdAudit(840, 10, 158)],
   });
   assert.equal(result.acceptedWindow, null);
-  const window = result.windows.find((w) => w.observedResistance === 10);
+  const window = result.windows.find((w) => w.heldResistance === 10);
   assert.ok(window);
   assert.ok(window.windowStartSec === 600 && window.windowEndSecExclusive === 900);
   assert.ok(
@@ -566,7 +613,7 @@ test("minQualifyingSeconds counts joint HR+watt samples, not merely elapsed span
       minQualifyingSeconds: 30,
     },
   });
-  const window = result.windows.find((w) => w.observedResistance === 10);
+  const window = result.windows.find((w) => w.heldResistance === 10);
   assert.ok(window);
   assert.ok(window.postSettlingDurationSec >= 30, "elapsed span is long");
   assert.ok(window.qualifyingSampleCount < 30, `qualifying=${window.qualifyingSampleCount}`);
@@ -614,7 +661,7 @@ test("rejects unstable settled workload when MAD ratio gate is set", () => {
       maxMeasuredWattsMadRatio: 0.1,
     },
   });
-  const window = result.windows.find((w) => w.observedResistance === 9);
+  const window = result.windows.find((w) => w.heldResistance === 9);
   assert.ok(window);
   assert.ok((window.measuredWattsMadRatio ?? 0) > 0.1, `madRatio=${window.measuredWattsMadRatio}`);
   assert.equal(result.acceptedWindow, null);
@@ -638,8 +685,517 @@ test("production observation requires complete policy; schema identity is set wh
   assert.equal(result.observation.eligibleForPrescription, false);
   assert.equal(result.observation.interpretation, "descriptive_observation_only");
   assert.equal(result.observation.provenance, THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1);
+  assert.equal(result.observation.heldResistance, 10);
   assert.equal(
     result.observation.controllerSettledProvenance,
     "controller_held_resistance_plus_target_hold_audit"
   );
+});
+
+test("stale row with cadence must not inflate cadence coverage", () => {
+  const input = syntheticDenseHoldFixture();
+  // Malformed vs producer: stale rows carrying cadenceRpm must not count.
+  for (const sample of input.bikeSamples) {
+    if (sample.activeSec >= 1170 && sample.activeSec % 2 === 0) {
+      sample.availability = "stale";
+      sample.freshnessMs = 5000;
+      sample.cadenceRpm = { value: 90, source: "measured", freshnessMs: 5000 };
+      // Keep watts absent on stale so watt path is not the failure mode.
+      delete sample.watts;
+    }
+  }
+  const result = evaluateThresholdRegionSettledWorkloadContract(input);
+  const window = result.windows.find((w) => w.heldResistance === 10 && w.windowStartSec === 1050);
+  assert.ok(window);
+  // Settled span is dense; half the seconds are stale-with-cadence and must not count.
+  assert.ok(window.cadenceCoverageRatio < 0.75, `cadCov=${window.cadenceCoverageRatio}`);
+  assert.ok(window.resolvedGateFailures.includes("insufficient_cadence_coverage"));
+});
+
+test("unavailable row with cadence must not inflate cadence coverage", () => {
+  const input = syntheticDenseHoldFixture();
+  for (const sample of input.bikeSamples) {
+    if (sample.activeSec >= 1170 && sample.activeSec % 2 === 0) {
+      sample.availability = "unavailable";
+      delete sample.freshnessMs;
+      delete sample.sourceSampleId;
+      sample.cadenceRpm = { value: 90, source: "measured", freshnessMs: 0 };
+      delete sample.watts;
+    }
+  }
+  const result = evaluateThresholdRegionSettledWorkloadContract(input);
+  const window = result.windows.find((w) => w.heldResistance === 10 && w.windowStartSec === 1050);
+  assert.ok(window);
+  assert.ok(window.cadenceCoverageRatio < 0.75, `cadCov=${window.cadenceCoverageRatio}`);
+  assert.ok(window.resolvedGateFailures.includes("insufficient_cadence_coverage"));
+});
+
+test("fresh measured cadence does count", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(syntheticDenseHoldFixture());
+  assert.ok(result.acceptedWindow);
+  assert.ok(result.acceptedWindow.cadenceCoverageRatio >= 0.75);
+  assert.ok(result.acceptedWindow.cadenceMedian != null);
+});
+
+test("stale observed resistance does not contradict controller-held state", () => {
+  // Telemetry shows commanded R10 throughout; a stale row claiming observed R11
+  // must not split the hold (producer forbids metrics on stale; evaluator ignores).
+  const samples = [
+    bikeSample(100, { resistance: 10, watts: 114 }),
+    bikeSample(101, {
+      resistance: 10,
+      availability: "stale",
+      forceMetrics: true,
+      observedResistance: 11,
+      watts: 114,
+    }),
+    bikeSample(102, { resistance: 10, watts: 114 }),
+    bikeSample(103, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 104);
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].resistance, 10);
+  assert.equal(windows[0].startSec, 100);
+  assert.equal(windows[0].endSecInclusive, 103);
+});
+
+test("telemetry gap with no known controller transition can remain one hold", () => {
+  const samples = [
+    bikeSample(100, { resistance: 10, watts: 114 }),
+    bikeSample(101, { resistance: 10, watts: 114 }),
+    // gap 102-108
+    bikeSample(109, { resistance: 10, watts: 114 }),
+    bikeSample(110, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 111, {
+    machineDecisionAudit: [],
+    resistanceActuationEvents: [],
+  });
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].startSec, 100);
+  assert.equal(windows[0].endSecInclusive, 110);
+});
+
+test("known R10→R11 transition inside telemetry gap splits R10 continuity", () => {
+  const samples = [
+    bikeSample(100, { resistance: 10, watts: 114 }),
+    bikeSample(101, { resistance: 10, watts: 114 }),
+    // gap; controller changes to R11 then we next see R10 again at 110
+    bikeSample(110, { resistance: 10, watts: 114 }),
+    bikeSample(111, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 112, {
+    machineDecisionAudit: [changeAudit(105, 10, 11)],
+    resistanceActuationEvents: [actuationEvent(105, 11, 1)],
+  });
+  const r10 = windows.filter((w) => w.resistance === 10);
+  // Must not be one continuous 100–111 R10 hold.
+  assert.ok(r10.every((w) => w.endSecInclusive < 105 || w.startSec > 105));
+  assert.ok(!r10.some((w) => w.startSec <= 100 && w.endSecInclusive >= 110));
+});
+
+test("known R10→R11→R10 cannot be flattened into one R10 hold", () => {
+  const samples = [
+    bikeSample(100, { resistance: 10, watts: 114 }),
+    bikeSample(120, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 121, {
+    resistanceActuationEvents: [
+      actuationEvent(100, 10, 1),
+      actuationEvent(105, 11, 2),
+      actuationEvent(110, 10, 3),
+    ],
+  });
+  const r10 = windows.filter((w) => w.resistance === 10);
+  assert.ok(r10.length >= 2, `r10 windows=${JSON.stringify(r10)}`);
+  assert.ok(r10.some((w) => w.startSec === 100 && w.endSecInclusive === 104));
+  assert.ok(r10.some((w) => w.startSec === 110 && w.endSecInclusive === 120));
+  assert.ok(windows.some((w) => w.resistance === 11 && w.startSec === 105 && w.endSecInclusive === 109));
+});
+
+test("commanded R10 with observed R11 at transition second trims; first corroborated R10 begins window", () => {
+  const samples = [
+    bikeSample(1050, {
+      resistance: 10,
+      observedResistance: 11,
+      commandedResistance: 10,
+      desiredResistance: 10,
+      watts: 120,
+    }),
+    bikeSample(1051, { resistance: 10, watts: 114 }),
+    bikeSample(1052, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 1050, 1053, {
+    machineDecisionAudit: [changeAudit(1050, 11, 10)],
+    resistanceActuationEvents: [actuationEvent(1050, 10, 1)],
+  });
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0].resistance, 10);
+  assert.equal(windows[0].startSec, 1051);
+  assert.equal(windows[0].endSecInclusive, 1052);
+});
+
+test("wrong-resistance hold audit still cannot corroborate after integrity harden", () => {
+  const input = oct16RealGapShapedFixture({
+    machineDecisionAudit: [
+      changeAudit(1050, 11, 10),
+      holdAudit(1230, 12, 159),
+    ],
+    resistanceActuationEvents: [actuationEvent(1050, 10, 1)],
+  });
+  const result = evaluateThresholdRegionSettledWorkloadContract(input);
+  const holdWindow = result.windows.find((w) => w.heldResistance === 10 && w.windowStartSec === 1051);
+  assert.ok(holdWindow);
+  assert.equal(holdWindow.hasTargetHoldCorroboration, false);
+  assert.ok(holdWindow.resolvedGateFailures.includes("missing_target_hold_corroboration"));
+});
+
+test("same-second actuation R10 + audit R11 => R10 (actuation wins)", () => {
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 10, 1)],
+    machineDecisionAudit: [changeAudit(1050, 10, 11)], // would prefer R11 if numeric sort won
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 10 }]);
+});
+
+test("same-second actuation R11 + audit R10 => R11 (actuation wins)", () => {
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 11, 1)],
+    machineDecisionAudit: [changeAudit(1050, 11, 10)], // lower R must not win via sort
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 11 }]);
+});
+
+test("same-second actuation + agreeing audit => one transition", () => {
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 10, 1)],
+    machineDecisionAudit: [changeAudit(1050, 11, 10)],
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 10 }]);
+});
+
+test("audit-only transition still works", () => {
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    machineDecisionAudit: [changeAudit(1050, 11, 10)],
+    resistanceActuationEvents: [],
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 10 }]);
+});
+
+test("actuation-only transition still works", () => {
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 10, 1)],
+    machineDecisionAudit: [],
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 10 }]);
+});
+
+test("numeric resistance value never determines provenance precedence", () => {
+  // Audit claims higher R at 1050; actuation claims lower R. Precedence must
+  // follow source, not max(resistance).
+  const a = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 7, 1)],
+    machineDecisionAudit: [changeAudit(1050, 7, 12)],
+  });
+  assert.deepEqual(a, [{ activeSec: 1050, resistance: 7 }]);
+  const b = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 12, 1)],
+    machineDecisionAudit: [changeAudit(1050, 12, 7)],
+  });
+  assert.deepEqual(b, [{ activeSec: 1050, resistance: 12 }]);
+});
+
+test("multiple accepted actuation events in one activeSec: last commandId wins", () => {
+  // Writer allows non-decreasing activeSec; append order = commandId.
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [
+      actuationEvent(1050, 10, 1),
+      actuationEvent(1050, 11, 2),
+    ],
+    machineDecisionAudit: [changeAudit(1050, 11, 9)], // must not override commandId 2
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 11 }]);
+});
+
+test("accepted actuation + conflicting audit => accepted actuation wins", () => {
+  const transitions = collectControllerResistanceTransitions({
+    workActiveStartSec: 1000,
+    workActiveEndSecExclusive: 1100,
+    resistanceActuationEvents: [actuationEvent(1050, 10, 1, "accepted")],
+    machineDecisionAudit: [changeAudit(1050, 10, 11)],
+  });
+  assert.deepEqual(transitions, [{ activeSec: 1050, resistance: 10 }]);
+});
+
+for (const outcome of ["failed", "unavailable", "timeout", "pending"]) {
+  test(`${outcome} actuation + audit transition => audit cannot establish known resistance that second`, () => {
+    // Pre-fix: only outcome==="accepted" blocked audit fill, so audit R10
+    // would create a known transition despite non-accepted actuation at 1050.
+    const timeline = collectControllerTimeline({
+      workActiveStartSec: 1000,
+      workActiveEndSecExclusive: 1100,
+      resistanceActuationEvents: [actuationEvent(1050, 10, 1, outcome)],
+      machineDecisionAudit: [changeAudit(1050, 11, 10)],
+    });
+    assert.ok(
+      timeline.some((m) => m.kind === "uncertain" && m.activeSec === 1050),
+      `${outcome}: expected uncertain mark`
+    );
+    assert.ok(
+      !timeline.some((m) => m.kind === "known" && m.activeSec === 1050),
+      `${outcome}: audit must not manufacture known R10 at 1050`
+    );
+  });
+}
+
+test("uncertain event inside R10 hold => R10 continuity cannot bridge through it", () => {
+  const samples = [
+    bikeSample(100, { resistance: 10, watts: 114 }),
+    bikeSample(120, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 121, {
+    resistanceActuationEvents: [
+      actuationEvent(100, 10, 1, "accepted"),
+      actuationEvent(110, 10, 2, "timeout"),
+      actuationEvent(115, 10, 3, "accepted"),
+    ],
+  });
+  const r10 = windows.filter((w) => w.resistance === 10);
+  assert.ok(r10.length >= 2, `expected split R10 holds, got ${JSON.stringify(r10)}`);
+  assert.ok(!r10.some((w) => w.startSec <= 100 && w.endSecInclusive >= 115));
+  assert.ok(r10.some((w) => w.endSecInclusive === 109 && w.boundedByAmbiguousActuation));
+});
+
+test("uncertain event followed by later accepted R10 => later R10 may recover", () => {
+  const samples = [
+    bikeSample(100, { resistance: 9, watts: 100 }),
+    bikeSample(1110, { resistance: 10, watts: 114 }),
+    bikeSample(1400, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 1410, {
+    resistanceActuationEvents: [
+      actuationEvent(1050, 10, 1, "timeout"),
+      actuationEvent(1110, 10, 2, "accepted"),
+    ],
+    machineDecisionAudit: [changeAudit(1050, 11, 10)],
+  });
+  const recovered = windows.find((w) => w.resistance === 10 && w.startSec === 1110);
+  assert.ok(recovered, `expected recovered R10 at 1110, got ${JSON.stringify(windows)}`);
+  assert.ok(recovered.endSecInclusive >= 1400);
+});
+
+test("accepted R10 → ambiguous command → accepted R10 => ambiguity remains a boundary", () => {
+  const samples = [
+    bikeSample(100, { resistance: 10, watts: 114 }),
+    bikeSample(200, { resistance: 10, watts: 114 }),
+  ];
+  const windows = segmentControllerHeldResistance(samples, 100, 201, {
+    resistanceActuationEvents: [
+      actuationEvent(100, 10, 1, "accepted"),
+      actuationEvent(150, 10, 2, "failed"),
+      actuationEvent(160, 10, 3, "accepted"),
+    ],
+  });
+  assert.ok(windows.length >= 2);
+  assert.ok(!windows.some((w) => w.startSec === 100 && w.endSecInclusive >= 160));
+});
+
+test("coverage=complete + clean events => existing behavior unchanged", () => {
+  const input = oct16RealGapShapedFixture({
+    actuationCoverage: "complete",
+    resistanceActuationEvents: [
+      actuationEvent(1050, 10, 1, "accepted"),
+    ],
+    machineDecisionAudit: [
+      changeAudit(1050, 11, 10),
+      holdAudit(1230, 10, 159),
+      holdAudit(1290, 10, 160),
+      holdAudit(1350, 10, 157),
+      holdAudit(1410, 10, 157),
+    ],
+  });
+  const result = evaluateThresholdRegionSettledWorkloadContract(input);
+  assert.ok(result.acceptedWindow);
+  assert.equal(result.acceptedWindow.heldResistance, 10);
+  assert.equal(result.acceptedWindow.windowStartSec, 1051);
+  assert.ok(!result.identityFailures.includes("incomplete_actuation_provenance"));
+});
+
+test("coverage=incomplete => fail-closed with incomplete_actuation_provenance", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(
+    oct16RealGapShapedFixture({
+      actuationCoverage: "incomplete",
+      resistanceActuationEvents: [actuationEvent(1050, 10, 1, "accepted")],
+    })
+  );
+  assert.ok(result.identityFailures.includes("incomplete_actuation_provenance"));
+  assert.equal(result.acceptedWindow, null);
+});
+
+test("no actuation provenance at all => audit/telemetry fallback still works", () => {
+  const result = evaluateThresholdRegionSettledWorkloadContract(
+    oct16RealGapShapedFixture({
+      resistanceActuationEvents: undefined,
+      actuationCoverage: undefined,
+    })
+  );
+  assert.ok(result.acceptedWindow);
+  assert.equal(result.acceptedWindow.heldResistance, 10);
+});
+
+/**
+ * Pre-fix: when timeline had only uncertain marks (hasKnown=false),
+ * splitTelemetryIntervalsAtUncertain(telemetry…) could create a post-timeout
+ * R10 hold from commanded/desired rows and accept excellent evidence after it.
+ */
+for (const outcome of ["timeout", "failed", "unavailable", "pending"]) {
+  test(`${outcome} + good telemetry after + no later accepted => no post-ambiguity qualifying hold`, () => {
+    const hrByActiveSec = new Map();
+    const bikeSamples = [];
+    for (let sec = 100; sec < 150; sec++) {
+      hrByActiveSec.set(sec, 158);
+      bikeSamples.push(bikeSample(sec, { resistance: 10, watts: 114 }));
+    }
+    // Excellent post-ambiguity telemetry that must not re-establish known R10.
+    for (let sec = 151; sec < 500; sec++) {
+      hrByActiveSec.set(sec, 158);
+      bikeSamples.push(bikeSample(sec, { resistance: 10, watts: 114 }));
+    }
+    const result = evaluateThresholdRegionSettledWorkloadContract({
+      ...syntheticDenseHoldFixture(),
+      workActiveStartSec: 100,
+      workActiveEndSecExclusive: 500,
+      hrByActiveSec,
+      bikeSamples,
+      machineDecisionAudit: [holdAudit(400, 10, 158)],
+      resistanceActuationEvents: [
+        actuationEvent(100, 10, 1, "accepted"),
+        actuationEvent(150, 11, 2, outcome),
+      ],
+      actuationCoverage: "complete",
+    });
+    assert.equal(result.acceptedWindow, null, `${outcome}: must not accept post-ambiguity hold`);
+    const post = result.windows.filter((w) => w.windowStartSec >= 150);
+    assert.equal(post.length, 0, `${outcome}: no post-150 held windows, got ${JSON.stringify(post)}`);
+  });
+}
+
+test("uncertain @150 + audit R10 @180 + no accepted => audit must not re-establish", () => {
+  const timeline = collectControllerTimeline({
+    workActiveStartSec: 100,
+    workActiveEndSecExclusive: 300,
+    resistanceActuationEvents: [actuationEvent(150, 11, 1, "timeout")],
+    machineDecisionAudit: [changeAudit(180, 11, 10)],
+  });
+  assert.ok(timeline.some((m) => m.kind === "uncertain" && m.activeSec === 150));
+  assert.ok(!timeline.some((m) => m.kind === "known" && m.activeSec === 180));
+});
+
+test("uncertain @150 + accepted R10 @180 => known R10 begins at 180", () => {
+  const timeline = collectControllerTimeline({
+    workActiveStartSec: 100,
+    workActiveEndSecExclusive: 300,
+    resistanceActuationEvents: [
+      actuationEvent(150, 11, 1, "timeout"),
+      actuationEvent(180, 10, 2, "accepted"),
+    ],
+  });
+  assert.deepEqual(
+    timeline.filter((m) => m.kind === "known"),
+    [{ kind: "known", activeSec: 180, resistance: 10 }]
+  );
+});
+
+test("uncertain @150 + accepted R11 @180 => known R11 begins at 180", () => {
+  const timeline = collectControllerTimeline({
+    workActiveStartSec: 100,
+    workActiveEndSecExclusive: 300,
+    resistanceActuationEvents: [
+      actuationEvent(150, 10, 1, "failed"),
+      actuationEvent(180, 11, 2, "accepted"),
+    ],
+  });
+  assert.deepEqual(
+    timeline.filter((m) => m.kind === "known"),
+    [{ kind: "known", activeSec: 180, resistance: 11 }]
+  );
+});
+
+test("evidence entirely before ambiguity may still qualify if otherwise valid", () => {
+  const hrByActiveSec = new Map();
+  const bikeSamples = [];
+  // Long settled hold before ambiguity at 900.
+  for (let sec = 600; sec < 900; sec++) {
+    hrByActiveSec.set(sec, 158);
+    bikeSamples.push(bikeSample(sec, { resistance: 10, watts: 114 }));
+  }
+  for (let sec = 900; sec < 950; sec++) {
+    hrByActiveSec.set(sec, 158);
+    bikeSamples.push(bikeSample(sec, { resistance: 10, watts: 114 }));
+  }
+  const result = evaluateThresholdRegionSettledWorkloadContract({
+    ...syntheticDenseHoldFixture(),
+    workActiveStartSec: 600,
+    workActiveEndSecExclusive: 950,
+    hrByActiveSec,
+    bikeSamples,
+    machineDecisionAudit: [holdAudit(780, 10, 158), holdAudit(840, 10, 158)],
+    resistanceActuationEvents: [
+      actuationEvent(600, 10, 1, "accepted"),
+      actuationEvent(900, 11, 2, "timeout"),
+    ],
+    actuationCoverage: "complete",
+  });
+  assert.ok(result.acceptedWindow, "pre-ambiguity hold should qualify");
+  assert.equal(result.acceptedWindow.heldResistance, 10);
+  assert.ok(result.acceptedWindow.windowEndSecExclusive <= 900);
+  assert.ok(!result.acceptedWindow.resolvedGateFailures.includes("ambiguous_actuation_provenance"));
+});
+
+test("evidence after accepted re-establishment may qualify if otherwise valid", () => {
+  const hrByActiveSec = new Map();
+  const bikeSamples = [];
+  for (let sec = 600; sec < 700; sec++) {
+    hrByActiveSec.set(sec, 150);
+    bikeSamples.push(bikeSample(sec, { resistance: 9, watts: 100 }));
+  }
+  // Ambiguity then re-establish R10 with long settled evidence.
+  for (let sec = 720; sec < 1100; sec++) {
+    hrByActiveSec.set(sec, 158);
+    bikeSamples.push(bikeSample(sec, { resistance: 10, watts: 114 }));
+  }
+  const result = evaluateThresholdRegionSettledWorkloadContract({
+    ...syntheticDenseHoldFixture(),
+    workActiveStartSec: 600,
+    workActiveEndSecExclusive: 1100,
+    hrByActiveSec,
+    bikeSamples,
+    machineDecisionAudit: [holdAudit(900, 10, 158), holdAudit(960, 10, 158), holdAudit(1020, 10, 158)],
+    resistanceActuationEvents: [
+      actuationEvent(600, 9, 1, "accepted"),
+      actuationEvent(700, 10, 2, "timeout"),
+      actuationEvent(720, 10, 3, "accepted"),
+    ],
+    actuationCoverage: "complete",
+  });
+  assert.ok(result.acceptedWindow);
+  assert.equal(result.acceptedWindow.heldResistance, 10);
+  assert.equal(result.acceptedWindow.windowStartSec, 720);
+  assert.ok(!result.acceptedWindow.resolvedGateFailures.includes("ambiguous_actuation_provenance"));
 });
