@@ -8,12 +8,14 @@ import {
   THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
   THRESHOLD_REGION_ORDINARY_WORKOUT_SHADOW_RESOLVER_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+  createThresholdRegionSettledWorkloadPolicyV1,
   evaluateThresholdRegionSettledWorkloadContract,
   collectControllerResistanceTransitions,
   collectControllerTimeline,
   segmentControllerHeldResistance,
   thresholdRegionSettledPolicyIsProductionReady,
 } from "../dist/thresholdRegionSettledWorkload.js";
+import { createSteadyStateSettledWorkloadPolicyV1 } from "../dist/steadyStateSettledWorkload.js";
 import { PHASE_E2_HELD_WORKLOAD_POLICY_V1 } from "../dist/personalizedPrescriptionCharacterization.js";
 import { PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1 } from "../dist/types.js";
 
@@ -1456,4 +1458,80 @@ test("scientific v1: MAD ratio fail-closed for non-positive median watts", () =>
   assert.ok(window);
   assert.equal(window.measuredWattsMadRatio, null);
   assert.ok(window.resolvedGateFailures.includes("unstable_measured_workload"));
+});
+
+test("Threshold adapter rejects injected generic aerobic_base policy", () => {
+  const foreign = createSteadyStateSettledWorkloadPolicyV1({
+    semanticIdentity: {
+      archetype: "steady_state",
+      workoutIntent: "aerobic_base",
+      intensityId: "aerobic_base",
+    },
+    overrides: {
+      minInBandFraction: 0.9,
+      maxMeasuredWattsMadRatio: 0.1,
+      minAdviceGradeDurationSec: 120,
+    },
+  });
+  const result = evaluateThresholdRegionSettledWorkloadContract({
+    ...syntheticDenseHoldFixture(),
+    policy: foreign,
+  });
+  assert.equal(result.observation, null);
+  assert.equal(result.acceptedWindow, null);
+  assert.ok(result.identityFailures.includes("intent_not_threshold"));
+  assert.ok(result.identityFailures.includes("intensity_not_threshold"));
+});
+
+test("Threshold adapter rejects injected generic synthetic schema/provenance policy", () => {
+  const foreign = createSteadyStateSettledWorkloadPolicyV1({
+    id: "steady-state-settled-workload-policy",
+    version: 1,
+    semanticIdentity: {
+      archetype: "steady_state",
+      workoutIntent: "synthetic_steady",
+      intensityId: "synthetic_zone",
+    },
+    contractIdentity: {
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+    },
+    overrides: {
+      minInBandFraction: 0.9,
+      maxMeasuredWattsMadRatio: 0.1,
+      minAdviceGradeDurationSec: 120,
+    },
+  });
+  const result = evaluateThresholdRegionSettledWorkloadContract({
+    ...syntheticDenseHoldFixture(),
+    policy: foreign,
+  });
+  assert.equal(result.observation, null);
+  assert.equal(result.acceptedWindow, null);
+  assert.ok(result.identityFailures.includes("intent_not_threshold"));
+  assert.ok(result.identityFailures.includes("intensity_not_threshold"));
+});
+
+test("Threshold adapter still evaluates under legitimate Threshold science override", () => {
+  const policy = createThresholdRegionSettledWorkloadPolicyV1({
+    maxMeasuredWattsMadRatio: 0.05,
+  });
+  assert.equal(policy.id, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1);
+  assert.equal(policy.semanticIdentity.workoutIntent, "threshold");
+  assert.equal(policy.contractIdentity.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1);
+  assert.equal(policy.minInBandFraction, 0.9);
+  assert.equal(policy.maxMeasuredWattsMadRatio, 0.05);
+  assert.equal(policy.minAdviceGradeDurationSec, 120);
+
+  const result = evaluateThresholdRegionSettledWorkloadContract({
+    ...syntheticDenseHoldFixture(),
+    policy,
+  });
+  assert.equal(result.identityFailures.length, 0);
+  assert.ok(result.acceptedWindow);
+  assert.ok(result.observation);
+  assert.equal(result.observation.workoutIntent, "threshold");
+  assert.equal(result.observation.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1);
+  assert.equal(result.observation.provenance, THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1);
 });

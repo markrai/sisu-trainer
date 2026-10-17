@@ -5,6 +5,7 @@ import {
   THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_PROVENANCE_V1,
+  createThresholdRegionSettledWorkloadAggregatePolicyV1,
   evaluateThresholdRegionSettledWorkloadAggregate,
   thresholdRegionAggregatePolicyIsProductionReady,
   summarizeSessionMedianSeries,
@@ -12,6 +13,10 @@ import {
   workoutDateFromSessionEndedAt,
   compatibilityKeyFromObservation,
 } from "../dist/thresholdRegionSettledWorkloadAggregate.js";
+import {
+  STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+  evaluateSteadyStateSettledWorkloadAggregate,
+} from "../dist/steadyStateSettledWorkloadAggregate.js";
 import {
   THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
@@ -53,22 +58,28 @@ function observation({
   sessionEndedAt,
   admissionPolicyId = THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1,
   admissionPolicyVersion = THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1,
+  schemaId = THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
+  schemaVersion = THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
+  provenance = THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+  workoutIntent = "threshold",
+  intensityId = "threshold",
+  archetype = "steady_state",
   workoutDateSpoof,
 } = {}) {
   const ended = sessionEndedAt ?? `${workoutDate}T15:00:00.000Z`;
   const row = {
-    schemaId: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
-    schemaVersion: THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
-    provenance: THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
+    schemaId,
+    schemaVersion,
+    provenance,
     admissionPolicyId,
     admissionPolicyVersion,
     athleteId,
     sessionId,
     machineId,
     machineProfileVersion,
-    workoutIntent: "threshold",
-    intensityId: "threshold",
-    archetype: "steady_state",
+    workoutIntent,
+    intensityId,
+    archetype,
     targetHrMin,
     targetHrMax,
     windowStartSec,
@@ -98,12 +109,11 @@ function observation({
 }
 
 function completePolicy(overrides = {}) {
-  return {
-    ...THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+  return createThresholdRegionSettledWorkloadAggregatePolicyV1({
     maxCrossSessionMadRatio: 0.08,
     maxObservationAgeDays: 90,
     ...overrides,
-  };
+  });
 }
 
 function threeStable(overrides = {}) {
@@ -160,7 +170,9 @@ test("compatibility key reads admission policy from observation payload, not mod
   assert.equal(key.admissionPolicyVersion, obs.admissionPolicyVersion);
 });
 
-test("different admission policy version rejects from observation payload itself", () => {
+test("different admission policy version fails observation-family identity (not mixed lineage)", () => {
+  // admissionPolicyVersion is part of configured observationIdentity — foreign
+  // versions are invalid inputs to the Threshold aggregate, not a second lineage.
   const result = evaluateThresholdRegionSettledWorkloadAggregate({
     observations: [
       observation({
@@ -184,12 +196,12 @@ test("different admission policy version rejects from observation payload itself
     ],
     policy: completePolicy(),
   });
-  assert.ok(result.failures.includes("mixed_compatibility_lineage"));
-  assert.ok(
-    result.rejected.every((r) => r.failures.includes("mixed_compatibility_lineage"))
-  );
+  const foreign = result.rejected.find((r) => r.sessionId === "s3");
+  assert.ok(foreign);
+  assert.ok(foreign.failures.includes("invalid_observation_payload"));
+  assert.equal(result.acceptedObservations.length, 2);
   assert.equal(result.aggregate, null);
-  assert.equal(result.compatibility, null);
+  assert.ok(result.failures.includes("insufficient_observations"));
 });
 
 test("wrong athlete rejects", () => {
@@ -550,24 +562,25 @@ test("same watts across incompatible machines still reject on provenance", () =>
 });
 
 test("mixed-lineage input order cannot change selected lineage", () => {
+  // Stay inside Threshold observationIdentity; mix athlete/machine lineage via anchors.
   const mixed = [
     observation({
       sessionId: "s1",
       workoutDate: "2026-10-12",
       measuredWattsMedian: 112,
-      admissionPolicyVersion: 1,
+      formalAnchorObservedAt: ANCHOR,
     }),
     observation({
       sessionId: "s2",
       workoutDate: "2026-10-14",
       measuredWattsMedian: 114,
-      admissionPolicyVersion: 2,
+      formalAnchorObservedAt: "2026-10-12T12:00:00.000Z",
     }),
     observation({
       sessionId: "s3",
       workoutDate: "2026-10-16",
       measuredWattsMedian: 116,
-      admissionPolicyVersion: 1,
+      formalAnchorObservedAt: ANCHOR,
     }),
   ];
   const forward = evaluateThresholdRegionSettledWorkloadAggregate({
@@ -699,4 +712,270 @@ test("same valid lineage still computes median/MAD diagnostics under default unr
   assert.equal(result.aggregate, null);
   assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.maxCrossSessionMadRatio, null);
   assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.maxObservationAgeDays, null);
+});
+
+test("Threshold aggregate observationIdentity declares Threshold single-session family", () => {
+  const id = THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.observationIdentity;
+  assert.equal(id.semanticIdentity.workoutIntent, "threshold");
+  assert.equal(id.semanticIdentity.intensityId, "threshold");
+  assert.equal(id.semanticIdentity.archetype, "steady_state");
+  assert.equal(id.contractIdentity.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1);
+  assert.equal(id.contractIdentity.schemaVersion, THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_VERSION_V1);
+  assert.equal(id.contractIdentity.provenance, THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1);
+  assert.equal(id.admissionPolicyId, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_ID_V1);
+  assert.equal(id.admissionPolicyVersion, THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_VERSION_V1);
+  assert.notEqual(
+    THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.contractIdentity.schemaId,
+    id.contractIdentity.schemaId,
+    "aggregate output identity ≠ accepted input observation identity"
+  );
+});
+
+function assertWrongFamilyRejected(label, mutate) {
+  test(`Threshold aggregate rejects wrong observation ${label}`, () => {
+    const rows = threeStable().map((row, index) => mutate({ ...row }, index));
+    const result = evaluateThresholdRegionSettledWorkloadAggregate({
+      observations: rows,
+      policy: completePolicy(),
+    });
+    assert.equal(result.acceptedObservations.length, 0, label);
+    assert.equal(result.aggregate, null, label);
+    assert.ok(
+      result.rejected.every((r) => r.failures.includes("invalid_observation_payload")),
+      label
+    );
+    assert.ok(result.failures.includes("insufficient_observations") || result.failures.length > 0, label);
+  });
+}
+
+assertWrongFamilyRejected("schemaId", (row) => {
+  row.schemaId = "steady-state-settled-workload-observation";
+  return row;
+});
+assertWrongFamilyRejected("schemaVersion", (row) => {
+  row.schemaVersion = 2;
+  return row;
+});
+assertWrongFamilyRejected("provenance", (row) => {
+  row.provenance = "ordinary_workout_settled_steady_state_region";
+  return row;
+});
+assertWrongFamilyRejected("workoutIntent", (row) => {
+  row.workoutIntent = "aerobic_base";
+  return row;
+});
+assertWrongFamilyRejected("intensityId", (row) => {
+  row.intensityId = "aerobic_base";
+  return row;
+});
+assertWrongFamilyRejected("archetype", (row) => {
+  row.archetype = "interval";
+  return row;
+});
+assertWrongFamilyRejected("admissionPolicyId", (row) => {
+  row.admissionPolicyId = "steady-state-settled-workload-policy";
+  return row;
+});
+assertWrongFamilyRejected("admissionPolicyVersion", (row) => {
+  row.admissionPolicyVersion = 2;
+  return row;
+});
+
+test("Threshold aggregate rejects homogeneous generic/synthetic steady-state observations", () => {
+  const synthetic = [
+    observation({
+      sessionId: "s1",
+      workoutDate: "2026-10-12",
+      measuredWattsMedian: 112,
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+      workoutIntent: "steady_state_reference",
+      intensityId: "steady_state_reference",
+      archetype: "steady_state",
+      admissionPolicyId: "steady-state-settled-workload-policy",
+      admissionPolicyVersion: 1,
+    }),
+    observation({
+      sessionId: "s2",
+      workoutDate: "2026-10-14",
+      measuredWattsMedian: 114,
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+      workoutIntent: "steady_state_reference",
+      intensityId: "steady_state_reference",
+      archetype: "steady_state",
+      admissionPolicyId: "steady-state-settled-workload-policy",
+      admissionPolicyVersion: 1,
+    }),
+    observation({
+      sessionId: "s3",
+      workoutDate: "2026-10-16",
+      measuredWattsMedian: 116,
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+      workoutIntent: "steady_state_reference",
+      intensityId: "steady_state_reference",
+      archetype: "steady_state",
+      admissionPolicyId: "steady-state-settled-workload-policy",
+      admissionPolicyVersion: 1,
+    }),
+  ];
+  const result = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: synthetic,
+    policy: completePolicy(),
+  });
+  assert.equal(result.acceptedObservations.length, 0);
+  assert.equal(result.aggregate, null);
+  assert.equal(result.rejected.length, 3);
+  assert.ok(result.rejected.every((r) => r.failures.includes("invalid_observation_payload")));
+});
+
+function threeGenericSteadyStateObservations() {
+  return [
+    observation({
+      sessionId: "s1",
+      workoutDate: "2026-10-12",
+      measuredWattsMedian: 112,
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+      workoutIntent: "steady_state_reference",
+      intensityId: "steady_state_reference",
+      archetype: "steady_state",
+      admissionPolicyId: "steady-state-settled-workload-policy",
+      admissionPolicyVersion: 1,
+    }),
+    observation({
+      sessionId: "s2",
+      workoutDate: "2026-10-14",
+      measuredWattsMedian: 114,
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+      workoutIntent: "steady_state_reference",
+      intensityId: "steady_state_reference",
+      archetype: "steady_state",
+      admissionPolicyId: "steady-state-settled-workload-policy",
+      admissionPolicyVersion: 1,
+    }),
+    observation({
+      sessionId: "s3",
+      workoutDate: "2026-10-16",
+      measuredWattsMedian: 116,
+      schemaId: "steady-state-settled-workload-observation",
+      schemaVersion: 1,
+      provenance: "ordinary_workout_settled_steady_state_region",
+      workoutIntent: "steady_state_reference",
+      intensityId: "steady_state_reference",
+      archetype: "steady_state",
+      admissionPolicyId: "steady-state-settled-workload-policy",
+      admissionPolicyVersion: 1,
+    }),
+  ];
+}
+
+test("Threshold aggregate rejects matching generic policy + homogeneous generic observations", () => {
+  const observations = threeGenericSteadyStateObservations();
+  const genericPolicy = {
+    ...STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+    maxCrossSessionMadRatio: 0.08,
+    maxObservationAgeDays: 90,
+  };
+  // Generic kernel may accept this family when called directly.
+  const viaGeneric = evaluateSteadyStateSettledWorkloadAggregate({
+    observations,
+    policy: genericPolicy,
+  });
+  assert.ok(viaGeneric.acceptedObservations.length >= 3);
+  assert.equal(viaGeneric.failures.includes("policy_threshold_unresolved"), false);
+  // But the named Threshold adapter must not accept the foreign policy/family.
+  const viaThreshold = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations,
+    policy: genericPolicy,
+  });
+  assert.equal(viaThreshold.acceptedObservations.length, 0);
+  assert.equal(viaThreshold.aggregate, null);
+  assert.ok(viaThreshold.rejected.every((r) => r.failures.includes("invalid_observation_payload")));
+});
+
+test("Threshold aggregate rejects attempts to replace observationIdentity", () => {
+  const foreign = {
+    ...THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+    maxCrossSessionMadRatio: 0.08,
+    maxObservationAgeDays: 90,
+    observationIdentity: {
+      ...STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.observationIdentity,
+    },
+  };
+  const result = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: threeStable(),
+    policy: foreign,
+  });
+  assert.equal(result.acceptedObservations.length, 0);
+  assert.equal(result.aggregate, null);
+});
+
+test("Threshold aggregate rejects attempts to replace contractIdentity", () => {
+  const foreign = {
+    ...THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+    maxCrossSessionMadRatio: 0.08,
+    maxObservationAgeDays: 90,
+    contractIdentity: {
+      ...STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1.contractIdentity,
+    },
+  };
+  const result = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: threeStable(),
+    policy: foreign,
+  });
+  assert.equal(result.acceptedObservations.length, 0);
+  assert.equal(result.aggregate, null);
+});
+
+test("Threshold aggregate rejects attempts to replace aggregate policy id/version", () => {
+  const foreignId = {
+    ...THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+    maxCrossSessionMadRatio: 0.08,
+    maxObservationAgeDays: 90,
+    id: "steady-state-settled-workload-aggregate-policy",
+  };
+  const foreignVersion = {
+    ...THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1,
+    maxCrossSessionMadRatio: 0.08,
+    maxObservationAgeDays: 90,
+    version: 2,
+  };
+  for (const policy of [foreignId, foreignVersion]) {
+    const result = evaluateThresholdRegionSettledWorkloadAggregate({
+      observations: threeStable(),
+      policy,
+    });
+    assert.equal(result.acceptedObservations.length, 0);
+    assert.equal(result.aggregate, null);
+  }
+});
+
+test("Threshold aggregate builder preserves identity under sensitivity overrides", () => {
+  const policy = createThresholdRegionSettledWorkloadAggregatePolicyV1({
+    maxCrossSessionMadRatio: 0.08,
+    maxObservationAgeDays: 90,
+    minSessions: 2,
+    minDistinctDates: 2,
+  });
+  assert.equal(policy.id, "threshold-region-settled-workload-aggregate-policy");
+  assert.equal(policy.contractIdentity.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1);
+  assert.equal(policy.contractIdentity.provenance, THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_PROVENANCE_V1);
+  assert.equal(policy.observationIdentity.semanticIdentity.workoutIntent, "threshold");
+  assert.equal(policy.observationIdentity.semanticIdentity.intensityId, "threshold");
+  assert.equal(policy.minSessions, 2);
+  const result = evaluateThresholdRegionSettledWorkloadAggregate({
+    observations: threeStable().slice(0, 2),
+    policy,
+  });
+  assert.equal(result.acceptedObservations.length, 2);
+  assert.ok(result.aggregate);
+  assert.equal(result.aggregate.schemaId, THRESHOLD_REGION_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1);
 });

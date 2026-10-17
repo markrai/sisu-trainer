@@ -13,6 +13,7 @@
 import { canonicalMedian } from "./stats.js";
 import { medianAbsoluteDeviation } from "./performedLoad.js";
 import { isIsoTimestamp } from "./utils/dateTime.js";
+import { STEADY_STATE_SETTLED_WORKLOAD_POLICY_ID_V1, STEADY_STATE_SETTLED_WORKLOAD_POLICY_VERSION_V1, STEADY_STATE_SETTLED_WORKLOAD_PROVENANCE_V1, STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_ID_V1, STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_VERSION_V1, } from "./steadyStateSettledWorkload.js";
 /** Aggregate evidence schema identity (distinct from single-session observation). */
 export const STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1 = "steady-state-settled-workload-aggregate";
 export const STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_VERSION_V1 = 1;
@@ -28,6 +29,20 @@ export const STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1 = {
         schemaId: STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1,
         schemaVersion: STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_VERSION_V1,
         provenance: STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_PROVENANCE_V1,
+    },
+    observationIdentity: {
+        semanticIdentity: {
+            workoutIntent: "steady_state_reference",
+            intensityId: "steady_state_reference",
+            archetype: "steady_state",
+        },
+        contractIdentity: {
+            schemaId: STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_ID_V1,
+            schemaVersion: STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
+            provenance: STEADY_STATE_SETTLED_WORKLOAD_PROVENANCE_V1,
+        },
+        admissionPolicyId: STEADY_STATE_SETTLED_WORKLOAD_POLICY_ID_V1,
+        admissionPolicyVersion: STEADY_STATE_SETTLED_WORKLOAD_POLICY_VERSION_V1,
     },
     independenceUnit: "session",
     aggregateStatistic: "median_of_session_medians",
@@ -59,7 +74,7 @@ export function workoutDateFromSessionEndedAt(sessionEndedAt) {
         return null;
     return new Date(Date.parse(sessionEndedAt)).toISOString().slice(0, 10);
 }
-function isValidObservationPayload(observation) {
+function isStructurallyValidObservationPayload(observation) {
     if (!observation || typeof observation !== "object")
         return false;
     if (typeof observation.schemaId !== "string" || observation.schemaId.length === 0)
@@ -120,6 +135,24 @@ function isValidObservationPayload(observation) {
             return false;
     }
     return true;
+}
+/**
+ * Runtime fail-closed: observation's intrinsic recorded identity must match
+ * the aggregate policy's configured input family.
+ */
+export function observationMatchesAggregateObservationIdentity(observation, expected) {
+    return (observation.workoutIntent === expected.semanticIdentity.workoutIntent &&
+        observation.intensityId === expected.semanticIdentity.intensityId &&
+        observation.archetype === expected.semanticIdentity.archetype &&
+        observation.schemaId === expected.contractIdentity.schemaId &&
+        observation.schemaVersion === expected.contractIdentity.schemaVersion &&
+        observation.provenance === expected.contractIdentity.provenance &&
+        observation.admissionPolicyId === expected.admissionPolicyId &&
+        observation.admissionPolicyVersion === expected.admissionPolicyVersion);
+}
+function isValidObservationForAggregatePolicy(observation, policy) {
+    return (isStructurallyValidObservationPayload(observation) &&
+        observationMatchesAggregateObservationIdentity(observation, policy.observationIdentity));
 }
 export function compatibilityKeyFromObservation(observation) {
     return {
@@ -330,7 +363,7 @@ export function evaluateSteadyStateSettledWorkloadAggregate(args) {
     const rejected = [];
     const valid = [];
     for (const observation of args.observations) {
-        if (!isValidObservationPayload(observation)) {
+        if (!isValidObservationForAggregatePolicy(observation, policy)) {
             rejected.push({
                 sessionId: (_b = observation === null || observation === void 0 ? void 0 : observation.sessionId) !== null && _b !== void 0 ? _b : "unknown",
                 failures: ["invalid_observation_payload"],

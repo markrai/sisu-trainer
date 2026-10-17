@@ -163,8 +163,14 @@ export interface SteadyStateSettledWorkloadPolicyV1 {
 }
 
 /**
- * Build a steady-state policy from science defaults + caller semantic/contract
- * identity. Named workouts (Threshold) and synthetic tests use this factory.
+ * Build a steady-state policy from reusable mechanical primitives + caller
+ * semantic/contract identity.
+ *
+ * Intensity-specific scientific admission values
+ * (`minInBandFraction` / `maxMeasuredWattsMadRatio` / `minAdviceGradeDurationSec`)
+ * default to `null` (unresolved). Named configurations (e.g. Threshold) and
+ * synthetic tests must supply them explicitly — sharing the mechanical engine
+ * does not confer Threshold science onto other intensities.
  */
 export function createSteadyStateSettledWorkloadPolicyV1(args: {
   id?: string;
@@ -197,18 +203,18 @@ export function createSteadyStateSettledWorkloadPolicyV1(args: {
     minMeasuredWattsCoverageRatio: FITNESS_REFINEMENT_ALGORITHM_V2.minimumMeasuredWattsCoverage,
     minCadenceCoverageRatio: FITNESS_REFINEMENT_ALGORITHM_V2.minimumCadenceCoverage,
     requireTargetHoldCorroboration: true,
-    minInBandFraction: 0.9,
-    maxMeasuredWattsMadRatio: 0.1,
-    minAdviceGradeDurationSec: 120,
+    /** Intensity-specific — unresolved until a named config supplies values. */
+    minInBandFraction: null,
+    maxMeasuredWattsMadRatio: null,
+    minAdviceGradeDurationSec: null,
     ...args.overrides,
   };
 }
 
 /**
- * Reference steady-state science + generic contract identity.
- * Semantic identity is a non-production placeholder — named-workout adapters
- * and tests must supply their own via `createSteadyStateSettledWorkloadPolicyV1`
- * or by overriding `input.policy`.
+ * Reference steady-state mechanical policy + generic contract identity.
+ * Scientific admission fields remain unresolved (`null`) — non-production-ready.
+ * Named-workout adapters and synthetic tests must supply science explicitly.
  */
 export const STEADY_STATE_SETTLED_WORKLOAD_POLICY_V1: SteadyStateSettledWorkloadPolicyV1 =
   createSteadyStateSettledWorkloadPolicyV1({

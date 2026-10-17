@@ -14,7 +14,14 @@
 import { canonicalMedian } from "./stats.js";
 import { medianAbsoluteDeviation } from "./performedLoad.js";
 import { isIsoTimestamp } from "./utils/dateTime.js";
-import type { SteadyStateSettledWorkloadObservationV1 } from "./steadyStateSettledWorkload.js";
+import {
+  STEADY_STATE_SETTLED_WORKLOAD_POLICY_ID_V1,
+  STEADY_STATE_SETTLED_WORKLOAD_POLICY_VERSION_V1,
+  STEADY_STATE_SETTLED_WORKLOAD_PROVENANCE_V1,
+  STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_ID_V1,
+  STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
+  type SteadyStateSettledWorkloadObservationV1,
+} from "./steadyStateSettledWorkload.js";
 
 /** Aggregate evidence schema identity (distinct from single-session observation). */
 export const STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1 =
@@ -53,11 +60,35 @@ export type SteadyStateAggregateFailureCode =
 export type SteadyStateAggregateTrendDirection = "flat" | "rising" | "falling" | "mixed";
 
 /**
+ * Expected single-session observation family this aggregate may consume.
+ * Distinct from `contractIdentity` (what the aggregate itself emits).
+ * Named adapters (Threshold) set this to their observation contract so
+ * homogeneous foreign observations cannot define a new lineage by accident.
+ */
+export interface SteadyStateAggregateObservationIdentityV1 {
+  semanticIdentity: {
+    workoutIntent: string;
+    intensityId: string;
+    archetype: "steady_state";
+  };
+  contractIdentity: {
+    schemaId: string;
+    schemaVersion: number;
+    provenance: string;
+  };
+  admissionPolicyId: string;
+  admissionPolicyVersion: number;
+}
+
+/**
  * Aggregation policy. `null` scientific fields keep emission fail-closed.
  *
  * Quantity floors (3/3) are product-policy judgments informed by repeated-
  * measure reliability literature and the need for a one-outlier-resistant
  * median+MAD — NOT a copy of Phase D's 4/4 rule.
+ *
+ * `observationIdentity` = accepted input evidence family.
+ * `contractIdentity` = aggregate emission identity.
  */
 export interface SteadyStateSettledWorkloadAggregatePolicyV1 {
   id: string;
@@ -68,6 +99,11 @@ export interface SteadyStateSettledWorkloadAggregatePolicyV1 {
     schemaVersion: number;
     provenance: string;
   };
+  /**
+   * Intrinsic observation-family identity this aggregate is allowed to consume.
+   * Validated against each observation's recorded fields (not reconstructed).
+   */
+  observationIdentity: SteadyStateAggregateObservationIdentityV1;
   /** Independence unit: session (not window, not telemetry-second). */
   independenceUnit: "session";
   /** Unweighted median of per-session measured-watt medians. */
@@ -107,6 +143,20 @@ export const STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_POLICY_V1: SteadyStateSettl
       schemaId: STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_ID_V1,
       schemaVersion: STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_SCHEMA_VERSION_V1,
       provenance: STEADY_STATE_SETTLED_WORKLOAD_AGGREGATE_PROVENANCE_V1,
+    },
+    observationIdentity: {
+      semanticIdentity: {
+        workoutIntent: "steady_state_reference",
+        intensityId: "steady_state_reference",
+        archetype: "steady_state",
+      },
+      contractIdentity: {
+        schemaId: STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_ID_V1,
+        schemaVersion: STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_VERSION_V1,
+        provenance: STEADY_STATE_SETTLED_WORKLOAD_PROVENANCE_V1,
+      },
+      admissionPolicyId: STEADY_STATE_SETTLED_WORKLOAD_POLICY_ID_V1,
+      admissionPolicyVersion: STEADY_STATE_SETTLED_WORKLOAD_POLICY_VERSION_V1,
     },
     independenceUnit: "session",
     aggregateStatistic: "median_of_session_medians",
@@ -228,7 +278,7 @@ export function workoutDateFromSessionEndedAt(sessionEndedAt: string): string | 
   return new Date(Date.parse(sessionEndedAt)).toISOString().slice(0, 10);
 }
 
-function isValidObservationPayload(
+function isStructurallyValidObservationPayload(
   observation: SteadyStateSettledWorkloadObservationV1
 ): boolean {
   if (!observation || typeof observation !== "object") return false;
@@ -283,6 +333,36 @@ function isValidObservationPayload(
     if (typeof spoof !== "string" || spoof !== derived) return false;
   }
   return true;
+}
+
+/**
+ * Runtime fail-closed: observation's intrinsic recorded identity must match
+ * the aggregate policy's configured input family.
+ */
+export function observationMatchesAggregateObservationIdentity(
+  observation: SteadyStateSettledWorkloadObservationV1,
+  expected: SteadyStateAggregateObservationIdentityV1
+): boolean {
+  return (
+    observation.workoutIntent === expected.semanticIdentity.workoutIntent &&
+    observation.intensityId === expected.semanticIdentity.intensityId &&
+    observation.archetype === expected.semanticIdentity.archetype &&
+    observation.schemaId === expected.contractIdentity.schemaId &&
+    observation.schemaVersion === expected.contractIdentity.schemaVersion &&
+    observation.provenance === expected.contractIdentity.provenance &&
+    observation.admissionPolicyId === expected.admissionPolicyId &&
+    observation.admissionPolicyVersion === expected.admissionPolicyVersion
+  );
+}
+
+function isValidObservationForAggregatePolicy(
+  observation: SteadyStateSettledWorkloadObservationV1,
+  policy: SteadyStateSettledWorkloadAggregatePolicyV1
+): boolean {
+  return (
+    isStructurallyValidObservationPayload(observation) &&
+    observationMatchesAggregateObservationIdentity(observation, policy.observationIdentity)
+  );
 }
 
 export function compatibilityKeyFromObservation(
@@ -531,7 +611,7 @@ export function evaluateSteadyStateSettledWorkloadAggregate(args: {
 
   const valid: SteadyStateSettledWorkloadObservationV1[] = [];
   for (const observation of args.observations) {
-    if (!isValidObservationPayload(observation)) {
+    if (!isValidObservationForAggregatePolicy(observation, policy)) {
       rejected.push({
         sessionId: observation?.sessionId ?? "unknown",
         failures: ["invalid_observation_payload"],

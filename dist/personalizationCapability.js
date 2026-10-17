@@ -5,9 +5,12 @@
  * workout selectors and routes evidence through reusable archetypes
  * (`steady_state`, `interval`, `recovery`).
  *
- * Declaring an archetype does NOT enable an algorithm. Only capabilities
- * with `completedWorkoutEvidence: true` may emit settled-workload evidence
- * today — currently Threshold → steady_state only.
+ * Declaring an archetype does NOT enable an algorithm. The generic
+ * steady-state engine is a pure configurable algorithm and does not consult
+ * this table. Product evidence is enabled only through capability-authorized
+ * adapters/routers with `completedWorkoutEvidence: true` — currently
+ * Threshold → steady_state only. Exercising the kernel under a synthetic
+ * policy does not activate product evidence for that intensity.
  */
 /**
  * Source of truth for intensity → archetype mapping.

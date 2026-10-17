@@ -1,21 +1,24 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
 import {
   createSteadyStateSettledWorkloadPolicyV1,
   evaluateSteadyStateSettledWorkloadContract,
+  steadyStateSettledPolicyIsProductionReady,
+  STEADY_STATE_SETTLED_WORKLOAD_POLICY_V1,
   STEADY_STATE_SETTLED_WORKLOAD_SCHEMA_ID_V1,
   STEADY_STATE_SETTLED_WORKLOAD_PROVENANCE_V1,
 } from "../dist/steadyStateSettledWorkload.js";
-import {
-  evaluateSteadyStateSettledWorkloadAggregate,
-  compatibilityKeyFromObservation,
-} from "../dist/steadyStateSettledWorkloadAggregate.js";
+import { compatibilityKeyFromObservation } from "../dist/steadyStateSettledWorkloadAggregate.js";
 import {
   THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_SCHEMA_ID_V1,
   THRESHOLD_REGION_SETTLED_WORKLOAD_PROVENANCE_V1,
   evaluateThresholdRegionSettledWorkloadContract,
+  thresholdRegionSettledPolicyIsProductionReady,
 } from "../dist/thresholdRegionSettledWorkload.js";
 import {
   PERSONALIZATION_CAPABILITIES_V1,
@@ -28,6 +31,13 @@ const SESSION = "6f4612a2-fe0e-4976-9444-8dc1df81c141";
 const ANCHOR = "2026-10-11T18:18:38.106Z";
 const ENDED = "2026-10-16T14:59:14.030Z";
 const BASE = Date.parse("2026-10-16T14:29:48.416Z");
+
+/** Explicit science — required for observation emission; not conferred by the factory. */
+const EXPLICIT_SCIENCE = {
+  minInBandFraction: 0.9,
+  maxMeasuredWattsMadRatio: 0.1,
+  minAdviceGradeDurationSec: 120,
+};
 
 function isoAtActiveSec(activeSec) {
   return new Date(BASE + activeSec * 1000).toISOString();
@@ -113,6 +123,32 @@ function denseHoldInput(intent, intensityId, policy) {
   };
 }
 
+test("generic reference steady-state policy leaves intensity science unresolved", () => {
+  assert.equal(STEADY_STATE_SETTLED_WORKLOAD_POLICY_V1.minInBandFraction, null);
+  assert.equal(STEADY_STATE_SETTLED_WORKLOAD_POLICY_V1.maxMeasuredWattsMadRatio, null);
+  assert.equal(STEADY_STATE_SETTLED_WORKLOAD_POLICY_V1.minAdviceGradeDurationSec, null);
+  assert.equal(steadyStateSettledPolicyIsProductionReady(), false);
+
+  const factoryDefault = createSteadyStateSettledWorkloadPolicyV1({
+    semanticIdentity: {
+      archetype: "steady_state",
+      workoutIntent: "synthetic_steady",
+      intensityId: "synthetic_zone",
+    },
+  });
+  assert.equal(factoryDefault.minInBandFraction, null);
+  assert.equal(factoryDefault.maxMeasuredWattsMadRatio, null);
+  assert.equal(factoryDefault.minAdviceGradeDurationSec, null);
+  assert.equal(steadyStateSettledPolicyIsProductionReady(factoryDefault), false);
+});
+
+test("Threshold policy explicitly supplies 0.90 / 0.10 / 120 and remains structurally production-ready", () => {
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.minInBandFraction, 0.9);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.maxMeasuredWattsMadRatio, 0.1);
+  assert.equal(THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1.minAdviceGradeDurationSec, 120);
+  assert.equal(thresholdRegionSettledPolicyIsProductionReady(), true);
+});
+
 test("generic steady_state engine does not require literal threshold semantic identity", () => {
   const policy = createSteadyStateSettledWorkloadPolicyV1({
     semanticIdentity: {
@@ -120,6 +156,7 @@ test("generic steady_state engine does not require literal threshold semantic id
       workoutIntent: "synthetic_steady",
       intensityId: "synthetic_zone",
     },
+    overrides: EXPLICIT_SCIENCE,
   });
   assert.notEqual(policy.semanticIdentity.workoutIntent, "threshold");
   assert.notEqual(policy.semanticIdentity.intensityId, "threshold");
@@ -140,7 +177,9 @@ test("generic steady_state engine does not require literal threshold semantic id
   assert.equal(result.observation.interpretation, "descriptive_observation_only");
 });
 
-test("same algorithm evaluates another synthetic steady-state intensity without activating production paths", () => {
+test("synthetic kernel exercise for aerobic_base is algorithm-only — not product activation", () => {
+  // Explicit science + synthetic contract: proves the generic engine is
+  // configurable. Does NOT authorize Aerobic Base product evidence.
   const policy = createSteadyStateSettledWorkloadPolicyV1({
     id: "synthetic-aerobic-base-test-policy",
     version: 1,
@@ -154,17 +193,23 @@ test("same algorithm evaluates another synthetic steady-state intensity without 
       schemaVersion: 1,
       provenance: "synthetic_test_only_aerobic_base_region",
     },
+    overrides: EXPLICIT_SCIENCE,
   });
   const result = evaluateSteadyStateSettledWorkloadContract(
     denseHoldInput("aerobic_base", "aerobic_base", policy)
   );
-  assert.ok(result.observation, "algorithm test may emit under synthetic policy");
+  assert.ok(
+    result.observation,
+    "kernel may emit under explicit synthetic config; this is not product evidence"
+  );
   assert.equal(result.observation.provenance, "synthetic_test_only_aerobic_base_region");
-  // Capability table must still keep Aerobic Base evidence disabled in production.
   assert.equal(steadyStateEvidenceEnabledForIntensity("aerobic_base"), false);
+  const srcRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "src");
+  assert.equal(existsSync(path.join(srcRoot, "aerobicBaseSettledWorkload.ts")), false);
+  assert.equal(existsSync(path.join(srcRoot, "aerobicBaseSettledWorkloadAggregate.ts")), false);
 });
 
-test("different semantic lineages stay distinguishable in aggregate compatibility", () => {
+test("different semantic lineages stay distinguishable via compatibility keys", () => {
   const thresholdPolicy = THRESHOLD_REGION_SETTLED_WORKLOAD_POLICY_V1;
   const syntheticPolicy = createSteadyStateSettledWorkloadPolicyV1({
     semanticIdentity: {
@@ -172,6 +217,7 @@ test("different semantic lineages stay distinguishable in aggregate compatibilit
       workoutIntent: "synthetic_steady",
       intensityId: "synthetic_zone",
     },
+    overrides: EXPLICIT_SCIENCE,
   });
   const threshold = evaluateSteadyStateSettledWorkloadContract(
     denseHoldInput("threshold", "threshold", thresholdPolicy)
@@ -186,28 +232,6 @@ test("different semantic lineages stay distinguishable in aggregate compatibilit
   assert.notEqual(k1.workoutIntent, k2.workoutIntent);
   assert.notEqual(k1.intensityId, k2.intensityId);
   assert.notEqual(k1.observationSchemaId, k2.observationSchemaId);
-
-  const mixed = evaluateSteadyStateSettledWorkloadAggregate({
-    observations: [threshold.observation, synthetic.observation],
-    policy: {
-      id: "test-agg",
-      version: 1,
-      contractIdentity: {
-        schemaId: "test-agg",
-        schemaVersion: 1,
-        provenance: "test",
-      },
-      independenceUnit: "session",
-      aggregateStatistic: "median_of_session_medians",
-      minSessions: 1,
-      minDistinctDates: 1,
-      maxCrossSessionMadRatio: 0.5,
-      trendHandling: "diagnostic_only",
-      maxObservationAgeDays: 365,
-      allowShadowCandidateEligibility: false,
-    },
-  });
-  assert.ok(mixed.failures.includes("mixed_compatibility_lineage"));
 });
 
 test("Threshold adapter and generic engine + Threshold config are deeply equivalent", () => {

@@ -1456,6 +1456,58 @@ Central capability table: `src/personalizationCapability.ts`
 an algorithm. Only rows with `completedWorkoutEvidence: true` may emit
 settled-workload observations today.
 
+**Generic archetype engines own reusable evidence mechanics. They do not confer
+scientific authorization on every intensity that shares the archetype.**
+
+The generic steady-state kernel is a pure configurable algorithm and does not
+consult the capability table. Exercising it under an explicit synthetic policy
+(e.g. algorithm tests) is not product activation.
+
+**Named/configured evidence paths must provide resolved scientific admission
+policy and must be enabled by the personalization capability layer before
+their evidence is considered product-enabled.**
+
+**Generic kernels accept configurable identities; named adapters pin semantic,
+schema, provenance, and policy identities and expose only safe policy-value
+variation.** Callers may override Threshold scientific/sensitivity values via
+`createThresholdRegionSettledWorkloadPolicyV1` /
+`createThresholdRegionSettledWorkloadAggregatePolicyV1`, but cannot inject a
+foreign steady-state family through the Threshold evaluate APIs (runtime
+fail-closed, not type-only).
+
+### Scientific admission vs mechanical primitives
+
+Reusable mechanical primitives (settling, continuity, coverage floors,
+target-hold corroboration) may live on the generic factory.
+
+Intensity-specific scientific admission values do **not** default from
+Threshold onto every steady-state consumer:
+
+| Field | Generic reference / factory default | Threshold adapter (explicit) |
+|---|---|---|
+| `minInBandFraction` | `null` (unresolved) | **0.90** |
+| `maxMeasuredWattsMadRatio` | `null` (unresolved) | **0.10** |
+| `minAdviceGradeDurationSec` | `null` (unresolved) | **120** |
+
+Generic reference policy is therefore non-production-ready until a named
+configuration supplies science.
+
+### Aggregate input vs output identity
+
+**Aggregate output identity and accepted input-observation identity are separate
+provenance contracts.**
+
+- `observationIdentity` — which single-session evidence family the aggregate
+  may consume (schema / provenance / intent / intensity / archetype /
+  admission policy). Validated at runtime against each observation's
+  intrinsic recorded fields.
+- `contractIdentity` — what aggregate claim this policy may emit.
+
+Threshold aggregation requires Threshold observation-family identity. A
+homogeneous set of generic/synthetic steady-state observations cannot be fed
+to `evaluateThresholdRegionSettledWorkloadAggregate` and accepted as Threshold
+evidence.
+
 ### Threshold as steady_state configuration
 
 Threshold is the **first** `steady_state` configuration/adapter:
@@ -1468,20 +1520,23 @@ Threshold is the **first** `steady_state` configuration/adapter:
   (`intent_not_threshold` / `intensity_not_threshold`)
 - Generic default identities use `steady-state-*` /
   `ordinary_workout_settled_steady_state_region` for non-Threshold callers
+- Capability-authorized: `completedWorkoutEvidence: true` for Threshold only
 
-Scientific admission values are unchanged (0.90 / 0.10 / 120; aggregate 3/3 with
-cross-session MAD and age still null).
+Threshold scientific admission remains explicit 0.90 / 0.10 / 120; aggregate
+3/3 with cross-session MAD and age still null (no aggregate production emission).
 
 ### Not yet enabled
 
 - **Aerobic Base** personalization / settled-workload evidence
-  (`completedWorkoutEvidence: false` despite `steady_state` archetype)
+  (`completedWorkoutEvidence: false` despite `steady_state` archetype;
+  no production adapter/router)
 - VO₂ short/long interval evidence
 - Recovery evidence
 - Shadow advice resolver, UI advice, active control
 
-A future steady-state intensity should need capability configuration + policy
-values if scientifically different — not a clone of the Threshold modules.
+A future steady-state intensity should need capability configuration + explicit
+scientific policy values if different — not a clone of the Threshold modules
+and not silent inheritance of Threshold admission thresholds.
 
 ### Cross-intent same-intensity evidence sharing
 
@@ -1564,3 +1619,13 @@ steady-state contract exists. They are not erased by this seam.
   Threshold configuration adapters; capability/archetype seam added;
   Threshold science and schema identities preserved; Aerobic Base / interval /
   recovery evidence not enabled.
+
+- **Steady-state extraction harden (2026-10-16):** generic factory no longer
+  defaults Threshold science (0.90/0.10/120 ? `null` until named config);
+  Threshold adapter supplies those values explicitly; aggregate
+  `observationIdentity` restores fail-closed observation-family validation;
+  capability gating remains at adapter/capability layer, not the kernel.
+
+- **Named-adapter policy identity pin (2026-10-16):** Threshold single-session
+  and aggregate adapters reject injected generic/foreign policies at runtime;
+  builders preserve Threshold identity while allowing safe value overrides.
