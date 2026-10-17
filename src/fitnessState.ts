@@ -39,6 +39,13 @@ import {
   VO2_ESTIMATOR_VERSION,
 } from "./vo2Estimator.js";
 
+/**
+ * FitnessState persistence and readers. FitnessState is an umbrella athlete
+ * store: formal assessment metrics (E1 evidence) and Phase D passive
+ * observation can coexist. Residence in FitnessState does not grant
+ * prescription authority — check each metric's source / eligibleForPrescription.
+ * See docs/personalization-architecture.md.
+ */
 export const FITNESS_STATE_STORAGE_KEY = "fitness_state_v1";
 const MAX_V1_EVIDENCE_SESSION_IDS = 1000;
 const MAX_V2_RECENT_EVIDENCE_SESSION_IDS = 16;

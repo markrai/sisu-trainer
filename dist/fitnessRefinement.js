@@ -1,3 +1,11 @@
+/**
+ * Phase D passive fitness refinement: multi-session descriptive fixed-HR-window
+ * workload trend from ordinary workouts. Persists on FitnessState as
+ * `passiveAerobicObservation` with `eligibleForPrescription: false`. Not formal
+ * calibration, not an E1 input, and not machine-control authority. Admission
+ * science stays here — do not reuse E1 shadowPrescription capability flags.
+ * See docs/personalization-architecture.md.
+ */
 import { FITNESS_STATE_SCHEMA_VERSION_V3, } from "./types.js";
 import { FITNESS_STATE_STORAGE_KEY, readFitnessState, storeFitnessState, } from "./fitnessState.js";
 import { loadAthleteProfile } from "./profile.js";

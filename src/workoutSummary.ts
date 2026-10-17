@@ -1,3 +1,13 @@
+/**
+ * Workout summary construction and emit orchestration. Sequences identity,
+ * optional personalization artifacts (E1 copy / Response / E2), VO₂ assessment
+ * attach, then summary persistence. On successful save only: VO₂ FitnessState
+ * promotion and Phase D rebuild. Machine-model learning runs afterward and is
+ * currently not gated by successful summary persistence. Scientific policy
+ * remains in subsystem modules — this file is the finalization boundary, not
+ * the science owner. See docs/personalization-architecture.md.
+ */
+
 import { calculateZoneMinutes, determinePrimaryZone } from "./zoneCalculator.js";
 import {
   flushOrdinaryBikeTelemetryWrites,

@@ -15,6 +15,11 @@
  * Phase-intensity eligibility and workout-intent eligibility are orthogonal
  * product-routing dimensions. A workout may pair e.g. workoutIntent
  * `aerobic_volume` with phase intensity `aerobic_base`.
+ *
+ * These tables own product routing flags only — not scientific numeric
+ * thresholds, HR zones, VO₂ protocol science, Phase D admission, cross-intent
+ * evidence sharing, or machine-control behavior.
+ * See docs/personalization-architecture.md.
  */
 /**
  * Source of truth for intensity → archetype mapping.

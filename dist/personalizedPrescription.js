@@ -30,9 +30,10 @@ function personalizedPrescriptionV1AllowedIntensitiesCopy() {
 /**
  * E1 is the canonical shadow athlete-relative mechanical workload prescription
  * derived from formal calibration for supported ordinary-workout phases.
- * It does not personalize the active heart-rate prescription. The legacy HR
- * prescription remains live control authority; E1 records the associated
- * athlete-specific watts for shadow evaluation only.
+ * It does not personalize the active heart-rate prescription and never controls
+ * resistance. The legacy HR prescription remains live control authority; E1
+ * records athlete-specific watts for shadow evaluation only.
+ * See docs/personalization-architecture.md.
  *
  * E1 intentionally has no activation-approved freshness lifetime. Production
  * shadow capture records freshness as not evaluated until policy owners supply
@@ -439,8 +440,11 @@ export function evaluatePersonalizedPrescription(input) {
     };
 }
 /**
- * Read-only workout advice projected from the already-frozen E1 evaluation.
- * Exact phase identity is required; fallback data is never promoted to advice.
+ * Read-only shadow watt advice projected from the already-frozen E1 evaluation.
+ * Formal-assessment-calibration derived; advisory only — never machine-control
+ * authority and never a validated FTP/threshold prescription. Exact phase
+ * identity is required; fallback data is never promoted to advice.
+ * See docs/personalization-architecture.md.
  */
 export function assessmentBasedWorkloadForPhase(evaluation, phaseId) {
     const phase = evaluation === null || evaluation === void 0 ? void 0 : evaluation.phases.find((candidate) => candidate.phaseId === phaseId);

@@ -1,3 +1,8 @@
+/**
+ * E2 completed-workout characterization of frozen E1 shadow candidates
+ * (including held-workload forward-response). Diagnostic / descriptive only —
+ * never live workout control. See docs/personalization-architecture.md.
+ */
 import { PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1, PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2, PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V3, PERSONALIZED_PRESCRIPTION_CHARACTERIZER_ID_V1, PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V1, PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V2, PERSONALIZED_PRESCRIPTION_CHARACTERIZER_VERSION_V3, PERSONALIZED_PRESCRIPTION_EVALUATION_SCHEMA_VERSION_V1, PERSONALIZED_PRESCRIPTION_RESOLVER_ID_V1, PERSONALIZED_PRESCRIPTION_RESOLVER_VERSION_V1, } from "./types.js";
 import { parseOrdinaryBikeTelemetrySample } from "./ordinaryWorkoutTelemetry.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";

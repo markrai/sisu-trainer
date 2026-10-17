@@ -1,3 +1,9 @@
+/**
+ * E2 completed-workout characterization of frozen E1 shadow candidates
+ * (including held-workload forward-response). Diagnostic / descriptive only —
+ * never live workout control. See docs/personalization-architecture.md.
+ */
+
 import {
   PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V1,
   PERSONALIZED_PRESCRIPTION_CHARACTERIZATION_SCHEMA_VERSION_V2,
