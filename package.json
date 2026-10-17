@@ -2,6 +2,7 @@
   "name": "sisu-trainer",
   "version": "0.10.13",
   "private": true,
+  "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
     "prebuild": "node scripts/sync-version.cjs",
