@@ -29,7 +29,10 @@ import {
   isSupportedVo2EstimatorProtocolPair,
 } from "./vo2Estimator.js";
 import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
-import { personalizationShadowPrescriptionEnabledForIntensity } from "./personalizationCapability.js";
+import {
+  personalizationShadowPrescriptionEnabledForIntensity,
+  personalizationShadowPrescriptionEnabledForIntent,
+} from "./personalizationCapability.js";
 
 /**
  * Immutable PersonalizedPrescriptionPolicyV1 serialized contract for
@@ -436,11 +439,7 @@ function evaluatePhase(
     personalizationShadowPrescriptionEnabledForIntensity(phase.intensityId ?? "");
   checks.phaseSupported = phaseSupported;
   if (!phaseSupported) return fallbackPhase(phase, "unsupported_phase", checks);
-  if (
-    input.workoutIntent !== "aerobic_base" &&
-    input.workoutIntent !== "aerobic_volume" &&
-    input.workoutIntent !== "threshold"
-  ) {
+  if (!personalizationShadowPrescriptionEnabledForIntent(input.workoutIntent)) {
     return fallbackPhase(phase, "unsupported_workout", checks);
   }
   checks.boundedHeartRateAvailable = boundedHeartRate(phase.expectedHeartRate);

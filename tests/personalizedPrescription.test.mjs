@@ -10,7 +10,10 @@ import {
   evaluatePersonalizedPrescription,
   parsePersonalizedPrescriptionEvaluation,
 } from "../dist/personalizedPrescription.js";
-import { personalizationShadowPrescriptionEnabledForIntensity } from "../dist/personalizationCapability.js";
+import {
+  personalizationShadowPrescriptionEnabledForIntensity,
+  personalizationShadowPrescriptionEnabledForIntent,
+} from "../dist/personalizationCapability.js";
 import {
   machineHeartRateTargetFromResolved,
   resolveWorkoutPrescription,
@@ -404,6 +407,39 @@ test("E1 runtime intensity eligibility follows personalization shadow capabiliti
   assert.equal(fallbackReason({
     legacyPrescription: steadyPrescription({ intensity: "vo2_short" }),
   }), "unsupported_phase");
+});
+
+test("E1 runtime intent eligibility follows personalization intent capabilities", () => {
+  assert.equal(personalizationShadowPrescriptionEnabledForIntent("aerobic_base"), true);
+  assert.equal(personalizationShadowPrescriptionEnabledForIntent("aerobic_volume"), true);
+  assert.equal(personalizationShadowPrescriptionEnabledForIntent("threshold"), true);
+  assert.equal(onlyPhase(evaluatePersonalizedPrescription(input({ workoutIntent: "aerobic_base" }))).outcome, "candidate");
+  assert.equal(onlyPhase(evaluatePersonalizedPrescription(input({ workoutIntent: "aerobic_volume" }))).outcome, "candidate");
+  assert.equal(onlyPhase(evaluatePersonalizedPrescription(input({
+    workoutIntent: "threshold",
+    legacyPrescription: steadyPrescription({ target: "150–160", intensity: "threshold" }),
+  }))).outcome, "candidate");
+
+  assert.equal(fallbackReason({ workoutIntent: "recovery" }), "unsupported_workout");
+  assert.equal(fallbackReason({ workoutIntent: "vo2_primer" }), "unsupported_workout");
+  assert.equal(fallbackReason({ workoutIntent: "vo2_priority" }), "unsupported_workout");
+  assert.equal(fallbackReason({ workoutIntent: "support_strength" }), "unsupported_workout");
+  assert.equal(fallbackReason({ workoutIntent: "" }), "unsupported_workout");
+  assert.equal(fallbackReason({ workoutIntent: "unknown_intent" }), "unsupported_workout");
+
+  // Intent and intensity are independent gates (intensity checked before intent).
+  assert.equal(fallbackReason({
+    workoutIntent: "aerobic_base",
+    legacyPrescription: steadyPrescription({ intensity: "vo2_short" }),
+  }), "unsupported_phase");
+  assert.equal(fallbackReason({
+    workoutIntent: "recovery",
+    legacyPrescription: steadyPrescription({ intensity: "aerobic_base" }),
+  }), "unsupported_workout");
+  assert.equal(fallbackReason({
+    workoutIntent: "aerobic_base",
+    legacyPrescription: steadyPrescription({ selector: "VO2MaxEstimation" }),
+  }), "unsupported_workout");
 });
 
 test("aerobic-volume and fully interpolated threshold work can produce shadow candidates", () => {

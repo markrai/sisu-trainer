@@ -11,20 +11,29 @@
  * adapters/routers with `completedWorkoutEvidence: true` — currently
  * Threshold → steady_state only. Exercising the kernel under a synthetic
  * policy does not activate product evidence for that intensity.
+ *
+ * Phase-intensity eligibility and workout-intent eligibility are orthogonal
+ * product-routing dimensions. A workout may pair e.g. workoutIntent
+ * `aerobic_volume` with phase intensity `aerobic_base`.
  */
 
 import type { PhaseIntensityId } from "./types.js";
 
 export type PersonalizationPhaseArchetype = "steady_state" | "interval" | "recovery";
 
+/**
+ * Product workout-intent vocabulary used by personalization routing.
+ * Distinct from PhaseIntensityId (phase intensity ids such as vo2_short /
+ * vo2_long / strength_support are not workout intents).
+ */
 export type PersonalizationWorkoutIntent =
   | "aerobic_base"
   | "aerobic_volume"
   | "threshold"
-  | "vo2_short"
-  | "vo2_long"
-  | "recovery"
-  | string;
+  | "vo2_primer"
+  | "vo2_priority"
+  | "support_strength"
+  | "recovery";
 
 export interface PersonalizationCapabilityV1 {
   activity: "bike";
@@ -38,6 +47,17 @@ export interface PersonalizationCapabilityV1 {
    * observations for this capability. False = architecture declared only.
    */
   completedWorkoutEvidence: boolean;
+  notes?: string;
+}
+
+/**
+ * Workout-intent → E1 shadow-prescription routing eligibility.
+ * Orthogonal to PERSONALIZATION_CAPABILITIES_V1 (phase intensity).
+ * Product routing only — no science, evidence sharing, or VO₂ protocol rules.
+ */
+export interface PersonalizationIntentCapabilityV1 {
+  workoutIntent: PersonalizationWorkoutIntent;
+  shadowPrescription: boolean;
   notes?: string;
 }
 
@@ -85,10 +105,30 @@ export const PERSONALIZATION_CAPABILITIES_V1: readonly PersonalizationCapability
   },
 ] as const;
 
+/**
+ * Source of truth for workout-intent → shadow-prescription routing.
+ * Matches current E1 intent allowlist; unknown intents fail closed via helpers.
+ */
+export const PERSONALIZATION_INTENT_CAPABILITIES_V1: readonly PersonalizationIntentCapabilityV1[] = [
+  { workoutIntent: "aerobic_base", shadowPrescription: true },
+  { workoutIntent: "aerobic_volume", shadowPrescription: true },
+  { workoutIntent: "threshold", shadowPrescription: true },
+  { workoutIntent: "vo2_primer", shadowPrescription: false },
+  { workoutIntent: "vo2_priority", shadowPrescription: false },
+  { workoutIntent: "support_strength", shadowPrescription: false },
+  { workoutIntent: "recovery", shadowPrescription: false },
+] as const;
+
 export function personalizationCapabilityForIntensity(
   intensityId: string
 ): PersonalizationCapabilityV1 | undefined {
   return PERSONALIZATION_CAPABILITIES_V1.find((row) => row.intensityId === intensityId);
+}
+
+export function personalizationIntentCapabilityForIntent(
+  workoutIntent: string
+): PersonalizationIntentCapabilityV1 | undefined {
+  return PERSONALIZATION_INTENT_CAPABILITIES_V1.find((row) => row.workoutIntent === workoutIntent);
 }
 
 /**
@@ -103,6 +143,17 @@ export function personalizationShadowPrescriptionEnabledForIntensity(
 }
 
 /**
+ * Whether E1 / shadow prescription may consider this workout intent.
+ * Derives from PERSONALIZATION_INTENT_CAPABILITIES_V1 only — no intensity,
+ * activity, selector, or scientific-threshold logic. Unknown intents fail closed.
+ */
+export function personalizationShadowPrescriptionEnabledForIntent(
+  workoutIntent: string
+): boolean {
+  return personalizationIntentCapabilityForIntent(workoutIntent)?.shadowPrescription === true;
+}
+
+/**
  * Current product shadow-prescription enabled intensity set, derived from
  * PERSONALIZATION_CAPABILITIES_V1 in table order.
  *
@@ -113,6 +164,17 @@ export function personalizationShadowPrescriptionEnabledForIntensity(
 export function personalizationShadowPrescriptionEnabledIntensities(): readonly PhaseIntensityId[] {
   return PERSONALIZATION_CAPABILITIES_V1.filter((row) => row.shadowPrescription).map(
     (row) => row.intensityId as PhaseIntensityId
+  );
+}
+
+/**
+ * Current product shadow-prescription enabled workout-intent set, derived from
+ * PERSONALIZATION_INTENT_CAPABILITIES_V1 in table order.
+ * Live routing snapshot only — not part of E1 schema v1 serialization.
+ */
+export function personalizationShadowPrescriptionEnabledIntents(): readonly PersonalizationWorkoutIntent[] {
+  return PERSONALIZATION_INTENT_CAPABILITIES_V1.filter((row) => row.shadowPrescription).map(
+    (row) => row.workoutIntent
   );
 }
 
