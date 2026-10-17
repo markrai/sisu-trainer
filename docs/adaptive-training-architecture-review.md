@@ -153,11 +153,11 @@ The UI in `index.html` still calls this area “Profile” and remains a single 
 
 Equipment and learned machine state are separate global local-storage records:
 
-- `sisu_trainer_equipment_selection` (`src/machines/selection.ts`);
-- `sisu_trainer_bike_bridge` (`src/platform/bikeBridgeConfig.ts`);
-- `sisu_trainer_machine_learning` (`src/machines/learning/types.ts`);
-- `sisu_trainer_hr_dynamics` (`src/machines/dynamics/types.ts`);
-- `sisu_trainer_shadow_resistance_predictions` (`src/machines/prediction/types.ts`).
+- `fitbaus_trainer_equipment_selection` (`src/machines/selection.ts`);
+- `fitbaus_trainer_bike_bridge` (`src/platform/bikeBridgeConfig.ts`);
+- `fitbaus_trainer_machine_learning` (`src/machines/learning/types.ts`);
+- `fitbaus_trainer_hr_dynamics` (`src/machines/dynamics/types.ts`);
+- `fitbaus_trainer_shadow_resistance_predictions` (`src/machines/prediction/types.ts`).
 
 This separation is sound for equipment configuration, but learned physiological response is currently device-global rather than athlete-owned.
 

@@ -1,4 +1,4 @@
-export const LEARNING_STORAGE_KEY = "sisu_trainer_machine_learning";
+export const LEARNING_STORAGE_KEY = "fitbaus_trainer_machine_learning";
 export const LEARNING_STORE_VERSION = 1;
 export function workDurationClass(durationSeconds) {
     if (durationSeconds <= 75)

@@ -3,9 +3,9 @@
 Heart-rate workout trainer with BLE HR support, optional bike/equipment
 integration, formal bike VO₂ assessment, and Capacitor Android/iOS shells.
 
-The npm package is `fitbaus-trainer`. Some historical local storage keys and the
-native app ID (`com.markrai.sisutrainer`) remain for compatibility. Optional
-**SISU** sync names an external service, not this product.
+The npm package is `fitbaus-trainer`. The native app ID is
+`com.markrai.fitbaus.trainer`. Optional **SISU** sync names an external service,
+not this product.
 
 ---
 

@@ -1,5 +1,5 @@
 import { getMachineDefinition, isMachineId } from "./registry.js";
-export const EQUIPMENT_STORAGE_KEY = "sisu_trainer_equipment_selection";
+export const EQUIPMENT_STORAGE_KEY = "fitbaus_trainer_equipment_selection";
 function storageOrBrowser(storage) {
     return storage !== null && storage !== void 0 ? storage : localStorage;
 }

@@ -255,7 +255,7 @@ test("IndexedDB retains ordinary telemetry across reads and rejects duplicate ac
 test("IndexedDB v3 migration preserves existing workouts and HR samples", async () => {
   await resetWorkoutStorageForTests();
   const legacyDb = await new Promise((resolve, reject) => {
-    const request = indexedDB.open("vo2_workout_db", 2);
+    const request = indexedDB.open("fitbaus_trainer_db", 2);
     request.onupgradeneeded = () => {
       const database = request.result;
       const workouts = database.createObjectStore("workouts", { keyPath: "session_id" });

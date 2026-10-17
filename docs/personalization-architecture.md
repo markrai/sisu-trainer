@@ -204,12 +204,12 @@ plan.
 
 ---
 
-## Storage naming debt
+## Storage naming
 
-IndexedDB database name `vo2_workout_db` is historical. It now stores broader
-workout/session data (summaries, HR samples, ordinary bike telemetry, SISU
-settings). Renaming would require a storage migration and is **intentionally
-deferred**.
+IndexedDB database name `fitbaus_trainer_db` stores workout/session data
+(summaries, HR samples, ordinary bike telemetry, and the SISU settings object
+store). Product-owned localStorage keys use the `fitbaus_trainer_*` prefix.
+`sisu_settings` remains the SISU integration store name.
 
 Personalization fields on summaries are stored locally and **stripped** from
 SISU sync payloads.

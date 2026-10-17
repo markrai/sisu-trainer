@@ -33,7 +33,7 @@ export interface LearningHrSample {
   bpm: number;
 }
 
-export const LEARNING_STORAGE_KEY = "sisu_trainer_machine_learning";
+export const LEARNING_STORAGE_KEY = "fitbaus_trainer_machine_learning";
 export const LEARNING_STORE_VERSION = 1 as const;
 
 export function workDurationClass(durationSeconds: number): WorkDurationClass {

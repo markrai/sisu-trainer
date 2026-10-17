@@ -2,7 +2,7 @@ import type { Activity } from "../types.js";
 import { getMachineDefinition, isMachineId } from "./registry.js";
 import type { EquipmentSelection, MachineDefinition, MachineId } from "./types.js";
 
-export const EQUIPMENT_STORAGE_KEY = "sisu_trainer_equipment_selection";
+export const EQUIPMENT_STORAGE_KEY = "fitbaus_trainer_equipment_selection";
 
 export interface EquipmentStorage {
   getItem(key: string): string | null;

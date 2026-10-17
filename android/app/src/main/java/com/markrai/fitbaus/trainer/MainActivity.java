@@ -1,4 +1,4 @@
-package com.markrai.sisutrainer;
+package com.markrai.fitbaus.trainer;
 
 import com.getcapacitor.BridgeActivity;
 

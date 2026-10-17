@@ -4,7 +4,7 @@ import { parsePersonalizedPrescriptionCharacterization } from "./personalizedPre
 import { parseWorkoutExecutionProvenance } from "./executionProvenance.js";
 import { rebuildStoredPassiveFitnessProjection } from "./fitnessRefinement.js";
 import { parsePersonalizedPrescriptionEvaluation } from "./personalizedPrescription.js";
-const DB_NAME = "vo2_workout_db";
+const DB_NAME = "fitbaus_trainer_db";
 const DB_VERSION = 3;
 const STORE_WORKOUTS = "workouts";
 const STORE_HR_SAMPLES = "hr_samples";

@@ -4,7 +4,7 @@ import type { WorkDurationClass } from "../learning/types.js";
 
 export type { WorkDurationClass };
 
-export const DYNAMICS_STORAGE_KEY = "sisu_trainer_hr_dynamics";
+export const DYNAMICS_STORAGE_KEY = "fitbaus_trainer_hr_dynamics";
 export const DYNAMICS_STORE_VERSION = 1 as const;
 export const DYNAMICS_SAMPLE_LIMIT = 20;
 export const RECENT_OPPORTUNITY_LIMIT = 20;

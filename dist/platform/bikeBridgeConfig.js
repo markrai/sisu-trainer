@@ -1,4 +1,4 @@
-export const BIKE_BRIDGE_STORAGE_KEY = "sisu_trainer_bike_bridge";
+export const BIKE_BRIDGE_STORAGE_KEY = "fitbaus_trainer_bike_bridge";
 export const DEFAULT_CONSOLE_BRIGHTNESS = 80;
 export const CONSOLE_BRIGHTNESS_MIN = 0;
 export const CONSOLE_BRIGHTNESS_MAX = 100;

@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 
 const config: CapacitorConfig = {
-  appId: "com.markrai.sisutrainer", // historical; appId change deferred to Phase 5B.2
+  appId: "com.markrai.fitbaus.trainer",
   appName: "FitBaus Trainer",
   webDir: "www",
   plugins: {

@@ -2,6 +2,15 @@
 
 FitBaus Trainer keeps two separate build paths. `npm run build` compiles the hosted browser/PWA application into its modular `dist/` tree. `npm run build:native` bundles the same TypeScript/DOM entry point with esbuild and stages packaged assets in generated `www/` output.
 
+## Application identity
+
+Native app ID / bundle ID: `com.markrai.fitbaus.trainer`. This is a separate
+application from any older `com.markrai.sisutrainer` install. WebView
+IndexedDB/localStorage is not shared across those identities. One-time export
+from a legacy install (workout history and personalization state) is a separate
+ops task — do not clear or uninstall a legacy install until that export is
+verified. Runtime backward-compatibility migration is not required in this app.
+
 ## Requirements
 
 - Node.js 22 or newer
