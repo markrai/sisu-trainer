@@ -22,3 +22,6 @@ deploy-upload.bat
 # Documentation (prompts / specs for LLMs; optional to track in repo)
 docs/*
 !docs/adaptive-training-architecture-review.md
+
+# Temporary architecture/research audit drafts — never commit
+docs/draft/
