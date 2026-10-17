@@ -203,7 +203,7 @@ async function connectSISU() {
   const currentHost = window.location.hostname;
   if (endpoint.host === currentHost || (endpoint.host.includes("vo2") && !endpoint.host.includes("sisu"))) {
     await updateSISUStatus(
-      `That looks like this app's host (${endpoint.host}). Enter your SISU host (e.g. sisu.int.oyehoy.net).`,
+      `That looks like this app's host (${endpoint.host}). Enter your SISU host (e.g. sisu.example.com).`,
       false
     );
     return;

@@ -77,7 +77,7 @@ Throughout this review:
 
 ### Active application and build path
 
-`index.html` loads `./dist/main.js`. The maintainable source is TypeScript under `src/`; `npm run build` compiles it to `dist/`. Native builds use `scripts/build-native.mjs`, which bundles `src/main.ts` and copies `index.html`, `data.json`, and static assets into `www/`; Capacitor is configured with `webDir: "www"` in `capacitor.config.ts`. The root-level files such as `workout-data.js`, `workout-logic.js`, and `profile.js` are older non-module implementations and are not loaded by the current `index.html`. They should be treated as stale duplicates, not an alternative active runtime.
+`index.html` loads `./dist/main.js`. The maintainable source is TypeScript under `src/`; `npm run build` compiles it to `dist/`. Native builds use `scripts/build-native.mjs`, which bundles `src/main.ts` and copies `index.html`, `data.json`, and static assets into `www/`; Capacitor is configured with `webDir: "www"` in `capacitor.config.ts`. Pre-TypeScript root `*.js` duplicates have been removed from the tree.
 
 `src/main.ts::bootstrap` registers the browser-facing module globals, loads the profile, removes stale sessions, calls `initializeWorkoutPlan`, starts Bike Bridge polling, and runs `updateDisplay` every second.
 
@@ -329,7 +329,7 @@ All targets below come from `data.json` and are absolute hard-coded physiologica
 | `src/downregulation/*` HR mappings | UI/audio visualization mapping | Not part of the seven-day training prescription. |
 | `tests/*.test.mjs` target ranges | test fixtures | Characterize parsing/controller/evidence; not production prescriptions. |
 | `dist/*` | generated copies | Built output of `src`, not independent definitions. |
-| root `workout-*.js`, `zone-calculator.js` | stale legacy copies | Not loaded by current `index.html`. They duplicate older fixed behavior and should not be modified as the source of truth. |
+| Pre-TypeScript root `workout-*.js` / `zone-calculator.js` | removed | Historical duplicates; active runtime is `src/` → `dist/`. |
 
 **Answer:** yes. The current seven-day workouts effectively prescribe the same HR ranges to everyone. Personalization today changes selected activity, starting resistance, resistance during/after work, and controller timing for a configured ProForm; it does not change the prescribed BPM range. Age, weight, stored VO₂, sex, height, assessment result, and workout history do not resolve ordinary workout targets.
 

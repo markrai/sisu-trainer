@@ -1,6 +1,7 @@
 @echo off
-REM Copy this file to deploy-upload.bat and adjust KEY, TARGET, REMOTE_PATH below.
-REM deploy-upload.bat is gitignored so your key path and host are not committed.
+REM Optional self-host upload example.
+REM Copy this file to deploy-upload.bat and set KEY, TARGET, and REMOTE_PATH.
+REM deploy-upload.bat is gitignored so local key paths and hosts stay private.
 setlocal
 
 cd /d "%~dp0"
@@ -9,18 +10,22 @@ if not exist deploy (
     exit /b 1
 )
 
-set "KEY=-i C:\Users\okayt\.ssh\synology_ds220"
-set "TARGET=akumaadminchrome@192.168.1.170"
-set "REMOTE_PATH=/web/vo2"
+REM Examples only — replace with your own values:
+REM   KEY=-i C:\path\to\your_ssh_key
+REM   TARGET=user@your-host.example
+REM   REMOTE_PATH=/path/on/server/fitbaus-trainer
+set "KEY=-i C:\path\to\your_ssh_key"
+set "TARGET=user@your-host.example"
+set "REMOTE_PATH=/path/on/server/fitbaus-trainer"
 set "SSH_OPTS=-o PreferredAuthentications=publickey -o PasswordAuthentication=no"
 
 REM Try SCP first
 scp %SSH_OPTS% %KEY% -r deploy\* %TARGET%:%REMOTE_PATH%/
 if %errorlevel% equ 0 goto :upload_done
 
-REM Synology often has "subsystem request failed" for SCP; use SFTP instead
+REM Some hosts reject SCP subsystem requests; fall back to SFTP.
 echo SCP failed, trying SFTP...
-set "SFTP_SCRIPT=%TEMP%\sisu-trainer-deploy-sftp-%RANDOM%.txt"
+set "SFTP_SCRIPT=%TEMP%\fitbaus-trainer-deploy-sftp-%RANDOM%.txt"
 (
   echo lcd deploy
   echo cd %REMOTE_PATH%
@@ -31,10 +36,10 @@ sftp %SSH_OPTS% %KEY% -b "%SFTP_SCRIPT%" %TARGET%
 set "SFTP_ERR=%errorlevel%"
 del "%SFTP_SCRIPT%" 2>nul
 if %SFTP_ERR% neq 0 (
-  echo NAS upload failed.
+  echo Upload failed.
   exit /b 1
 )
 
 :upload_done
-echo NAS upload done.
+echo Upload done.
 endlocal

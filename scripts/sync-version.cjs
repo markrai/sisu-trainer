@@ -1,4 +1,5 @@
-// Reads version from version.js (single source of truth) and syncs to src/version.ts and package.json
+// Reads version from version.js (single source of truth) and syncs to
+// src/version.ts, package.json, and package-lock.json root metadata.
 const fs = require("fs");
 const path = require("path");
 
@@ -6,6 +7,7 @@ const root = path.join(__dirname, "..");
 const versionJsPath = path.join(root, "version.js");
 const versionTsPath = path.join(root, "src", "version.ts");
 const packageJsonPath = path.join(root, "package.json");
+const packageLockPath = path.join(root, "package-lock.json");
 
 const versionJs = fs.readFileSync(versionJsPath, "utf8");
 const match = versionJs.match(/APP_VERSION\s*=\s*["']([^"']+)["']/);
@@ -30,6 +32,15 @@ fs.writeFileSync(versionTsPath, versionTsContent, "utf8");
 
 const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
 pkg.version = version;
-fs.writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2), "utf8");
+fs.writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2) + "\n", "utf8");
 
-console.log("Synced version", version, "to src/version.ts and package.json");
+if (fs.existsSync(packageLockPath)) {
+  const lock = JSON.parse(fs.readFileSync(packageLockPath, "utf8"));
+  lock.version = version;
+  if (lock.packages && lock.packages[""]) {
+    lock.packages[""].version = version;
+  }
+  fs.writeFileSync(packageLockPath, JSON.stringify(lock, null, 2) + "\n", "utf8");
+}
+
+console.log("Synced version", version, "to src/version.ts, package.json, and package-lock.json");
