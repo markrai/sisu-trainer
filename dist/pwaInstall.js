@@ -128,7 +128,7 @@ function showInstallPrompt() {
         promptModal.innerHTML = `
       <div class="modal">
         <div class="close-btn" onclick="closeInstallPrompt()">✕</div>
-        <div class="modal-title">Install Sisu Trainer</div>
+        <div class="modal-title">Install FitBaus Trainer</div>
         <div class="label" style="text-align:center; margin: 20px 0;">
           Install this app on your device for a better experience and offline access.
         </div>

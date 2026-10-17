@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-        <string>Sisu Trainer</string>
+        <string>FitBaus Trainer</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,9 +25,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Sisu Trainer uses Bluetooth to connect to a heart-rate monitor during workouts.</string>
+	<string>FitBaus Trainer uses Bluetooth to connect to a heart-rate monitor during workouts.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Sisu Trainer uses the local network to connect to your SISU server and Fitbaus Bike Bridge.</string>
+	<string>FitBaus Trainer uses the local network to connect to your SISU server and Fitbaus Bike Bridge.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

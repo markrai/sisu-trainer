@@ -347,11 +347,11 @@ test("export preparation is pretty JSON with a deterministic filename and JSON M
   const snapshot = snapshotOf(storage);
   const prepared = prepareMachineDiagnosticsExport(snapshot);
   assert.equal(prepared.mimeType, "application/json");
-  assert.equal(prepared.filename, "sisu-proform-smart-power-10-diagnostics-2026-08-27.json");
+  assert.equal(prepared.filename, "fitbaus-proform-smart-power-10-diagnostics-2026-08-27.json");
   assert.equal(prepared.body, JSON.stringify(snapshot, null, 2));
   assert.equal(JSON.parse(prepared.body).generatedAt, GENERATED_AT);
   const empty = prepareMachineDiagnosticsExport(snapshotOf(memoryStorage()));
-  assert.equal(empty.filename, "sisu-machine-diagnostics-2026-08-27.json");
+  assert.equal(empty.filename, "fitbaus-machine-diagnostics-2026-08-27.json");
 });
 
 test("resetting shadow prediction data clears evidence but keeps processedSessionCount", () => {

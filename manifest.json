@@ -1,6 +1,6 @@
 {
-  "name": "Sisu Trainer",
-  "short_name": "Sisu Trainer",
+  "name": "FitBaus Trainer",
+  "short_name": "FitBaus Trainer",
   "description": "Workout coaching app with heart rate monitoring",
   "start_url": "/",
   "display": "fullscreen",

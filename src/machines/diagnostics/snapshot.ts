@@ -349,9 +349,9 @@ export function serializeMachineDiagnosticsSnapshot(snapshot: MachineDiagnostics
 export function diagnosticsExportFilename(snapshot: MachineDiagnosticsSnapshot): string {
   const date = snapshot.generatedAt.slice(0, 10);
   if (snapshot.machine?.machineId) {
-    return `sisu-${snapshot.machine.machineId}-diagnostics-${date}.json`;
+    return `fitbaus-${snapshot.machine.machineId}-diagnostics-${date}.json`;
   }
-  return `sisu-machine-diagnostics-${date}.json`;
+  return `fitbaus-machine-diagnostics-${date}.json`;
 }
 
 export function prepareMachineDiagnosticsExport(snapshot: MachineDiagnosticsSnapshot): MachineDiagnosticsExport {

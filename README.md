@@ -1,10 +1,11 @@
-# Fitbaus Trainer
+# FitBaus Trainer
 
 Heart-rate workout trainer with BLE HR support, optional bike/equipment
 integration, formal bike VO₂ assessment, and Capacitor Android/iOS shells.
 
-The npm package and some internal identifiers still use the historical name
-`sisu-trainer`. That does not change how you build or run the project.
+The npm package is `fitbaus-trainer`. Some historical local storage keys and the
+native app ID (`com.markrai.sisutrainer`) remain for compatibility. Optional
+**SISU** sync names an external service, not this product.
 
 ---
 
@@ -185,6 +186,6 @@ doc for what is local-only vs stripped.
 
 ## License
 
-Fitbaus Trainer is licensed under the [GNU Affero General Public License
+FitBaus Trainer is licensed under the [GNU Affero General Public License
 v3.0](LICENSE) only (`AGPL-3.0-only`). The package remains `"private": true` and
 is not published to npm.

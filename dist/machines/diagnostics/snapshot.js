@@ -278,9 +278,9 @@ export function diagnosticsExportFilename(snapshot) {
     var _a;
     const date = snapshot.generatedAt.slice(0, 10);
     if ((_a = snapshot.machine) === null || _a === void 0 ? void 0 : _a.machineId) {
-        return `sisu-${snapshot.machine.machineId}-diagnostics-${date}.json`;
+        return `fitbaus-${snapshot.machine.machineId}-diagnostics-${date}.json`;
     }
-    return `sisu-machine-diagnostics-${date}.json`;
+    return `fitbaus-machine-diagnostics-${date}.json`;
 }
 export function prepareMachineDiagnosticsExport(snapshot) {
     return {

@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 REM Always run from the folder where this batch file lives (project root)
 cd /d "%~dp0"
 
-echo Deploying Sisu Trainer to Android device...
+echo Deploying FitBaus Trainer to Android device...
 echo.
 
 REM Optional: pass an adb device id as the first argument

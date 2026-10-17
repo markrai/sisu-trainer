@@ -1,13 +1,13 @@
 # Capacitor native development
 
-Sisu Trainer keeps two separate build paths. `npm run build` compiles the hosted browser/PWA application into its modular `dist/` tree. `npm run build:native` bundles the same TypeScript/DOM entry point with esbuild and stages packaged assets in generated `www/` output.
+FitBaus Trainer keeps two separate build paths. `npm run build` compiles the hosted browser/PWA application into its modular `dist/` tree. `npm run build:native` bundles the same TypeScript/DOM entry point with esbuild and stages packaged assets in generated `www/` output.
 
 ## Requirements
 
 - Node.js 22 or newer
 - Android Studio 2025.2.1 or newer
 - Android API 24 minimum; the generated Capacitor 8 project currently compiles and targets API 36
-- Android 17 / API 37 introduces the `ACCESS_LOCAL_NETWORK` runtime permission for apps targeting API 37+ that communicate with LAN hosts. Sisu Trainer currently targets API 36; this must be revisited when the target SDK is raised to 37.
+- Android 17 / API 37 introduces the `ACCESS_LOCAL_NETWORK` runtime permission for apps targeting API 37+ that communicate with LAN hosts. FitBaus Trainer currently targets API 36; this must be revisited when the target SDK is raised to 37.
 - macOS for iOS development
 - Xcode 26 or newer
 - A physical iOS device for Bluetooth testing; iOS Simulator does not support BLE
@@ -45,7 +45,7 @@ Use HTTPS for SISU, especially from native builds. Native SISU traffic still rej
 
 Fitbaus Bike Bridge is trusted-LAN HTTP (typically `http://<console>:8765`). Native bike-bridge calls use `CapacitorHttp`, which bypasses WebView CORS. The bridge does not send CORS headers; hosted PWA `fetch(..., mode: "cors")` to the bridge will fail until a later CORS decision is made. Android Network Security Config permits application-wide cleartext so that LAN HTTP can connect; it is not host-restricted to the bike bridge. SISU ingest remains HTTPS-only because `requestSisu` rejects `http://`. iOS uses `NSAllowsLocalNetworking`.
 
-Native projects currently use Capacitor's generated placeholder store artwork. Produce final Play Store and App Store icon/splash variants from the existing Sisu Trainer branding before release.
+Native projects currently use Capacitor's generated placeholder store artwork. Produce final Play Store and App Store icon/splash variants from the existing FitBaus Trainer branding before release.
 
 ## Device validation checklist
 
