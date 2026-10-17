@@ -3,6 +3,30 @@ import { parseAthleteProfile, PROFILE_WEIGHT_LBS_TO_KG } from "./profile.js";
 import { parseFitnessState } from "./fitnessState.js";
 import { SUPPORTED_VO2_FORMAL_ASSESSMENT_CONTRACTS, isSupportedVo2EstimatorProtocolPair, } from "./vo2Estimator.js";
 import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
+import { personalizationShadowPrescriptionEnabledForIntensity } from "./personalizationCapability.js";
+/**
+ * Immutable PersonalizedPrescriptionPolicyV1 serialized contract for
+ * `allowedIntensities`.
+ *
+ * This is historical schema-v1 representation only — NOT current product
+ * runtime eligibility. Runtime phase eligibility uses
+ * personalizationShadowPrescriptionEnabledForIntensity /
+ * PERSONALIZATION_CAPABILITIES_V1. Capability evolution that widens shadow
+ * intensities requires a deliberate new E1 policy/evaluation schema for new
+ * writes; it must not reinterpret or invalidate historical v1 records.
+ *
+ * Frozen at runtime so callers cannot mutate the permanent v1 definition.
+ * Policy objects and parsed records must use value-equivalent copies, not
+ * this array identity.
+ */
+export const PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES = Object.freeze(["aerobic_base", "threshold"]);
+/** Fresh mutable tuple copy of the immutable v1 schema contract (no shared identity). */
+function personalizedPrescriptionV1AllowedIntensitiesCopy() {
+    return [
+        PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES[0],
+        PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES[1],
+    ];
+}
 /**
  * E1 is the canonical shadow athlete-relative mechanical workload prescription
  * derived from formal calibration for supported ordinary-workout phases.
@@ -13,11 +37,16 @@ import { VO2_WORKOUT_SELECTOR_ID } from "./vo2Protocol.js";
  * E1 intentionally has no activation-approved freshness lifetime. Production
  * shadow capture records freshness as not evaluated until policy owners supply
  * an explicit provisional characterization value.
+ *
+ * evaluatePhase intensity eligibility is capability-driven
+ * (personalizationShadowPrescriptionEnabledForIntensity). Policy
+ * `allowedIntensities` is a value-equivalent copy of the immutable v1 schema
+ * contract — not a second runtime allowlist and not the frozen array itself.
  */
 export const PHASE_E1_SHADOW_POLICY = {
     assessmentExpiryDays: null,
     assessmentExpiryPolicy: "not_configured",
-    allowedIntensities: ["aerobic_base", "threshold"],
+    allowedIntensities: personalizedPrescriptionV1AllowedIntensitiesCopy(),
     roundingRule: "nearest_integer_watt",
     extrapolationPolicy: "none",
 };
@@ -290,7 +319,7 @@ function boundedHeartRate(target) {
     return !!target && isPositiveFinite(target.min) && isPositiveFinite(target.max) && target.min <= target.max;
 }
 function evaluatePhase(phase, input, evidence) {
-    var _a;
+    var _a, _b;
     const checks = copyEvidenceChecks(evidence.checks);
     if (input.activity !== "bike")
         return fallbackPhase(phase, "unsupported_activity", checks);
@@ -298,7 +327,7 @@ function evaluatePhase(phase, input, evidence) {
         return fallbackPhase(phase, "unsupported_workout", checks);
     }
     const phaseSupported = phase.kind === "work" &&
-        (phase.intensityId === "aerobic_base" || phase.intensityId === "threshold");
+        personalizationShadowPrescriptionEnabledForIntensity((_a = phase.intensityId) !== null && _a !== void 0 ? _a : "");
     checks.phaseSupported = phaseSupported;
     if (!phaseSupported)
         return fallbackPhase(phase, "unsupported_phase", checks);
@@ -312,7 +341,7 @@ function evaluatePhase(phase, input, evidence) {
         return fallbackPhase(phase, "missing_numeric_hr_target", checks);
     }
     if (evidence.fallbackReason || !evidence.calibration || !evidence.fitnessSnapshot) {
-        return fallbackPhase(phase, (_a = evidence.fallbackReason) !== null && _a !== void 0 ? _a : "invalid_calibration", checks);
+        return fallbackPhase(phase, (_b = evidence.fallbackReason) !== null && _b !== void 0 ? _b : "invalid_calibration", checks);
     }
     const calibration = evidence.calibration;
     const heartRates = calibration.points.map((point) => point.heartRateBpm);
@@ -372,9 +401,8 @@ function policyIsValid(policy) {
     if (policy.assessmentExpiryDays !== null && policy.assessmentExpiryPolicy !== "provisional_characterization")
         return false;
     return Array.isArray(policy.allowedIntensities) &&
-        policy.allowedIntensities.length === 2 &&
-        policy.allowedIntensities[0] === "aerobic_base" &&
-        policy.allowedIntensities[1] === "threshold" &&
+        policy.allowedIntensities.length === PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES.length &&
+        policy.allowedIntensities.every((id, index) => id === PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES[index]) &&
         policy.roundingRule === "nearest_integer_watt" &&
         policy.extrapolationPolicy === "none";
 }
@@ -743,7 +771,7 @@ export function parsePersonalizedPrescriptionEvaluation(value) {
         policy: {
             assessmentExpiryDays: value.policy.assessmentExpiryDays,
             assessmentExpiryPolicy: value.policy.assessmentExpiryPolicy,
-            allowedIntensities: ["aerobic_base", "threshold"],
+            allowedIntensities: personalizedPrescriptionV1AllowedIntensitiesCopy(),
             roundingRule: "nearest_integer_watt",
             extrapolationPolicy: "none",
         },

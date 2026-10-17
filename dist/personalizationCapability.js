@@ -58,6 +58,26 @@ export const PERSONALIZATION_CAPABILITIES_V1 = [
 export function personalizationCapabilityForIntensity(intensityId) {
     return PERSONALIZATION_CAPABILITIES_V1.find((row) => row.intensityId === intensityId);
 }
+/**
+ * Whether E1 / shadow prescription may consider this intensity.
+ * Derives from PERSONALIZATION_CAPABILITIES_V1 only — no workout intent,
+ * VO₂ selector, or scientific-threshold logic.
+ */
+export function personalizationShadowPrescriptionEnabledForIntensity(intensityId) {
+    var _a;
+    return ((_a = personalizationCapabilityForIntensity(intensityId)) === null || _a === void 0 ? void 0 : _a.shadowPrescription) === true;
+}
+/**
+ * Current product shadow-prescription enabled intensity set, derived from
+ * PERSONALIZATION_CAPABILITIES_V1 in table order.
+ *
+ * This is a live routing/eligibility snapshot — not the historical E1
+ * PersonalizedPrescriptionPolicyV1 serialized contract (see
+ * PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES).
+ */
+export function personalizationShadowPrescriptionEnabledIntensities() {
+    return PERSONALIZATION_CAPABILITIES_V1.filter((row) => row.shadowPrescription).map((row) => row.intensityId);
+}
 export function steadyStateEvidenceEnabledForIntensity(intensityId) {
     const row = personalizationCapabilityForIntensity(intensityId);
     return (row === null || row === void 0 ? void 0 : row.archetype) === "steady_state" && row.completedWorkoutEvidence === true;

@@ -5,10 +5,12 @@ import { readFileSync } from "node:fs";
 
 import {
   PHASE_E1_SHADOW_POLICY,
+  PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES,
   assessmentBasedWorkloadForPhase,
   evaluatePersonalizedPrescription,
   parsePersonalizedPrescriptionEvaluation,
 } from "../dist/personalizedPrescription.js";
+import { personalizationShadowPrescriptionEnabledForIntensity } from "../dist/personalizationCapability.js";
 import {
   machineHeartRateTargetFromResolved,
   resolveWorkoutPrescription,
@@ -381,10 +383,27 @@ test("phase semantics, activity, and standalone workout gates are explicit", () 
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ kind: "warmup", intensity: "threshold" }) }), "unsupported_phase");
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ kind: "recovery", intensity: "aerobic_base" }) }), "unsupported_phase");
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ kind: "cooldown", intensity: "threshold" }) }), "unsupported_phase");
+  assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ intensity: "warmup_easy" }) }), "unsupported_phase");
+  assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ intensity: "recovery" }) }), "unsupported_phase");
+  assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ intensity: "cooldown" }) }), "unsupported_phase");
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ intensity: "strength_support" }) }), "unsupported_phase");
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ intensity: "vo2_short" }) }), "unsupported_phase");
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ intensity: "vo2_long" }) }), "unsupported_phase");
   assert.equal(fallbackReason({ legacyPrescription: steadyPrescription({ selector: "VO2MaxEstimation" }) }), "unsupported_workout");
+});
+
+test("E1 runtime intensity eligibility follows personalization shadow capabilities", () => {
+  assert.deepEqual(PHASE_E1_SHADOW_POLICY.allowedIntensities, PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES);
+  assert.equal(personalizationShadowPrescriptionEnabledForIntensity("aerobic_base"), true);
+  assert.equal(personalizationShadowPrescriptionEnabledForIntensity("threshold"), true);
+  assert.equal(onlyPhase(evaluatePersonalizedPrescription(input())).outcome, "candidate");
+  assert.equal(onlyPhase(evaluatePersonalizedPrescription(input({
+    workoutIntent: "threshold",
+    legacyPrescription: steadyPrescription({ target: "150–160", intensity: "threshold" }),
+  }))).outcome, "candidate");
+  assert.equal(fallbackReason({
+    legacyPrescription: steadyPrescription({ intensity: "vo2_short" }),
+  }), "unsupported_phase");
 });
 
 test("aerobic-volume and fully interpolated threshold work can produce shadow candidates", () => {
@@ -410,6 +429,7 @@ test("unapproved production policy records freshness as not evaluated but remain
 test("permanent reader round-trips valid E1 and rejects malformed or future records", () => {
   const evaluation = evaluatePersonalizedPrescription(input());
   assert.deepEqual(parsePersonalizedPrescriptionEvaluation(structuredClone(evaluation)), evaluation);
+  assert.deepEqual(evaluation.policy.allowedIntensities, PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES);
   const future = structuredClone(evaluation);
   future.schemaVersion = 2;
   assert.equal(parsePersonalizedPrescriptionEvaluation(future), null);
@@ -422,6 +442,45 @@ test("permanent reader round-trips valid E1 and rejects malformed or future reco
   const malformedPolicy = structuredClone(evaluation);
   malformedPolicy.policy.extrapolationPolicy = "clamp";
   assert.equal(parsePersonalizedPrescriptionEvaluation(malformedPolicy), null);
+});
+
+test("permanent reader validates schema-v1 allowedIntensities against immutable v1 contract", () => {
+  assert.deepEqual(PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES, ["aerobic_base", "threshold"]);
+  const evaluation = evaluatePersonalizedPrescription(input());
+  assert.deepEqual(parsePersonalizedPrescriptionEvaluation(structuredClone(evaluation)), evaluation);
+
+  for (const allowedIntensities of [
+    ["threshold", "aerobic_base"],
+    ["aerobic_base"],
+    ["aerobic_base", "threshold", "vo2_short"],
+    ["aerobic_base", "vo2_short"],
+    [],
+    undefined,
+  ]) {
+    const malformed = structuredClone(evaluation);
+    malformed.policy.allowedIntensities = allowedIntensities;
+    assert.equal(parsePersonalizedPrescriptionEvaluation(malformed), null);
+  }
+});
+
+test("E1 v1 allowedIntensities schema is frozen and not aliased by policy or parser", () => {
+  assert.ok(Object.isFrozen(PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES));
+  assert.deepEqual(PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES, ["aerobic_base", "threshold"]);
+  assert.throws(() => {
+    PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES[0] = "vo2_short";
+  }, TypeError);
+  assert.deepEqual(PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES, ["aerobic_base", "threshold"]);
+
+  assert.deepEqual(PHASE_E1_SHADOW_POLICY.allowedIntensities, PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES);
+  assert.notEqual(PHASE_E1_SHADOW_POLICY.allowedIntensities, PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES);
+
+  const parsed = parsePersonalizedPrescriptionEvaluation(
+    structuredClone(evaluatePersonalizedPrescription(input()))
+  );
+  assert.ok(parsed);
+  assert.deepEqual(parsed.policy.allowedIntensities, PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES);
+  assert.notEqual(parsed.policy.allowedIntensities, PERSONALIZED_PRESCRIPTION_V1_ALLOWED_INTENSITIES);
+  assert.notEqual(parsed.policy.allowedIntensities, PHASE_E1_SHADOW_POLICY.allowedIntensities);
 });
 
 test("session parsing drops malformed/future shadow records without invalidating legacy prescription", () => {
